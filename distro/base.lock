@@ -1,0 +1,6 @@
+# Base root filesystem for the Willie distribution image.
+# Written by `cargo xtask distro pin`; verified by `distro fetch`.
+url = https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/bae6d64d90b4068b09ff9d8b564c2773ef5d8d83/trixie/slim/oci/blobs/rootfs.tar.gz
+commit = bae6d64d90b4068b09ff9d8b564c2773ef5d8d83
+sha256 = 6310eb16bf4251731feab01e8f633bf5e2d75a657ccad97f420b1f83cce457be
+pinned_at = 2026-08-25
