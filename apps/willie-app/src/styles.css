@@ -27,3 +27,70 @@ body {
   margin: 0;
   opacity: 0.7;
 }
+
+.dashboard {
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+  display: grid;
+  gap: 1.25rem;
+}
+.dashboard header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.dashboard header h1 {
+  margin: 0;
+}
+.light {
+  display: inline-block;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 50%;
+}
+.light-green {
+  background: #2e9e5b;
+}
+.light-yellow {
+  background: #d9a400;
+}
+.light-red {
+  background: #cf3b3b;
+}
+.lights {
+  display: grid;
+  gap: 0.5rem;
+}
+.light-row {
+  display: grid;
+  grid-template-columns: 1rem 8rem 1fr;
+  align-items: center;
+  gap: 0.75rem;
+}
+.actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.problem {
+  border-left: 3px solid #cf3b3b;
+  padding: 0.5rem 0.75rem;
+}
+.doctor ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+.check-fail code {
+  color: #cf3b3b;
+}
+.check-ok code {
+  color: #2e9e5b;
+}
+.check-skip code {
+  opacity: 0.6;
+}
