@@ -76,10 +76,11 @@ impl LineTransport {
 /// Forwards one line per read until EOF or a read error.
 ///
 /// The daemon writes UTF-8, but `wsl.exe` writes its own failures to the
-/// same stdout as UTF-16LE; reading bytes and decoding per line keeps
-/// those messages instead of ending the stream on the first one. Splitting
-/// on the `\n` byte leaves the trailing NUL of a UTF-16LE newline at the
-/// head of the next read, so NULs are trimmed off both ends.
+/// same stdout as UTF-16LE; reading bytes and decoding every line keeps
+/// those messages instead of ending the stream on the first one. The
+/// decoder tells the two encodings apart, so it is asked unconditionally:
+/// bytes that are ASCII with interleaved NULs are valid UTF-8 too, and
+/// trying UTF-8 first would let them through undecoded.
 fn read_lines<R: BufRead>(mut reader: R, tx: &mpsc::Sender<String>) {
     let mut buf = Vec::new();
     loop {
@@ -88,10 +89,11 @@ fn read_lines<R: BufRead>(mut reader: R, tx: &mpsc::Sender<String>) {
             Ok(0) | Err(_) => return,
             Ok(_) => {}
         }
-        let text = match std::str::from_utf8(&buf) {
-            Ok(text) => text.to_owned(),
-            Err(_) => crate::text::decode_wsl_output(&buf),
-        };
+        // A UTF-16LE newline is the pair `0A 00`, so splitting on the
+        // `\n` byte leaves its high byte at the head of the next read;
+        // without dropping it every later code unit is off by one.
+        let start = buf.iter().position(|b| *b != 0).unwrap_or(buf.len());
+        let text = crate::text::decode_wsl_output(&buf[start..]);
         let line = text.trim_matches(['\n', '\r', '\0']).to_owned();
         if tx.send(line).is_err() {
             return;
@@ -228,8 +230,10 @@ mod tests {
     }
 
     /// `wsl.exe` writes its own errors to the child's stdout as UTF-16LE.
-    /// A byte-oriented reader must decode them and keep going: dropping
-    /// the line would leave the failure with nothing to report.
+    /// A byte-oriented reader must decode every one of them and keep
+    /// going: a dropped line leaves the failure with nothing to report,
+    /// and a line shifted by one byte reads as interleaved NULs, which
+    /// no remediation can be matched against.
     #[test]
     fn utf16_stdout_lines_are_decoded_not_dropped() {
         if std::env::var_os("WILLIE_UTF16_MODE").is_some() {
@@ -244,13 +248,49 @@ mod tests {
         while let Some(line) =
             transport.recv_line(Duration::from_secs(5)).unwrap()
         {
-            seen.push(line);
+            if !line.is_empty() {
+                seen.push(line);
+            }
         }
         assert!(
-            seen.iter().any(|l| l.contains("WSL_E_DISTRO_NOT_FOUND")),
-            "the decoded message never arrived: {seen:?}"
+            seen.iter().all(|l| !l.contains('\0')),
+            "a line arrived undecoded: {seen:?}"
         );
+        // Both lines of the message, in both shapes the peer wrote.
+        for expected in crate::test_support::DISTRO_NOT_FOUND {
+            let hits = seen.iter().filter(|l| *l == expected).count();
+            assert_eq!(hits, 2, "expected `{expected}` twice in {seen:?}");
+        }
         assert_eq!(child.wait().unwrap().code(), Some(127));
+    }
+
+    /// One stream carries the daemon's UTF-8 ndjson and `wsl.exe`'s own
+    /// UTF-16LE messages, with or without a BOM, and a last line that
+    /// never got its newline. Every shape has to come out exactly.
+    #[test]
+    fn the_reader_decodes_each_line_by_its_own_encoding() {
+        fn utf16le(text: &str, bom: bool) -> Vec<u8> {
+            let mut out = if bom { vec![0xFF, 0xFE] } else { Vec::new() };
+            for unit in text.encode_utf16() {
+                out.extend_from_slice(&unit.to_le_bytes());
+            }
+            out
+        }
+        let json = "{\"id\":1,\"text\":\"Versão ✓\"}";
+        let mut bytes = format!("{json}\n").into_bytes();
+        bytes.extend(utf16le("with a bom\r\n", true));
+        bytes.extend(utf16le("without one\r\n", false));
+        bytes.extend(utf16le("no trailing newline", false));
+
+        let (tx, rx) = mpsc::channel();
+        read_lines(&bytes[..], &tx);
+        drop(tx);
+        let lines: Vec<String> =
+            rx.into_iter().filter(|l| !l.is_empty()).collect();
+        assert_eq!(
+            lines,
+            [json, "with a bom", "without one", "no trailing newline"]
+        );
     }
 
     #[test]

@@ -333,11 +333,17 @@ mod tests {
         };
         assert_eq!(*code, Some(127));
         assert!(detail.contains("WSL_E_DISTRO_NOT_FOUND"), "{detail}");
+        assert!(!detail.contains('\0'), "undecoded detail: {detail}");
         assert!(
             err.remediation().contains("click Install distribution"),
             "{}",
             err.remediation()
         );
-        assert!(supervisor.live.is_none(), "the child must be reaped");
+        // The failure was recorded, so the next status read reports it
+        // instead of the Stopped state `start_with` began from.
+        let DaemonState::Failed { code, .. } = supervisor.state() else {
+            panic!("the failure was not recorded");
+        };
+        assert_eq!(code, "daemon_exited");
     }
 }

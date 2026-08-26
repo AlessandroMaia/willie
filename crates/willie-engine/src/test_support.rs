@@ -42,21 +42,33 @@ pub(crate) fn spawn_peer_with_stderr(
         .unwrap()
 }
 
-/// The message `wsl.exe` writes when the distribution is missing, in the
-/// shape the engine has to survive: its own text, not the daemon's.
-pub(crate) const DISTRO_NOT_FOUND: &str = concat!(
-    "There is no distribution with the supplied name. ",
-    "Error code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND"
-);
+/// The two lines `wsl.exe` writes when the distribution is missing, in
+/// the shape the engine has to survive: its own text, not the daemon's.
+/// The second carries the code the remediation is chosen by.
+pub(crate) const DISTRO_NOT_FOUND: [&str; 2] = [
+    "There is no distribution with the supplied name.",
+    "Error code: Wsl/Service/WSL_E_DISTRO_NOT_FOUND",
+];
 
-/// Peer mode that imitates `wsl.exe` refusing to start the daemon: one
-/// UTF-16LE line on stdout, nothing on stderr, exit code 127. Writing the
+/// Peer mode that imitates `wsl.exe` refusing to start the daemon: its
+/// own message on stdout as UTF-16LE, nothing on stderr, exit code 127.
+///
+/// The message is written twice, with a BOM and without: `wsl.exe` emits
+/// both shapes, and only a multi-line message exposes a reader that
+/// mishandles the NUL a UTF-16LE newline leaves behind. Writing the
 /// handle directly bypasses the harness's capture hook so the bytes reach
 /// the real pipe.
 pub(crate) fn write_utf16_message_and_exit() -> ! {
-    let mut bytes = vec![0xFF, 0xFE];
-    for unit in format!("{DISTRO_NOT_FOUND}\r\n").encode_utf16() {
-        bytes.extend_from_slice(&unit.to_le_bytes());
+    let mut bytes = Vec::new();
+    for bom in [true, false] {
+        if bom {
+            bytes.extend_from_slice(&[0xFF, 0xFE]);
+        }
+        for line in DISTRO_NOT_FOUND {
+            for unit in format!("{line}\r\n").encode_utf16() {
+                bytes.extend_from_slice(&unit.to_le_bytes());
+            }
+        }
     }
     let mut out = std::io::stdout();
     let _ = out.write_all(&bytes);
