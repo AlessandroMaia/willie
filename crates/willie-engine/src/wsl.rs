@@ -99,3 +99,232 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--user"));
     }
 }
+
+use std::{path::Path, process::Command, str::FromStr};
+
+use crate::{error::WslError, text::decode_wsl_output};
+
+/// Version reported by `wsl.exe --version`, e.g. `2.6.1.0`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WslVersion {
+    pub major: u32,
+    pub minor: u32,
+    pub patch: u32,
+    pub build: u32,
+}
+
+impl WslVersion {
+    /// Tar-based distributions and `--install --from-file` need this.
+    pub const MINIMUM: Self = Self {
+        major: 2,
+        minor: 4,
+        patch: 4,
+        build: 0,
+    };
+
+    #[must_use]
+    pub fn meets_minimum(&self) -> bool {
+        *self >= Self::MINIMUM
+    }
+
+    /// Finds the version in the first line of `wsl --version`, whatever
+    /// the label's language: the last whitespace-separated token that is
+    /// made of digits and dots.
+    pub fn parse_report(report: &str) -> Result<Self, WslError> {
+        let first = report
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or_default();
+        first
+            .split_whitespace()
+            .rev()
+            .find_map(|token| token.parse::<Self>().ok())
+            .ok_or_else(|| WslError::Unparseable {
+                what: "wsl --version",
+                text: first.to_owned(),
+            })
+    }
+}
+
+impl FromStr for WslVersion {
+    type Err = WslError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut parts = s.trim().split('.').map(|p| p.parse::<u32>());
+        let mut next = || parts.next().and_then(Result::ok);
+        match (next(), next(), next(), next()) {
+            (Some(major), Some(minor), Some(patch), build) => Ok(Self {
+                major,
+                minor,
+                patch,
+                build: build.unwrap_or(0),
+            }),
+            _ => Err(WslError::Unparseable {
+                what: "version",
+                text: s.to_owned(),
+            }),
+        }
+    }
+}
+
+/// Parses `wsl --list --quiet` / `--list --running --quiet`: one name per
+/// line, blank lines ignored, a default marker `*` stripped.
+#[must_use]
+pub fn parse_name_list(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|l| l.trim().trim_start_matches('*').trim())
+        .filter(|l| !l.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(test)]
+mod cli_tests {
+    use super::*;
+
+    #[test]
+    fn version_is_read_from_a_localised_first_line() {
+        let v = WslVersion::parse_report(
+            "Versão do WSL: 2.6.1.0\nVersão do kernel: 6.6.87.2-1\n",
+        )
+        .unwrap();
+        assert_eq!(
+            v,
+            WslVersion {
+                major: 2,
+                minor: 6,
+                patch: 1,
+                build: 0
+            }
+        );
+        assert!(v.meets_minimum());
+    }
+
+    #[test]
+    fn versions_below_the_minimum_are_rejected() {
+        assert!(!"2.3.26.0".parse::<WslVersion>().unwrap().meets_minimum());
+        assert!("2.4.4".parse::<WslVersion>().unwrap().meets_minimum());
+    }
+
+    #[test]
+    fn garbage_is_an_unparseable_error() {
+        assert!(matches!(
+            WslVersion::parse_report("no version here"),
+            Err(WslError::Unparseable { .. })
+        ));
+    }
+
+    #[test]
+    fn name_lists_drop_blank_lines_and_default_markers() {
+        assert_eq!(
+            parse_name_list("\n* Ubuntu\r\nwillie\r\n\n"),
+            ["Ubuntu", "willie"]
+        );
+    }
+}
+
+/// `wsl.exe` prepared for a background engine: no console window.
+pub(crate) fn wsl_command() -> Command {
+    let mut cmd = Command::new("wsl.exe");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExportFormat {
+    Tar,
+    TarGz,
+}
+
+impl ExportFormat {
+    const fn flag(self) -> &'static str {
+        match self {
+            Self::Tar => "tar",
+            Self::TarGz => "tar.gz",
+        }
+    }
+}
+
+/// Management commands of `wsl.exe` (its own output is UTF-16LE).
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WslCli;
+
+impl WslCli {
+    fn run(&self, args: &[&str]) -> Result<String, WslError> {
+        let output = wsl_command().args(args).output().map_err(|e| match e
+            .kind()
+        {
+            std::io::ErrorKind::NotFound => WslError::NotInstalled(e),
+            _ => WslError::Io(e),
+        })?;
+        let stdout = decode_wsl_output(&output.stdout);
+        if output.status.success() {
+            Ok(stdout)
+        } else {
+            let stderr = decode_wsl_output(&output.stderr);
+            Err(WslError::CommandFailed {
+                args: args.join(" "),
+                code: output.status.code(),
+                stderr: if stderr.trim().is_empty() {
+                    stdout
+                } else {
+                    stderr
+                }
+                .trim()
+                .to_owned(),
+            })
+        }
+    }
+
+    pub fn version(&self) -> Result<WslVersion, WslError> {
+        WslVersion::parse_report(&self.run(&["--version"])?)
+    }
+
+    pub fn list(&self) -> Result<Vec<String>, WslError> {
+        Ok(parse_name_list(&self.run(&["--list", "--quiet"])?))
+    }
+
+    pub fn running(&self) -> Result<Vec<String>, WslError> {
+        Ok(parse_name_list(&self.run(&[
+            "--list",
+            "--running",
+            "--quiet",
+        ])?))
+    }
+
+    pub fn import(
+        &self,
+        name: &str,
+        location: &Path,
+        tar: &Path,
+    ) -> Result<(), WslError> {
+        let location = location.to_string_lossy();
+        let tar = tar.to_string_lossy();
+        self.run(&["--import", name, &location, &tar, "--version", "2"])
+            .map(drop)
+    }
+
+    pub fn unregister(&self, name: &str) -> Result<(), WslError> {
+        self.run(&["--unregister", name]).map(drop)
+    }
+
+    pub fn terminate(&self, name: &str) -> Result<(), WslError> {
+        self.run(&["--terminate", name]).map(drop)
+    }
+
+    pub fn export(
+        &self,
+        name: &str,
+        file: &Path,
+        format: ExportFormat,
+    ) -> Result<(), WslError> {
+        let file = file.to_string_lossy();
+        self.run(&["--export", name, &file, "--format", format.flag()])
+            .map(drop)
+    }
+}

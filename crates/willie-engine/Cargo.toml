@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 willie-core = { workspace = true }
 willie-proto = { workspace = true }
+thiserror = { workspace = true }
 
 [lints]
 workspace = true
