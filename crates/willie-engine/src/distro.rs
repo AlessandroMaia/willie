@@ -70,6 +70,22 @@ pub fn validate_image(image: &Path) -> Result<(), EngineError> {
     }
 }
 
+/// `--import` refuses a location already in use. An interrupted import
+/// leaves `ext4.vhdx` in the install directory with no distribution
+/// registered for it, and that stale disk blocks every later install; it
+/// belongs to nothing, so it goes.
+fn remove_orphaned_disk(dir: &Path) -> std::io::Result<()> {
+    let disk = dir.join("ext4.vhdx");
+    match std::fs::remove_file(&disk) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(std::io::Error::new(
+            e.kind(),
+            format!("cannot remove the orphaned disk {}: {e}", disk.display()),
+        )),
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DistroManager;
 
@@ -98,8 +114,10 @@ impl DistroManager {
     /// Imports the image into `%LOCALAPPDATA%\Willie\data\distro`,
     /// replacing a previously registered `willie`. The image is
     /// validated before the old distribution is touched, so a bad
-    /// image never costs the developer their working install. Data
-    /// migration is a later slice.
+    /// image never costs the developer their working install. Once
+    /// nothing is registered any disk left in the directory is an
+    /// orphan and is removed, or `--import` would refuse the location.
+    /// Data migration is a later slice.
     pub fn install(&self, image: &Path) -> Result<(), EngineError> {
         validate_image(image)?;
         let dir = install_dir().ok_or_else(|| WslError::Unparseable {
@@ -108,6 +126,7 @@ impl DistroManager {
         })?;
         std::fs::create_dir_all(&dir).map_err(WslError::Io)?;
         self.uninstall()?;
+        remove_orphaned_disk(&dir).map_err(WslError::Io)?;
         WslCli.import(DISTRO_NAME, &dir, image)?;
         Ok(())
     }
@@ -154,6 +173,31 @@ mod tests {
             dir.ends_with(r"Willie\data\distro"),
             "unexpected install dir {dir:?}"
         );
+    }
+
+    fn temp_dir(case: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("willie-{case}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_orphaned_disk_is_removed_before_the_import() {
+        let dir = temp_dir("orphan");
+        let disk = dir.join("ext4.vhdx");
+        std::fs::write(&disk, b"stale").unwrap();
+        remove_orphaned_disk(&dir).unwrap();
+        assert!(!disk.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_install_dir_without_a_disk_is_left_alone() {
+        let dir = temp_dir("no-orphan");
+        assert!(remove_orphaned_disk(&dir).is_ok());
+        assert!(dir.is_dir());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The installer ships the sidecar as a resource of its own; it is
