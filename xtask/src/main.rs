@@ -3,6 +3,7 @@
 //! Anything the `justfile` needs beyond a single native command lives here
 //! so it is written once, in Rust, and behaves the same on every host.
 
+mod distro;
 mod doctor;
 mod linux;
 mod refs;
@@ -23,6 +24,7 @@ fn main() -> ExitCode {
         Some("doctor-tools") => doctor::run(&root),
         Some("check-refs") => refs::run(&root, &args[1..]),
         Some("build-linux") => linux::build(&root, &args[1..]),
+        Some("distro") => distro::run(&root, &args[1..]),
         Some("help") | Some("--help") | None => {
             print!("{USAGE}");
             Ok(())
@@ -45,6 +47,7 @@ usage: cargo xtask <command>
   check-refs [--list F]  fail if versioned content matches the denylist
   build-linux [--debug]  cross-compile willied, willie-sess and willie
                          for x86_64-unknown-linux-musl
+  distro pin|fetch       pin/download the base root filesystem
 ";
 
 /// Root of the workspace: the parent of this crate's manifest directory.
