@@ -4013,7 +4013,9 @@ dependencies = [
 name = "willie-cli"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "willie-core",
+ "willie-linux",
  "willie-proto",
 ]
 

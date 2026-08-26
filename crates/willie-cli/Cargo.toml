@@ -11,7 +11,9 @@ name = "willie"
 path = "src/main.rs"
 
 [dependencies]
+serde_json = { workspace = true }
 willie-core = { workspace = true }
+willie-linux = { workspace = true }
 willie-proto = { workspace = true }
 
 [lints]
