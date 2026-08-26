@@ -38,14 +38,7 @@ impl LineTransport {
         let (tx, rx) = mpsc::channel();
         thread::Builder::new()
             .name("willie-transport-reader".into())
-            .spawn(move || {
-                for line in BufReader::new(stdout).lines().map_while(Result::ok)
-                {
-                    if tx.send(line).is_err() {
-                        break;
-                    }
-                }
-            })?;
+            .spawn(move || read_lines(BufReader::new(stdout), &tx))?;
         Ok(Self {
             input: Some(input),
             lines: rx,
@@ -77,6 +70,32 @@ impl LineTransport {
     /// Closes the peer's stdin so a well-behaved program exits on EOF.
     pub fn close_input(&mut self) {
         self.input = None;
+    }
+}
+
+/// Forwards one line per read until EOF or a read error.
+///
+/// The daemon writes UTF-8, but `wsl.exe` writes its own failures to the
+/// same stdout as UTF-16LE; reading bytes and decoding per line keeps
+/// those messages instead of ending the stream on the first one. Splitting
+/// on the `\n` byte leaves the trailing NUL of a UTF-16LE newline at the
+/// head of the next read, so NULs are trimmed off both ends.
+fn read_lines<R: BufRead>(mut reader: R, tx: &mpsc::Sender<String>) {
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match reader.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+        let text = match std::str::from_utf8(&buf) {
+            Ok(text) => text.to_owned(),
+            Err(_) => crate::text::decode_wsl_output(&buf),
+        };
+        let line = text.trim_matches(['\n', '\r', '\0']).to_owned();
+        if tx.send(line).is_err() {
+            return;
+        }
     }
 }
 
@@ -206,6 +225,32 @@ mod tests {
             stdout.flush().unwrap();
         }
         std::process::exit(0);
+    }
+
+    /// `wsl.exe` writes its own errors to the child's stdout as UTF-16LE.
+    /// A byte-oriented reader must decode them and keep going: dropping
+    /// the line would leave the failure with nothing to report.
+    #[test]
+    fn utf16_stdout_lines_are_decoded_not_dropped() {
+        if std::env::var_os("WILLIE_UTF16_MODE").is_some() {
+            crate::test_support::write_utf16_message_and_exit();
+        }
+        let mut child = spawn_peer(
+            "process::tests::utf16_stdout_lines_are_decoded_not_dropped",
+            "WILLIE_UTF16_MODE",
+        );
+        let mut transport = LineTransport::from_child(&mut child).unwrap();
+        let mut seen = Vec::new();
+        while let Some(line) =
+            transport.recv_line(Duration::from_secs(5)).unwrap()
+        {
+            seen.push(line);
+        }
+        assert!(
+            seen.iter().any(|l| l.contains("WSL_E_DISTRO_NOT_FOUND")),
+            "the decoded message never arrived: {seen:?}"
+        );
+        assert_eq!(child.wait().unwrap().code(), Some(127));
     }
 
     #[test]

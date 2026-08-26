@@ -55,7 +55,7 @@ impl DaemonSupervisor {
             Some((process, _)) => match process.try_wait() {
                 Ok(Some(code)) => Some(EngineError::DaemonExited {
                     code: Some(code),
-                    stderr: process.stderr_text(),
+                    detail: process.stderr_text(),
                 }),
                 _ => None,
             },
@@ -68,8 +68,18 @@ impl DaemonSupervisor {
     }
 
     pub fn start(&mut self) -> Result<HelloReply, EngineError> {
+        self.start_with(|| WslProcess::spawn(&WslExec::daemon_stdio()))
+    }
+
+    /// The whole start sequence over an injected child, so a test can
+    /// drive the classification of a failed hello without a WSL
+    /// installation. `start` is the only production caller.
+    fn start_with(
+        &mut self,
+        spawn: impl FnOnce() -> Result<WslProcess, crate::error::WslError>,
+    ) -> Result<HelloReply, EngineError> {
         self.stop_quietly();
-        let mut process = match WslProcess::spawn(&WslExec::daemon_stdio()) {
+        let mut process = match spawn() {
             Ok(process) => process,
             Err(err) => {
                 let failure = EngineError::from(err);
@@ -106,10 +116,18 @@ impl DaemonSupervisor {
                 // report an exit, which would hide the real failure.
                 let failure = match process.try_wait() {
                     Ok(Some(code)) => {
+                        // `wsl.exe` writes its own refusal on the
+                        // child's stdout and leaves stderr empty, so the
+                        // stray lines are the only account of it.
                         let stderr = process.stderr_text();
+                        let detail = if stderr.trim().is_empty() {
+                            client.stray_text()
+                        } else {
+                            stderr
+                        };
                         EngineError::DaemonExited {
                             code: Some(code),
-                            stderr,
+                            detail,
                         }
                     }
                     _ => err,
@@ -289,5 +307,37 @@ mod tests {
             supervisor.live.is_none(),
             "the dead child must have been reaped"
         );
+    }
+
+    /// `wsl.exe` refusing to start the daemon writes its reason to the
+    /// child's stdout as UTF-16LE and nothing to stderr. The failure must
+    /// carry that text, not an empty detail.
+    #[cfg(windows)]
+    #[test]
+    fn hello_failure_reports_the_childs_stdout_message_when_stderr_is_empty() {
+        if std::env::var_os("WILLIE_UTF16_EXIT_MODE").is_some() {
+            crate::test_support::write_utf16_message_and_exit();
+        }
+        let child = crate::test_support::spawn_peer_with_stderr(
+            "daemon::tests::hello_failure_reports_the_childs_stdout\
+             _message_when_stderr_is_empty",
+            "WILLIE_UTF16_EXIT_MODE",
+        );
+        let mut supervisor = DaemonSupervisor::new();
+        let err = supervisor
+            .start_with(|| WslProcess::from_child(child))
+            .unwrap_err();
+
+        let EngineError::DaemonExited { code, detail } = &err else {
+            panic!("expected DaemonExited, got {err:?}");
+        };
+        assert_eq!(*code, Some(127));
+        assert!(detail.contains("WSL_E_DISTRO_NOT_FOUND"), "{detail}");
+        assert!(
+            err.remediation().contains("click Install distribution"),
+            "{}",
+            err.remediation()
+        );
+        assert!(supervisor.live.is_none(), "the child must be reaped");
     }
 }

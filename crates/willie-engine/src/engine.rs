@@ -89,7 +89,19 @@ impl Engine {
         Ok(())
     }
 
+    /// The engine drives exactly one distribution. Without it `wsl.exe`
+    /// answers with its own message and a code the user cannot act on,
+    /// so the missing registration is reported before the spawn.
+    fn ensure_distro_registered(&self) -> Result<(), EngineError> {
+        if self.distro.status()?.registered {
+            Ok(())
+        } else {
+            Err(EngineError::DistroNotRegistered)
+        }
+    }
+
     pub fn start_daemon(&mut self) -> Result<(), EngineError> {
+        self.ensure_distro_registered()?;
         self.daemon.start().map(drop)
     }
 
@@ -99,6 +111,7 @@ impl Engine {
 
     pub fn run_doctor(&mut self) -> Result<DoctorReport, EngineError> {
         if !matches!(self.daemon.state(), DaemonState::Running { .. }) {
+            self.ensure_distro_registered()?;
             self.daemon.start()?;
         }
         let report = match self.daemon.doctor() {
@@ -109,6 +122,7 @@ impl Engine {
             // unresponsive daemon. One restart is the supervision
             // promise; a second failure is the user's to see.
             Err(_) => {
+                self.ensure_distro_registered()?;
                 self.daemon.start()?;
                 self.daemon.doctor()?
             }

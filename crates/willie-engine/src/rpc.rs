@@ -1,21 +1,27 @@
 //! JSON-RPC client over a `LineTransport`: sequential calls, responses
-//! matched by id, notifications and stray lines skipped (logged).
+//! matched by id, notifications ignored and stray lines kept for a
+//! failure report.
 
 use std::{
+    collections::VecDeque,
     sync::mpsc::RecvTimeoutError,
     time::{Duration, Instant},
 };
 
 use serde::{Serialize, de::DeserializeOwned};
-use willie_proto::rpc::{Request, Response};
+use willie_proto::rpc::{Notification, Request, Response};
 
 use crate::{error::EngineError, process::LineTransport};
+
+/// How many non-envelope lines are worth quoting when a call fails.
+const STRAY_LINES: usize = 8;
 
 #[derive(Debug)]
 pub struct RpcClient {
     transport: LineTransport,
     timeout: Duration,
     next_id: u64,
+    stray: VecDeque<String>,
 }
 
 impl RpcClient {
@@ -25,12 +31,39 @@ impl RpcClient {
             transport,
             timeout,
             next_id: 1,
+            stray: VecDeque::new(),
         }
     }
 
     /// Changes the timeout applied to calls made from now on.
     pub fn set_timeout(&mut self, timeout: Duration) {
         self.timeout = timeout;
+    }
+
+    /// The last lines that were not JSON-RPC envelopes, oldest first.
+    /// When the daemon never starts, `wsl.exe`'s own message is all the
+    /// engine has to explain the failure with.
+    #[must_use]
+    pub fn stray_lines(&self) -> Vec<String> {
+        self.stray.iter().cloned().collect()
+    }
+
+    /// [`Self::stray_lines`] as one block of text, empty when the peer
+    /// only ever spoke the protocol.
+    #[must_use]
+    pub fn stray_text(&self) -> String {
+        self.stray_lines().join("\n").trim().to_owned()
+    }
+
+    fn remember_stray(&mut self, line: &str) {
+        let text = line.trim();
+        if text.is_empty() {
+            return;
+        }
+        if self.stray.len() == STRAY_LINES {
+            self.stray.pop_front();
+        }
+        self.stray.push_back(text.to_owned());
     }
 
     pub fn call<P: Serialize, R: DeserializeOwned>(
@@ -74,7 +107,11 @@ impl RpcClient {
                 }
             };
             let Ok(response) = serde_json::from_str::<Response>(&line) else {
-                eprintln!("engine: ignoring non-response line: {line}");
+                // A notification is an envelope without an `id`; only
+                // text that is no envelope at all is worth keeping.
+                if serde_json::from_str::<Notification>(&line).is_err() {
+                    self.remember_stray(&line);
+                }
                 continue;
             };
             if response.id != id {
@@ -153,6 +190,83 @@ mod tests {
         let b: Echo = client.call("daemon.doctor", ()).unwrap();
         assert_eq!(a.echo, "daemon.health");
         assert_eq!(b.echo, "daemon.doctor");
+        client.close();
+        child.wait().unwrap();
+    }
+
+    /// Answers every request, but chatters ten non-envelope lines first:
+    /// what `wsl.exe` does when it writes its own message to the same
+    /// stdout the daemon speaks on.
+    fn noisy_peer_main() {
+        announce_ready();
+        let stdin = std::io::stdin();
+        let mut out = std::io::stdout();
+        for i in 0..10 {
+            writeln!(out, "willied: noise {i}").unwrap();
+        }
+        out.flush().unwrap();
+        for line in stdin.lock().lines().map_while(Result::ok) {
+            let req: Request = serde_json::from_str(&line).unwrap();
+            let result = serde_json::json!({"echo": req.method});
+            let resp = Response::ok(req.id, result).unwrap();
+            writeln!(out, "{}", serde_json::to_string(&resp).unwrap()).unwrap();
+            out.flush().unwrap();
+        }
+        std::process::exit(0);
+    }
+
+    /// The kept window is small on purpose: a failure report needs the
+    /// last thing the peer said, not its whole history.
+    #[test]
+    fn stray_lines_keep_the_last_eight_non_json_lines() {
+        if std::env::var_os("WILLIE_NOISY_MODE").is_some() {
+            noisy_peer_main();
+            return;
+        }
+        let mut child = spawn_peer(
+            "rpc::tests::stray_lines_keep_the_last_eight_non_json_lines",
+            "WILLIE_NOISY_MODE",
+        );
+        let mut transport = LineTransport::from_child(&mut child).unwrap();
+        await_ready(&mut transport);
+        let mut client = RpcClient::new(transport, Duration::from_secs(5));
+        let echo: Echo = client.call("daemon.health", ()).unwrap();
+        assert_eq!(echo.echo, "daemon.health");
+        assert_eq!(
+            client.stray_lines(),
+            [
+                "willied: noise 2",
+                "willied: noise 3",
+                "willied: noise 4",
+                "willied: noise 5",
+                "willied: noise 6",
+                "willied: noise 7",
+                "willied: noise 8",
+                "willied: noise 9",
+            ]
+        );
+        assert!(client.stray_text().ends_with("noise 9"));
+        client.close();
+        child.wait().unwrap();
+    }
+
+    /// A notification is a valid envelope: it belongs to the protocol,
+    /// not to the text a failure report should quote.
+    #[test]
+    fn notifications_are_not_kept_as_stray_lines() {
+        if std::env::var_os("WILLIE_PEER_MODE").is_some() {
+            peer_main();
+            return;
+        }
+        let mut child = spawn_peer(
+            "rpc::tests::notifications_are_not_kept_as_stray_lines",
+            "WILLIE_PEER_MODE",
+        );
+        let mut transport = LineTransport::from_child(&mut child).unwrap();
+        await_ready(&mut transport);
+        let mut client = RpcClient::new(transport, Duration::from_secs(5));
+        let _: Echo = client.call("daemon.health", ()).unwrap();
+        assert_eq!(client.stray_lines(), ["willied: not json, just noise"]);
         client.close();
         child.wait().unwrap();
     }
