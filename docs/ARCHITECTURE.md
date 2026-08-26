@@ -509,14 +509,14 @@ wizard of §2.4. Code signing is out of scope for now.
 | S2    | F1     | PTY + supervisor + attach in Windows Terminal: resize, 24-bit colour, keys, faithful TUI; supervisor survives the daemon | a usable Claude Code session in a WT tab; killing `willied` does not kill it |
 | S3    | F3     | sandbox on the real kernel: `landlock` in `/sys/kernel/security/lsm`; Landlock ABI; `unshare -U`; `.exe` denied inside; CLI logs in with `agent.state` + tmpfs home | matrix of what works, recorded as a decision |
 | S4    | F2     | corporate network: what does `autoProxy` inject (PAC or static)? does `curl` to the API work with the imported CA? | exact list of variables/files to propagate |
-| S5    | F1     | `/mnt/c` performance: `git status`, `rg`, CLI startup on a real repository                                 | a number deciding "warning" vs "early ext4 workspace"                |
+| S5    | F1     | `/mnt/c` performance: `git status`, `rg`, CLI startup on a real repository                                 | measured (0011): warm `git status` 511 ms on DrvFs vs 4.9 ms on ext4 (~100×), `rg` 19×, traversal 27× — F1 ships the ext4 workspace |
 
 ### 5.5 Slices ↔ components
 
 | Slice | Delivers                                                        | Components                                                                                           | Spike |
 | ----- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----- |
 | F0    | distribution registered; UI shows health; `doctor` — **delivered 2026-08-26** | `distro/`, engine (import, supervision), `willied` (hello/health/doctor), `willie doctor`, Dashboard, NSIS | S1 |
-| F1    | project on `C:\` + Claude Code session in WT, no sandbox       | `project.*`, `session.*`, `willie-sess` (PTY, socket, events — sandbox off), `willie attach`, WT profile, Projects/Sessions screens | S2, S5 |
+| F1    | project in an ext4 workspace (`C:\` warned, 0011) + Claude Code session in WT, no sandbox | `project.*`, `session.*`, `willie-sess` (PTY, socket, events — sandbox off), `willie attach`, WT profile, Projects/Sessions screens | S2, S5 |
 | F2    | proxy/CA propagated                                             | engine (WinHTTP, cert stores), `machine.env`, network `doctor`                                      | S4    |
 | F3    | sandbox with capabilities and layers                            | `willie-sess` (bwrap/seccomp/Landlock, `--inner`), `willie-core` (CapabilitySet, layers), `sandbox explain`, capability UI | S3 |
 | F4    | managed tools                                                   | `tool.*`, manifest, `Harness::detect`, Tools screen                                                  | —     |

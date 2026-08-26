@@ -42,3 +42,4 @@ Things deliberately left open or explicitly rejected for now, and why.
 | 0008 | Debian slim image, no systemd, three data zones               |
 | 0009 | Local-only quality gates on a pinned toolchain                |
 | 0010 | stdio transport findings (S1)                                 |
+| 0011 | ext4 workspace over DrvFs findings (S5)                       |
