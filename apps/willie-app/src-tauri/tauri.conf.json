@@ -39,7 +39,8 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../../../target/distro/willie-rootfs.tar.gz": "willie-rootfs.tar.gz"
+      "../../../target/distro/willie-rootfs.tar.gz": "willie-rootfs.tar.gz",
+      "../../../target/distro/willie-rootfs.tar.gz.sha256": "willie-rootfs.tar.gz.sha256"
     }
   }
 }

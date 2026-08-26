@@ -156,6 +156,16 @@ mod tests {
         );
     }
 
+    /// The installer ships the sidecar as a resource of its own; it is
+    /// found by name beside the image, wherever that turns out to be.
+    #[test]
+    fn the_sidecar_sits_beside_the_image() {
+        assert_eq!(
+            sidecar_path(Path::new("/res/willie-rootfs.tar.gz")),
+            PathBuf::from("/res/willie-rootfs.tar.gz.sha256")
+        );
+    }
+
     fn temp_image(case: &str) -> (PathBuf, PathBuf) {
         let dir = std::env::temp_dir()
             .join(format!("willie-validate-{case}-{}", std::process::id()));

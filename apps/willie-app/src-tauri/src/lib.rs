@@ -39,7 +39,10 @@ fn emit_status(app: &AppHandle, status: &EngineStatus) {
     }
 }
 
-#[tauri::command]
+// Every command talks to WSL and can block for seconds (`--import`, VM
+// boot); `async` keeps them off the main thread so the window stays
+// responsive.
+#[tauri::command(async)]
 fn engine_status(
     state: State<'_, EngineState>,
 ) -> Result<EngineStatus, Problem> {
@@ -59,7 +62,7 @@ fn mutate(
     outcome.0.map(|()| outcome.1)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn engine_install_distro(
     app: AppHandle,
     state: State<'_, EngineState>,
@@ -67,7 +70,7 @@ fn engine_install_distro(
     mutate(app, state, Engine::install_distro)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn engine_start_daemon(
     app: AppHandle,
     state: State<'_, EngineState>,
@@ -75,7 +78,7 @@ fn engine_start_daemon(
     mutate(app, state, Engine::start_daemon)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn engine_stop_daemon(
     app: AppHandle,
     state: State<'_, EngineState>,
@@ -83,7 +86,7 @@ fn engine_stop_daemon(
     mutate(app, state, Engine::stop_daemon)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn engine_doctor(
     app: AppHandle,
     state: State<'_, EngineState>,
