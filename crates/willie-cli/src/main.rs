@@ -17,8 +17,26 @@ fn version_line() -> String {
     format!("willie {}", willie_core::VERSION)
 }
 
+/// The one thing the command line asked for.
+#[derive(Debug, PartialEq, Eq)]
+enum Command {
+    Version,
+    Doctor { json: bool },
+    Usage,
+}
+
+fn parse(args: &[&str]) -> Command {
+    match args {
+        ["--version"] => Command::Version,
+        ["doctor"] => Command::Doctor { json: false },
+        ["doctor", "--json"] => Command::Doctor { json: true },
+        _ => Command::Usage,
+    }
+}
+
 /// One line per check: `[ok ]`, `[FAIL]` or `[skip]`, then the detail,
-/// then the remediation for failures (see docs/CLI_CONTRACT.md).
+/// then the remediation on the same line for failures (see
+/// docs/CLI_CONTRACT.md).
 fn render(report: &DoctorReport) -> String {
     let mut out = String::new();
     for check in &report.checks {
@@ -27,14 +45,21 @@ fn render(report: &DoctorReport) -> String {
             CheckStatus::Fail => "[FAIL]",
             CheckStatus::Skip => "[skip]",
         };
-        out.push_str(&format!("{tag} {:<28} {}\n", check.name, check.detail));
+        let mut line = format!("{tag:<6} {:<28} {}", check.name, check.detail);
         if check.status == CheckStatus::Fail
             && let Some(hint) = &check.remediation
         {
-            out.push_str(&format!("       → {hint}\n"));
+            line.push_str(&format!(" → {hint}"));
         }
+        line.push('\n');
+        out.push_str(&line);
     }
     out
+}
+
+/// Pretty JSON for a report, as printed by `willie doctor --json`.
+fn render_json(report: &DoctorReport) -> serde_json::Result<String> {
+    serde_json::to_string_pretty(report)
 }
 
 fn exit_code(report: &DoctorReport) -> u8 {
@@ -48,7 +73,7 @@ fn exit_code(report: &DoctorReport) -> u8 {
 fn doctor(json: bool) -> ExitCode {
     let report = willie_linux::doctor::run_all();
     if json {
-        match serde_json::to_string_pretty(&report) {
+        match render_json(&report) {
             Ok(text) => println!("{text}"),
             Err(e) => {
                 eprintln!("willie doctor: cannot encode report: {e}");
@@ -69,25 +94,20 @@ fn usage() -> ExitCode {
 #[cfg(target_os = "linux")]
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    match args
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>()
-        .as_slice()
-    {
-        ["--version"] => {
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    match parse(&args) {
+        Command::Version => {
             println!("{}", version_line());
             ExitCode::SUCCESS
         }
-        ["doctor"] => doctor(false),
-        ["doctor", "--json"] => doctor(true),
-        _ => usage(),
+        Command::Doctor { json } => doctor(json),
+        Command::Usage => usage(),
     }
 }
 
 #[cfg(not(target_os = "linux"))]
 fn main() -> ExitCode {
-    let _ = (doctor, render, exit_code);
+    let _ = (doctor, render, render_json, exit_code, parse);
     eprintln!(
         "{} runs only inside the Willie Linux distribution",
         version_line()
@@ -111,6 +131,32 @@ mod tests {
     }
 
     #[test]
+    fn version_line_names_the_binary_and_version() {
+        assert_eq!(version_line(), format!("willie {}", willie_core::VERSION));
+    }
+
+    #[test]
+    fn version_flag_parses() {
+        assert_eq!(parse(&["--version"]), Command::Version);
+    }
+
+    #[test]
+    fn doctor_parses_with_and_without_json() {
+        assert_eq!(parse(&["doctor"]), Command::Doctor { json: false });
+        assert_eq!(
+            parse(&["doctor", "--json"]),
+            Command::Doctor { json: true }
+        );
+    }
+
+    #[test]
+    fn unknown_or_reordered_arguments_are_usage() {
+        assert_eq!(parse(&["--json", "doctor"]), Command::Usage);
+        assert_eq!(parse(&["doctor", "--json", "extra"]), Command::Usage);
+        assert_eq!(parse(&[]), Command::Usage);
+    }
+
+    #[test]
     fn render_uses_the_contract_prefixes_and_shows_remediation_on_failure() {
         let report = DoctorReport {
             checks: vec![
@@ -120,10 +166,22 @@ mod tests {
             ],
         };
         let text = render(&report);
-        assert!(text.contains("[ok ] a"));
-        assert!(text.contains("[FAIL] b"));
-        assert!(text.contains("fix it"));
-        assert!(text.contains("[skip] c"));
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(lines[0].starts_with("[ok ]  a"));
+        assert!(!lines[0].contains("fix it"));
+        assert!(lines[1].starts_with("[FAIL] b"));
+        assert!(lines[1].contains("→ fix it"));
+        assert!(lines[2].starts_with("[skip] c"));
+    }
+
+    #[test]
+    fn render_json_round_trips_through_a_doctor_report() {
+        let report = DoctorReport {
+            checks: vec![c("a", CheckStatus::Ok, true)],
+        };
+        let text = render_json(&report).unwrap();
+        let back: DoctorReport = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, report);
     }
 
     #[test]
