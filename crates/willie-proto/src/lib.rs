@@ -9,7 +9,10 @@
 //! new fields a default, so an older client can talk to a newer daemon.
 
 pub mod daemon;
+pub mod job;
+pub mod project;
 pub mod rpc;
+pub mod state;
 
 pub use daemon::{Hello, HelloReply};
 pub use rpc::RpcError;
