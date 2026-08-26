@@ -29,11 +29,16 @@ printf '%s\n' "$IMAGE_VERSION" > /etc/willie/image-version
 # Agent state lives outside the ephemeral sandbox home; the symlinks make a
 # plain shell in the distribution use the same login as sessions do.
 STATE=/home/willie/.willie/agent-state/claude
-install -d -o willie -g willie -m 0700 "$STATE/dot-claude"
-[ -f "$STATE/claude.json" ] || {
+install -d -o willie -g willie -m 0700 \
+    /home/willie/.willie \
+    /home/willie/.willie/agent-state \
+    "$STATE" \
+    "$STATE/dot-claude"
+if [ ! -f "$STATE/claude.json" ]; then
     : > "$STATE/claude.json"
     chown willie:willie "$STATE/claude.json"
-}
+fi
+chmod 0600 "$STATE/claude.json"
 ln -sfn .willie/agent-state/claude/dot-claude /home/willie/.claude
 ln -sfn .willie/agent-state/claude/claude.json /home/willie/.claude.json
 chown -h willie:willie /home/willie/.claude /home/willie/.claude.json
