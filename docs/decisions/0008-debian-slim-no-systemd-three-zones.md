@@ -38,6 +38,14 @@ replaced on update), **Willie data** (`/var/lib/willie`) and **user data**
 - The distribution's own Start-menu shortcut and auto-generated terminal
   profile are disabled; the engine manages the Windows Terminal profile.
 
+## Exception
+
+The pinned base-image source in `distro/base.lock`, and the fetch code
+that verifies it, is the one external reference versioned content may
+carry: a reproducible pin is impossible without naming what is pinned.
+`just check-refs` keeps every other outside reference out of the
+repository.
+
 ## Not decided
 
 Mounting a separate virtual disk for data (needs administrator) and a

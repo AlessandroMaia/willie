@@ -55,11 +55,11 @@ First run of a freshly installed image (`willie doctor`, exit 0; the
 [ok ]  network (api.anthropic.com)  ok
 ```
 
-`landlock LSM` skips because the WSL kernel exposes no
-`/sys/kernel/security/lsm`, so the check reports `kernel without
-Landlock: sandboxing will be reduced` — not required, but the sandbox
-slice has to account for it. `/run/willie` is created by the `wsl.conf`
-boot command as `drwxr-x--- willie willie`.
+`landlock LSM` shows `[skip] landlock LSM` because the WSL kernel
+exposes no `/sys/kernel/security/lsm`, so the list naming the module is
+empty; F0 renders no reason text for it. The check is not required, but
+the sandbox slice has to account for it. `/run/willie` is created by the
+`wsl.conf` boot command as `drwxr-x--- willie willie`.
 
 The daemon answers on stdio, one JSON-RPC line in, one out, and exits 0
 on EOF:

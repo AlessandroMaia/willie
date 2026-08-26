@@ -52,7 +52,7 @@ the *what*.
 | ----------------- | ------------------------------------------------------------------------------------------------------------ |
 | Prerequisites     | `wsl.exe --version` / `--status`; requires WSL ≥ 2.4.4 with version 2 default; Windows Terminal recommended. |
 | Provisioning      | `wsl --import willie %LOCALAPPDATA%\Willie\data\distro <rootfs.tar.gz>`; `--unregister`; `--export` for backups; binary and image updates (§2.4). |
-| Daemon supervision| spawn with `CREATE_NO_WINDOW`; `hello` + periodic ping; restart with backoff; stop on exit.                    |
+| Daemon supervision| spawn with `CREATE_NO_WINDOW`; `hello`; liveness probe on every status read and one restart on a failed call (F0); periodic ping and backoff later. |
 | Privileged steps  | one-shot `wsl.exe -d willie --user root --exec …` (base packages, `update-ca-certificates`, `/opt/willie`). The daemon never runs as root. |
 | Windows facilities| proxy/PAC detection (WinHTTP), certificate export (`Root` and `CA` stores), Windows Terminal profile fragment, `wt.exe` launch, notifications, tray. |
 | UI bridge         | translates webview actions into RPC; forwards daemon notifications as Tauri events; keeps the UI store fed by `state.snapshot` + `state.events`. |
@@ -89,18 +89,25 @@ plugins resolve host paths through `Harness::state_paths()`.
 
 ```
 crates/
-  willie-core        domain: ids (ULID), Project, Session, CapabilitySet, config — ZERO I/O
-  willie-linux       Linux-side helpers shared by willied, willie-sess and willie-cli
-                     (well-known paths, doctor checks)
-  willie-proto       JSON-RPC messages (serde), protocol version, snapshot/events
-  willie-engine      Windows: wsl.exe wrapper, provisioning, proxy/CA, WT, supervision
-  willied            Linux daemon: RPC server, projects, session index, plugin host, storage
-  willie-sess        Linux supervisor: PTY, sandbox (bwrap/Landlock/seccomp), socket, events
-  willie-cli         Linux CLI: attach, doctor, sandbox explain, reindex, dev test
+  willie-core        domain: ids (ULID), Project, Session, CapabilitySet,
+                     config — ZERO I/O
+  willie-linux       Linux-side helpers shared by willied, willie-sess
+                     and willie-cli (well-known paths, doctor checks)
+  willie-proto       JSON-RPC messages (serde), protocol version,
+                     snapshot/events
+  willie-engine      Windows: wsl.exe wrapper, provisioning, proxy/CA,
+                     WT, supervision
+  willied            Linux daemon: RPC server, projects, session index,
+                     plugin host, storage
+  willie-sess        Linux supervisor: PTY, sandbox
+                     (bwrap/Landlock/seccomp), socket, events
+  willie-cli         Linux CLI: attach, doctor, sandbox explain,
+                     reindex, dev test
   willie-harness     Harness trait + capability matrix + ClaudeCode
   willie-plugin-api  Plugin trait, PluginCtx, manifest
   willie-plugins/{profiles,usage}
-apps/willie-app/     Tauri 2 (Rust) + React/TS/Vite; UI plugins in src/plugins/<id>/
+apps/willie-app/     Tauri 2 (Rust) + React/TS/Vite; UI plugins in
+                     src/plugins/<id>/
 xtask/               dev tasks (cargo xtask …)
 distro/              reproducible rootfs recipe, wsl*.conf, oobe, sha256
 ```
@@ -523,7 +530,7 @@ the corporate machine.
 
 | Risk                                                             | Mitigation                                                                                                         |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `wsl.exe` mixes its own UTF-16LE messages with raw process bytes | Measured and handled (0010): the child's bytes arrive as raw UTF-8, `wsl.exe`'s own messages as UTF-16LE, and `text::decode_wsl_output` decodes them without replacement characters. The protocol is UTF-8 ndjson and ignores non-JSON lines; `wsl.exe` errors are read from exit code + decoded stderr. |
+| `wsl.exe` mixes its own UTF-16LE messages with raw process bytes | Measured and handled (0010): the child's bytes arrive as raw UTF-8, `wsl.exe`'s own messages as UTF-16LE, and `text::decode_wsl_output` decodes them without replacement characters. The protocol is UTF-8 ndjson and ignores non-JSON lines; `wsl.exe` errors are read from the exit code plus decoded stderr, or `wsl.exe`'s own stdout message when stderr is empty. |
 | Daemon dies ⇒ engine misses events until reconnection            | Snapshot on reconnect replaces replay; supervisors log events on their own.                                        |
 | Landlock has no network rules at this kernel version             | Network is an always-on capability for now; egress by nftables/uid is a growth item; the UI says "the agent has network". |
 | Orphaned supervisors after a supervisor crash                    | `willied` removes dead sockets and marks the session `failed`; `spec.json` + `events.jsonl` keep the history.      |

@@ -28,21 +28,29 @@ builds and registers, its daemon answers, and the app shows health and
 
 - Node.js 22 and pnpm.
 - `just` (task runner) and `cargo-zigbuild` + `zig` (Linux cross-compile).
+- On a managed machine, the WSL 2 VM needs the "Log on as a service"
+  right for `NT VIRTUAL MACHINE\Virtual Machines` (`S-1-5-83-0`). The HCS
+  error `0x80070569` on `wsl --import` or on the first daemon start means
+  it is missing; only an administrator can grant it. See
+  `docs/decisions/0010-wsl-stdio-transport-findings.md`.
 
 Run `just ensure` to check everything and get install hints.
 
 ## Development
 
 ```text
-just                 list recipes
-just ensure          verify the toolchain
-just hooks           install the pre-commit hook
-just check           the local quality gate (format, clippy, tests, denylist)
-just dev             run the desktop app
-just build-linux     cross-compile the Linux binaries to musl
-just distro-build    build the distribution image from distro/
-just distro-install  register the image as the `willie` distribution
-just app-build       build the Windows installer (NSIS, per-user)
+just                   list recipes
+just ensure            verify the toolchain
+just hooks             install the pre-commit hook
+just check             the local quality gate (format, clippy, tests, denylist)
+just dev               run the desktop app
+just build-linux       cross-compile the Linux binaries to musl
+just distro-pin        pin the base root filesystem (distro/base.lock)
+just distro-fetch      download and verify the pinned base root filesystem
+just distro-build      build the distribution image from distro/
+just distro-install    register the image as the `willie` distribution
+just distro-uninstall  unregister it, discarding its disk
+just app-build         build the Windows installer (NSIS, per-user)
 ```
 
 ## Documents

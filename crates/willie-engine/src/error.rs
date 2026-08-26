@@ -20,7 +20,8 @@ pub enum WslError {
 }
 
 impl WslError {
-    /// Stable machine-readable code (see docs/CLI_CONTRACT.md).
+    /// Stable machine-readable code (see docs/PROTOCOL.md, Engine
+    /// problem codes).
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {
@@ -87,7 +88,8 @@ pub enum EngineError {
 }
 
 impl EngineError {
-    /// Stable machine-readable code (see docs/CLI_CONTRACT.md).
+    /// Stable machine-readable code (see docs/PROTOCOL.md, Engine
+    /// problem codes).
     #[must_use]
     pub fn code(&self) -> &'static str {
         match self {

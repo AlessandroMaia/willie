@@ -18,8 +18,8 @@ agents do the work. Full picture: `docs/ARCHITECTURE.md`.
 ```
 crates/
   willie-core        domain types (ids, config, capability sets) — zero I/O
-  willie-linux       Linux-side helpers shared by willied, willie-sess and willie-cli
-                     (well-known paths, doctor checks)
+  willie-linux       Linux-side helpers shared by willied, willie-sess
+                     and willie-cli (well-known paths, doctor checks)
   willie-proto       JSON-RPC message types; transport-agnostic
   willie-harness     `Harness` trait + capability matrix; `ClaudeCode` impl
   willie-plugin-api  `Plugin` trait and manifest
@@ -107,6 +107,8 @@ releases/            curated release notes, one file per version
 | `just check`            | **the gate**: fmt-check + lint + test + check-refs      |
 | `just dev`              | run the desktop app                                     |
 | `just build-linux`      | cross-compile daemon, supervisor and CLI to musl        |
+| `just distro-pin`       | pin the base root filesystem (`distro/base.lock`)       |
+| `just distro-fetch`     | download and verify the pinned base root filesystem    |
 | `just distro-build`     | build the distribution image (runs `build-linux` first) |
 | `just distro-install`   | register the image as the `willie` distribution         |
 | `just distro-uninstall` | unregister it, discarding its disk                      |
