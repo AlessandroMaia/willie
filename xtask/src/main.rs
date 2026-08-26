@@ -47,7 +47,8 @@ usage: cargo xtask <command>
   check-refs [--list F]         fail if content matches the denylist
   build-linux [--debug]         cross-compile willied, willie-sess and
                                 willie for x86_64-unknown-linux-musl
-  distro pin|fetch|build|clean  manage the distribution image
+  distro pin|fetch|build|clean|install|uninstall
+                                manage the distribution image
 ";
 
 /// Root of the workspace: the parent of this crate's manifest directory.

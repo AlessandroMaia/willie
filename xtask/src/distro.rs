@@ -18,7 +18,7 @@ use std::{
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use willie_engine::{
-    paths::to_wsl_path,
+    paths::{data_dir, to_wsl_path},
     wsl::{ExportFormat, WslCli, WslExec},
 };
 
@@ -30,6 +30,8 @@ pub const LOCK_PATH: &str = "distro/base.lock";
 /// Throwaway distribution the image is provisioned in.
 pub const BUILDER_NAME: &str = "willie-build";
 pub const IMAGE_NAME: &str = "willie-rootfs.tar.gz";
+/// Distribution the image is registered as on the developer's machine.
+pub const DISTRO_NAME: &str = "willie";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseLock {
@@ -436,14 +438,63 @@ fn provision_and_export(
     Ok(())
 }
 
+fn sidecar_path(out_dir: &Path, suffix: &str) -> PathBuf {
+    out_dir.join(format!("{IMAGE_NAME}.{suffix}"))
+}
+
 fn write_sidecar(
     out_dir: &Path,
     suffix: &str,
     contents: &str,
 ) -> Result<(), String> {
-    let path = out_dir.join(format!("{IMAGE_NAME}.{suffix}"));
+    let path = sidecar_path(out_dir, suffix);
     fs::write(&path, contents)
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
+/// Registers the built image under `%LOCALAPPDATA%\Willie\distro`. Any
+/// distribution left by an earlier install is replaced, so the developer
+/// always runs the image currently in `target/distro`.
+pub fn install(root: &Path) -> Result<(), String> {
+    let out_dir = root.join("target/distro");
+    let image = out_dir.join(IMAGE_NAME);
+    if !image.is_file() {
+        return Err(format!(
+            "no image at {}; run `just distro-build` first",
+            image.display()
+        ));
+    }
+    let dir = data_dir().ok_or("LOCALAPPDATA is not set")?.join("distro");
+    uninstall(root)?;
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    println!(
+        "importing {} as {DISTRO_NAME} into {}…",
+        image.display(),
+        dir.display()
+    );
+    WslCli
+        .import(DISTRO_NAME, &dir, &image)
+        .map_err(|e| e.to_string())?;
+    let version = fs::read_to_string(sidecar_path(&out_dir, "version"))
+        .unwrap_or_default();
+    println!("installed {DISTRO_NAME} {}", version.trim());
+    Ok(())
+}
+
+/// Terminates and unregisters the distribution, discarding its disk.
+pub fn uninstall(_root: &Path) -> Result<(), String> {
+    let cli = WslCli;
+    let registered = cli.list().map_err(|e| e.to_string())?;
+    if registered
+        .iter()
+        .any(|d| d.eq_ignore_ascii_case(DISTRO_NAME))
+    {
+        let _ = cli.terminate(DISTRO_NAME);
+        cli.unregister(DISTRO_NAME).map_err(|e| e.to_string())?;
+        println!("unregistered {DISTRO_NAME}");
+    }
+    Ok(())
 }
 
 pub fn run(root: &Path, args: &[String]) -> crate::TaskResult {
@@ -452,8 +503,11 @@ pub fn run(root: &Path, args: &[String]) -> crate::TaskResult {
         Some("fetch") => fetch(root).map(drop),
         Some("build") => build(root),
         Some("clean") => clean(root),
+        Some("install") => install(root),
+        Some("uninstall") => uninstall(root),
         other => Err(format!(
-            "unknown distro command {other:?}; expected pin|fetch|build|clean"
+            "unknown distro command {other:?}; expected \
+             pin|fetch|build|clean|install|uninstall"
         )),
     }
 }

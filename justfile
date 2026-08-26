@@ -94,3 +94,13 @@ distro-fetch:
 [group('dev')]
 distro-build: build-linux
     cargo xtask distro build
+
+# Register target/distro/willie-rootfs.tar.gz as the `willie` distribution.
+[group('dev')]
+distro-install:
+    cargo xtask distro install
+
+# Terminate and unregister the `willie` distribution.
+[group('dev')]
+distro-uninstall:
+    cargo xtask distro uninstall
