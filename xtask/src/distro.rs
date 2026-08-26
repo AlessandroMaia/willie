@@ -8,6 +8,10 @@
 //! The publisher stores the image as an OCI layout (`index.json` plus
 //! friendly-named blob files) rather than a flat tarball, so pinning
 //! walks index -> manifest -> layer, verifying a sha256 at every hop.
+//!
+//! These commands produce no data, only progress: every line goes to
+//! stderr, so a caller can pipe stdout and get nothing (see
+//! `docs/CLI_CONTRACT.md`).
 
 use std::{
     fs,
@@ -282,7 +286,7 @@ pub fn pin(root: &Path) -> Result<(), String> {
     };
     fs::write(root.join(LOCK_PATH), lock.render())
         .map_err(|e| format!("cannot write {LOCK_PATH}: {e}"))?;
-    println!(
+    eprintln!(
         "pinned {}\n  commit {}\n  sha256 {}",
         lock.url, lock.commit, lock.sha256
     );
@@ -302,7 +306,7 @@ pub fn fetch(root: &Path) -> Result<PathBuf, String> {
     let lock = read_lock(root)?;
     let target = root.join("target/distro/base/rootfs.tar.gz");
     if target.is_file() && sha256_file(&target)? == lock.sha256 {
-        println!("base rootfs present and verified: {}", target.display());
+        eprintln!("base rootfs present and verified: {}", target.display());
         return Ok(target);
     }
     curl(&lock.url, &target)?;
@@ -311,7 +315,7 @@ pub fn fetch(root: &Path) -> Result<PathBuf, String> {
         let _ = fs::remove_file(&target);
         return Err(e);
     }
-    println!("base rootfs downloaded and verified: {}", target.display());
+    eprintln!("base rootfs downloaded and verified: {}", target.display());
     Ok(target)
 }
 
@@ -365,7 +369,7 @@ pub fn clean(_root: &Path) -> Result<(), String> {
         .any(|d| d.eq_ignore_ascii_case(BUILDER_NAME))
     {
         cli.unregister(BUILDER_NAME).map_err(|e| e.to_string())?;
-        println!("unregistered leftover {BUILDER_NAME}");
+        eprintln!("unregistered leftover {BUILDER_NAME}");
     }
     Ok(())
 }
@@ -386,7 +390,7 @@ pub fn build(root: &Path) -> Result<(), String> {
     fs::create_dir_all(&builder_dir)
         .map_err(|e| format!("cannot create {}: {e}", builder_dir.display()))?;
     let cli = WslCli;
-    println!("importing base as {BUILDER_NAME}…");
+    eprintln!("importing base as {BUILDER_NAME}…");
     cli.import(BUILDER_NAME, &builder_dir, &base)
         .map_err(|e| e.to_string())?;
 
@@ -410,7 +414,7 @@ fn provision_and_export(
     let bins = to_wsl_path(bin_dir)
         .ok_or("target directory must live on a drive letter path")?;
     let script = format!("{conf_dir}/provision.sh");
-    println!("provisioning {version}…");
+    eprintln!("provisioning {version}…");
     let provisioned =
         wsl_exec_as_root("/bin/sh", &[&script, &version, &conf_dir, &bins]);
     let terminated = cli.terminate(BUILDER_NAME).map_err(|e| e.to_string());
@@ -420,7 +424,7 @@ fn provision_and_export(
     let out_dir = root.join("target/distro");
     let image = out_dir.join(IMAGE_NAME);
     let _ = fs::remove_file(&image);
-    println!("exporting {}…", image.display());
+    eprintln!("exporting {}…", image.display());
     cli.export(BUILDER_NAME, &image, ExportFormat::TarGz)
         .map_err(|e| e.to_string())?;
 
@@ -430,7 +434,7 @@ fn provision_and_export(
     let size_mb = fs::metadata(&image)
         .map(|m| m.len() / 1_000_000)
         .unwrap_or(0);
-    println!(
+    eprintln!(
         "image {version}: {} ({size_mb} MB)\nsha256 {sha}",
         image.display()
     );
@@ -467,7 +471,7 @@ pub fn install(root: &Path) -> Result<(), String> {
     uninstall(root)?;
     fs::create_dir_all(&dir)
         .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    println!(
+    eprintln!(
         "importing {} as {DISTRO_NAME} into {}…",
         image.display(),
         dir.display()
@@ -477,7 +481,7 @@ pub fn install(root: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let version = fs::read_to_string(sidecar_path(&out_dir, "version"))
         .unwrap_or_default();
-    println!("installed {DISTRO_NAME} {}", version.trim());
+    eprintln!("installed {DISTRO_NAME} {}", version.trim());
     Ok(())
 }
 
@@ -491,7 +495,7 @@ pub fn uninstall(_root: &Path) -> Result<(), String> {
     {
         let _ = cli.terminate(DISTRO_NAME);
         cli.unregister(DISTRO_NAME).map_err(|e| e.to_string())?;
-        println!("unregistered {DISTRO_NAME}");
+        eprintln!("unregistered {DISTRO_NAME}");
     }
     Ok(())
 }
