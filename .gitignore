@@ -24,3 +24,6 @@ Thumbs.db
 *.swp
 *.log
 *.local
+
+# Local per-plan scratch of the development workflow (ledgers, briefs, review packages)
+/.superpowers/
