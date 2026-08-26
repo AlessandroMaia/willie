@@ -9,9 +9,10 @@ talk to LLM APIs itself; it prepares, launches, observes and governs.
 
 ## Status
 
-Pre-alpha. The first slice (F0) is in: the distribution image builds and
-registers, its daemon answers, and the app shows health and `doctor`.
-Nothing is released yet.
+Pre-alpha. The first slice (F0) is built — the distribution image
+builds and registers, its daemon answers, and the app shows health and
+`doctor` — and awaits its acceptance walk
+(`docs/checklists/f0-acceptance.md`). Nothing is released yet.
 
 ## Prerequisites (development)
 

@@ -27,7 +27,7 @@ the *what*.
 │  ├─ tray                                     │                 │
 │  └─ willie-engine ── JSON-RPC (ndjson) ──────┼──► stdin/stdout │
 │       wsl.exe wrapper · proxy/CA · WT profile · supervision    │
-│       state: %LOCALAPPDATA%\Willie\engine.toml                 │
+│       state: %LOCALAPPDATA%\Willie\data\engine.toml            │
 └────────────────────────────┬───────────────────────────────────┘
                              │  wsl.exe -d willie --user willie --exec willied --stdio
 ┌────────────────────────────▼──────────── distro "willie" ──────┐
@@ -51,7 +51,7 @@ the *what*.
 | Area              | Responsibility                                                                                               |
 | ----------------- | ------------------------------------------------------------------------------------------------------------ |
 | Prerequisites     | `wsl.exe --version` / `--status`; requires WSL ≥ 2.4.4 with version 2 default; Windows Terminal recommended. |
-| Provisioning      | `wsl --import willie %LOCALAPPDATA%\Willie\distro <rootfs.tar.gz>`; `--unregister`; `--export` for backups; binary and image updates (§2.4). |
+| Provisioning      | `wsl --import willie %LOCALAPPDATA%\Willie\data\distro <rootfs.tar.gz>`; `--unregister`; `--export` for backups; binary and image updates (§2.4). |
 | Daemon supervision| spawn with `CREATE_NO_WINDOW`; `hello` + periodic ping; restart with backoff; stop on exit.                    |
 | Privileged steps  | one-shot `wsl.exe -d willie --user root --exec …` (base packages, `update-ca-certificates`, `/opt/willie`). The daemon never runs as root. |
 | Windows facilities| proxy/PAC detection (WinHTTP), certificate export (`Root` and `CA` stores), Windows Terminal profile fragment, `wt.exe` launch, notifications, tray. |
@@ -115,8 +115,9 @@ on `core` + `harness`, not on the daemon; plugins depend on `plugin-api`
 
 ### 2.1 Base image
 
-Debian stable *slim* (glibc), 30–60 MB compressed, built reproducibly from
-`distro/` and versioned with the app (embedded sha256).
+Debian stable *slim* (glibc), about 70 MB compressed (F0 measured
+70 164 480 bytes), built reproducibly from `distro/` and versioned with
+the app (embedded sha256).
 
 System content: `ca-certificates`, `git`, `curl`, `bubblewrap`, `sudo`,
 `procps`, `iproute2`, `less`; `/opt/willie/bin/*` as **static musl**
@@ -481,8 +482,13 @@ Image built from `distro/` with an embedded sha256. Quality gate:
 
 ### 5.3 Installer and updates
 
-Tauri bundler, **NSIS per-user** → `%LOCALAPPDATA%\Programs\Willie` (no
-administrator). The `willie-rootfs.tar.gz` ships as a bundle resource.
+Tauri bundler, **NSIS per-user** → `%LOCALAPPDATA%\Willie` (no
+administrator; a per-user Tauri install cannot choose `Programs\`).
+Engine state lives inside it at `%LOCALAPPDATA%\Willie\data\`
+(`engine.toml`, `distro\`, `logs\`), a subdirectory the uninstaller
+never removes: its `RMDir` of the install root is non-recursive, and
+its optional app-data purge targets the bundle-identifier directory,
+not this one. The `willie-rootfs.tar.gz` ships as a bundle resource.
 First run = wizard (prerequisites → `--import` → `doctor`). App updates
 through the Tauri updater (own signing key); the engine then compares
 `hello` and applies the binary fast path. Image updates (rare) use the
@@ -502,7 +508,7 @@ wizard of §2.4. Code signing is out of scope for now.
 
 | Slice | Delivers                                                        | Components                                                                                           | Spike |
 | ----- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----- |
-| F0    | distribution registered; UI shows health; `doctor` — **delivered 2026-08-26** | `distro/`, engine (import, supervision), `willied` (hello/health/doctor), `willie doctor`, Dashboard, NSIS | S1 |
+| F0    | distribution registered; UI shows health; `doctor` — **built 2026-08-26**, acceptance walk pending | `distro/`, engine (import, supervision), `willied` (hello/health/doctor), `willie doctor`, Dashboard, NSIS | S1 |
 | F1    | project on `C:\` + Claude Code session in WT, no sandbox       | `project.*`, `session.*`, `willie-sess` (PTY, socket, events — sandbox off), `willie attach`, WT profile, Projects/Sessions screens | S2, S5 |
 | F2    | proxy/CA propagated                                             | engine (WinHTTP, cert stores), `machine.env`, network `doctor`                                      | S4    |
 | F3    | sandbox with capabilities and layers                            | `willie-sess` (bwrap/seccomp/Landlock, `--inner`), `willie-core` (CapabilitySet, layers), `sandbox explain`, capability UI | S3 |

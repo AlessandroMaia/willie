@@ -96,17 +96,21 @@ releases/            curated release notes, one file per version
 
 ## Workflow
 
-| Command             | Purpose                                              |
-| ------------------- | ---------------------------------------------------- |
-| `just ensure`       | verify toolchain; prints install hints                |
-| `just hooks`        | install the pre-commit hook                           |
-| `just fmt`          | format everything                                     |
-| `just lint`         | clippy `-D warnings`, Biome, `tsc`                    |
-| `just test`         | Rust + frontend tests                                 |
-| `just check-refs`   | denylist scan of versioned content                    |
-| `just check`        | **the gate**: fmt-check + lint + test + check-refs    |
-| `just dev`          | run the desktop app                                   |
-| `just build-linux`  | cross-compile daemon, supervisor and CLI to musl      |
+| Command                 | Purpose                                                 |
+| ----------------------- | ------------------------------------------------------- |
+| `just ensure`           | verify toolchain; prints install hints                  |
+| `just hooks`            | install the pre-commit hook                             |
+| `just fmt`              | format everything                                       |
+| `just lint`             | clippy `-D warnings`, Biome, `tsc`                      |
+| `just test`             | Rust + frontend tests                                   |
+| `just check-refs`       | denylist scan of versioned content                      |
+| `just check`            | **the gate**: fmt-check + lint + test + check-refs      |
+| `just dev`              | run the desktop app                                     |
+| `just build-linux`      | cross-compile daemon, supervisor and CLI to musl        |
+| `just distro-build`     | build the distribution image (runs `build-linux` first) |
+| `just distro-install`   | register the image as the `willie` distribution         |
+| `just distro-uninstall` | unregister it, discarding its disk                      |
+| `just app-build`        | build the Windows installer (runs `distro-build` first) |
 
 There is no remote CI. `just check` on the developer machine is the only
 gate, so run it before claiming anything is done.

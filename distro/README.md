@@ -33,12 +33,12 @@ the user's home.
 
 ## Installing
 
-`just distro-install` registers the built image (70 MB compressed) as the
-`willie` distribution under `%LOCALAPPDATA%\Willie\distro`, unpacking to
-an `ext4.vhdx` of about 280 MB. Any distribution named `willie` from an
-earlier install is terminated and unregistered first, so the developer
-always runs the image now in `target/distro`. `just distro-uninstall`
-removes it again, discarding that disk.
+`just distro-install` registers the built image (70 MB compressed) as
+the `willie` distribution under `%LOCALAPPDATA%\Willie\data\distro`,
+unpacking to an `ext4.vhdx` of about 280 MB. Any distribution named
+`willie` from an earlier install is terminated and unregistered first,
+so the developer always runs the image now in `target/distro`.
+`just distro-uninstall` removes it again, discarding that disk.
 
 First run of a freshly installed image (`willie doctor`, exit 0; the
 `curl` banner is elided here):
