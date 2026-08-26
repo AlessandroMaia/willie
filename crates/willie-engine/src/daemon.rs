@@ -1,6 +1,6 @@
 //! Starts, questions and stops `willied` inside the distribution.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use willie_proto::daemon::{DoctorReport, Health, Hello, HelloReply, method};
@@ -14,6 +14,10 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(60);
 /// Applied to every call once the daemon has already said hello.
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const STOP_GRACE: Duration = Duration::from_secs(3);
+/// How long a failed hello waits for the child to finish dying
+/// before the failure is classified; an exit is the cause, not the
+/// symptom.
+const EXIT_SETTLE: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -42,8 +46,24 @@ impl DaemonSupervisor {
         Self::default()
     }
 
+    /// Re-checks the child before answering: a daemon that died behind
+    /// the engine's back (`wsl --terminate`, `--unregister`, a crash) is
+    /// reaped and reported as `daemon_exited` instead of a stale Running.
     #[must_use]
-    pub fn state(&self) -> DaemonState {
+    pub fn state(&mut self) -> DaemonState {
+        let exited = match &mut self.live {
+            Some((process, _)) => match process.try_wait() {
+                Ok(Some(code)) => Some(EngineError::DaemonExited {
+                    code: Some(code),
+                    stderr: process.stderr_text(),
+                }),
+                _ => None,
+            },
+            None => None,
+        };
+        if let Some(failure) = exited {
+            self.record(&failure);
+        }
         self.state.clone()
     }
 
@@ -72,6 +92,16 @@ impl DaemonSupervisor {
         let reply: HelloReply = match client.call(method::HELLO, hello) {
             Ok(reply) => reply,
             Err(err) => {
+                // Give an exit that caused this failure time to land, so
+                // the cause is reported instead of the transport or
+                // protocol symptom it produced.
+                let deadline = Instant::now() + EXIT_SETTLE;
+                while Instant::now() < deadline {
+                    if matches!(process.try_wait(), Ok(Some(_))) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
                 // Check before killing: a kill always makes `try_wait`
                 // report an exit, which would hide the real failure.
                 let failure = match process.try_wait() {
@@ -162,9 +192,9 @@ impl DaemonSupervisor {
                 serde_json::json!({}),
             );
             client.close();
-            let deadline = std::time::Instant::now() + STOP_GRACE;
+            let deadline = Instant::now() + STOP_GRACE;
             let mut exited = false;
-            while std::time::Instant::now() < deadline {
+            while Instant::now() < deadline {
                 if matches!(process.try_wait(), Ok(Some(_))) {
                     exited = true;
                     break;
@@ -214,5 +244,50 @@ mod tests {
         };
         let json = serde_json::to_string(&failed).unwrap();
         assert!(json.contains("\"state\":\"failed\""));
+    }
+
+    /// A daemon can die without the engine calling anything: the VM is
+    /// terminated, the distribution is unregistered, `willied` panics.
+    /// `state` must notice instead of repeating the last good answer.
+    #[cfg(windows)]
+    #[test]
+    fn state_reports_daemon_exited_once_the_child_is_gone() {
+        if std::env::var_os("WILLIE_DIE_MODE").is_some() {
+            crate::test_support::announce_ready();
+            std::process::exit(3);
+        }
+        let child = crate::test_support::spawn_peer_with_stderr(
+            "daemon::tests::state_reports_daemon_exited_once_the_child_is_gone",
+            "WILLIE_DIE_MODE",
+        );
+        let mut process = WslProcess::from_child(child).unwrap();
+        let mut transport = process.transport().unwrap();
+        crate::test_support::await_ready(&mut transport);
+        let client = RpcClient::new(transport, CALL_TIMEOUT);
+        let mut supervisor = DaemonSupervisor {
+            live: Some((process, client)),
+            state: DaemonState::Running {
+                willie_version: "0.1.0".into(),
+                image_version: None,
+            },
+        };
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut observed = supervisor.state();
+        while matches!(observed, DaemonState::Running { .. })
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(25));
+            observed = supervisor.state();
+        }
+
+        let DaemonState::Failed { code, .. } = &observed else {
+            panic!("expected a failed daemon, got {observed:?}");
+        };
+        assert_eq!(code, "daemon_exited");
+        assert!(
+            supervisor.live.is_none(),
+            "the dead child must have been reaped"
+        );
     }
 }

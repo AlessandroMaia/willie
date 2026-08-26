@@ -101,7 +101,18 @@ impl Engine {
         if !matches!(self.daemon.state(), DaemonState::Running { .. }) {
             self.daemon.start()?;
         }
-        let report = self.daemon.doctor()?;
+        let report = match self.daemon.doctor() {
+            Ok(report) => report,
+            // A well-formed error reply proves the daemon is alive.
+            Err(err @ EngineError::Rpc(_)) => return Err(err),
+            // Anything else: the supervisor has already reaped a dead or
+            // unresponsive daemon. One restart is the supervision
+            // promise; a second failure is the user's to see.
+            Err(_) => {
+                self.daemon.start()?;
+                self.daemon.doctor()?
+            }
+        };
         self.last_doctor = Some(report.clone());
         Ok(report)
     }

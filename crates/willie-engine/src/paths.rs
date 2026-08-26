@@ -2,11 +2,15 @@
 
 use std::path::{Component, Path, PathBuf, Prefix};
 
-/// `%LOCALAPPDATA%\Willie` — the only Windows-side state directory.
+/// `%LOCALAPPDATA%\Willie\data` — the only Windows-side state directory.
+/// It sits inside the per-user install root (`%LOCALAPPDATA%\Willie`)
+/// in a subdirectory the installer never touches, so uninstalling or
+/// reinstalling the app leaves engine state and the distribution disk
+/// alone.
 #[must_use]
 pub fn data_dir() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA")
-        .map(|base| PathBuf::from(base).join("Willie"))
+        .map(|base| PathBuf::from(base).join("Willie").join("data"))
 }
 
 /// Maps an absolute Windows path with a drive letter to the DrvFs mount
@@ -63,8 +67,8 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn data_dir_is_willie_under_localappdata() {
+    fn data_dir_is_willie_data_under_localappdata() {
         let dir = data_dir().expect("LOCALAPPDATA is always set on Windows");
-        assert!(dir.ends_with("Willie"), "unexpected data dir {dir:?}");
+        assert!(dir.ends_with(r"Willie\data"), "unexpected data dir {dir:?}");
     }
 }

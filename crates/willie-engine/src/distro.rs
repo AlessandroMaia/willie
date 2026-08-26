@@ -95,11 +95,11 @@ impl DistroManager {
         })
     }
 
-    /// Imports the image into `%LOCALAPPDATA%\Willie\distro`, replacing
-    /// a previously registered `willie`. The image is validated before
-    /// the old distribution is touched, so a bad image never costs the
-    /// developer their working install. Data migration is a later
-    /// slice.
+    /// Imports the image into `%LOCALAPPDATA%\Willie\data\distro`,
+    /// replacing a previously registered `willie`. The image is
+    /// validated before the old distribution is touched, so a bad
+    /// image never costs the developer their working install. Data
+    /// migration is a later slice.
     pub fn install(&self, image: &Path) -> Result<(), EngineError> {
         validate_image(image)?;
         let dir = install_dir().ok_or_else(|| WslError::Unparseable {
@@ -150,8 +150,8 @@ mod tests {
     fn install_dir_lives_under_the_willie_data_dir() {
         if let Some(dir) = install_dir() {
             assert!(
-                dir.ends_with(r"Willie\distro")
-                    || dir.ends_with("Willie/distro")
+                dir.ends_with(r"Willie\data\distro")
+                    || dir.ends_with("Willie/data/distro")
             );
         }
     }

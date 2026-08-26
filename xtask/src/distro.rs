@@ -451,9 +451,9 @@ fn write_sidecar(
         .map_err(|e| format!("cannot write {}: {e}", path.display()))
 }
 
-/// Registers the built image under `%LOCALAPPDATA%\Willie\distro`. Any
-/// distribution left by an earlier install is replaced, so the developer
-/// always runs the image currently in `target/distro`.
+/// Registers the built image under `%LOCALAPPDATA%\Willie\data\distro`.
+/// Any distribution left by an earlier install is replaced, so the
+/// developer always runs the image currently in `target/distro`.
 pub fn install(root: &Path) -> Result<(), String> {
     let out_dir = root.join("target/distro");
     let image = out_dir.join(IMAGE_NAME);

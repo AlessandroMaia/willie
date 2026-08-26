@@ -106,7 +106,7 @@ impl WslProcess {
     /// Wraps an already-spawned child with piped stderr and starts the
     /// background reader thread; shared by `spawn` and by tests that
     /// need a `WslProcess` without an actual WSL installation.
-    fn from_child(mut child: Child) -> Result<Self, WslError> {
+    pub(crate) fn from_child(mut child: Child) -> Result<Self, WslError> {
         let (tx, rx) = mpsc::channel();
         if let Some(mut err) = child.stderr.take() {
             thread::Builder::new()
