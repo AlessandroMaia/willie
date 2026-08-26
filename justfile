@@ -42,10 +42,13 @@ fmt-check:
     cargo fmt --all --check
     pnpm -C {{web}} exec biome format .
 
-# Clippy with warnings as errors, Biome, and TypeScript type-check.
+# Clippy with warnings as errors on the host and, for the Linux crates,
+# on the musl target (Windows skips every `cfg(target_os = "linux")`
+# line otherwise); then Biome and the TypeScript type-check.
 [group('quality')]
 lint:
     cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo clippy --locked --target x86_64-unknown-linux-musl --all-targets -p willied -p willie-sess -p willie-cli -p willie-linux -- -D warnings
     pnpm -C {{web}} lint
     pnpm -C {{web}} type-check
 

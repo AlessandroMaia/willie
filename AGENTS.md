@@ -101,7 +101,7 @@ releases/            curated release notes, one file per version
 | `just ensure`           | verify toolchain; prints install hints                  |
 | `just hooks`            | install the pre-commit hook                             |
 | `just fmt`              | format everything                                       |
-| `just lint`             | clippy `-D warnings`, Biome, `tsc`                      |
+| `just lint`             | clippy `-D warnings` (host + musl target), Biome, `tsc` |
 | `just test`             | Rust + frontend tests                                   |
 | `just check-refs`       | denylist scan of versioned content                      |
 | `just check`            | **the gate**: fmt-check + lint + test + check-refs      |
