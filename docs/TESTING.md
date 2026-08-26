@@ -30,6 +30,10 @@ its checklist has been walked and the results recorded in it.
 - Tests that need the distribution or WSL detect the prerequisite at
   runtime and **skip with a printed reason** when it is missing; they
   never fail because the machine lacks it.
+- Tests that disturb the registered distribution or boot the VM are
+  opt-in through `WILLIE_TEST_DISTRO`; `just check` runs them only when
+  it is set. Set it once (`$env:WILLIE_TEST_DISTRO = "willie"`) before
+  claiming a slice done.
 - No test is `#[ignore]`d without a comment naming the reason and the
   condition that removes it.
 - Compatibility: when a serialised format changes, add a regression test

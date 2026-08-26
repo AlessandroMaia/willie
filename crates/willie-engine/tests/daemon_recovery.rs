@@ -1,10 +1,16 @@
 //! The supervision promise: a daemon that dies behind the engine's back
 //! is noticed and restarted on the next user action.
 //!
-//! This test needs the `willie` distribution registered and skips with a
-//! printed reason otherwise. It boots the VM twice (a few seconds) and
-//! terminates the `willie` distribution: a developer with the app open
-//! will see its daemon restart.
+//! This test disturbs the machine: it boots the VM twice (a few seconds)
+//! and terminates the `willie` distribution, so a developer with the app
+//! open watches its daemon restart. It therefore runs only when
+//! `WILLIE_TEST_DISTRO` names that distribution, and skips with a
+//! printed reason otherwise:
+//!
+//! ```text
+//! $env:WILLIE_TEST_DISTRO = "willie"
+//! cargo test -p willie-engine --locked --test daemon_recovery -- --nocapture
+//! ```
 
 #![cfg(windows)]
 
@@ -16,6 +22,21 @@ use willie_engine::{
     distro::{DISTRO_NAME, DistroManager},
     wsl::WslCli,
 };
+
+/// `true` only when the user has opted in for exactly the distribution
+/// the engine drives; the engine has no other one to be pointed at.
+fn opted_in() -> bool {
+    match std::env::var("WILLIE_TEST_DISTRO") {
+        Ok(name) if name == DISTRO_NAME => true,
+        _ => {
+            eprintln!(
+                "skip: set WILLIE_TEST_DISTRO={DISTRO_NAME} to run the \
+                 recovery test (terminates the distribution)"
+            );
+            false
+        }
+    }
+}
 
 /// `true` only when this host can run the test, after printing the one
 /// reason it is being skipped.
@@ -39,7 +60,7 @@ fn distro_is_registered() -> bool {
 
 #[test]
 fn run_doctor_restarts_a_daemon_terminated_behind_the_engines_back() {
-    if !distro_is_registered() {
+    if !opted_in() || !distro_is_registered() {
         return;
     }
     let mut engine = Engine::new(Vec::new());
