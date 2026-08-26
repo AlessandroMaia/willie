@@ -135,6 +135,14 @@ gate, so run it before claiming anything is done.
 
 Every document is written in English.
 
+## Commits
+
+Conventional Commits: `type(scope): imperative summary` (`feat`, `fix`,
+`test`, `docs`, `chore`, `refactor`), body explaining the scenario when the
+subject is not enough. **No trailers of any kind** — no authorship,
+co-authorship or tool attribution lines. One task, one commit; the
+pre-commit hook must pass (never `--no-verify`).
+
 ## Comments
 
 Describe the scenario and the invariant, not the change history. One to
