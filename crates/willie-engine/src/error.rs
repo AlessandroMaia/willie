@@ -53,6 +53,8 @@ pub enum EngineError {
         "engine {engine} and daemon {daemon} are different Willie versions"
     )]
     VersionMismatch { engine: String, daemon: String },
+    #[error("distribution image {path} is invalid: {reason}")]
+    ImageInvalid { path: String, reason: String },
 }
 
 impl EngineError {
@@ -67,6 +69,7 @@ impl EngineError {
             Self::DaemonExited { .. } => "daemon_exited",
             Self::Protocol(_) => "protocol_violation",
             Self::VersionMismatch { .. } => "version_mismatch",
+            Self::ImageInvalid { .. } => "image_invalid",
         }
     }
 
@@ -83,6 +86,14 @@ impl EngineError {
                  then sign in again"
                     .into()
             }
+            Self::Wsl(WslError::CommandFailed { args, .. })
+                if args.starts_with("--import") =>
+            {
+                "the previous distribution was removed before this \
+                 import failed; the image is still on disk — retry \
+                 Install"
+                    .into()
+            }
             Self::Wsl(WslError::NotInstalled(_)) => {
                 "enable WSL 2.4.4 or newer (administrator) and retry".into()
             }
@@ -97,6 +108,9 @@ impl EngineError {
             }
             Self::VersionMismatch { .. } => {
                 "reinstall the distribution to update its binaries".into()
+            }
+            Self::ImageInvalid { .. } => {
+                "rebuild the image (just distro-build) and retry".into()
             }
             _ => "see the engine log".into(),
         }
@@ -115,5 +129,15 @@ mod tests {
             stderr: "Error code: Wsl/Service/CreateInstance/0x80070569".into(),
         });
         assert!(err.remediation().contains("S-1-5-83-0"));
+    }
+
+    #[test]
+    fn a_failed_import_says_the_image_is_still_on_disk() {
+        let err = EngineError::Wsl(WslError::CommandFailed {
+            args: "--import willie C:\\dir C:\\image.tar.gz --version 2".into(),
+            code: Some(1),
+            stderr: "boom".into(),
+        });
+        assert!(err.remediation().contains("retry Install"));
     }
 }

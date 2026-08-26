@@ -186,6 +186,11 @@ Willie **never writes the user's `.wslconfig`** (it is global).
 | Base image (rare)              | packages, `/etc`                          | wizard: `wsl --export` backup → `tar` of `/var/lib/willie` and `/home/willie` to Windows → `--unregister` → `--import` → restore both zones → reinstall managed tools from the manifest → `doctor`. |
 | Factory reset                  | everything                                | `--unregister` + `--import`, double confirmation, backup offered.                                                        |
 
+Reinstalling validates the new image before unregistering the old
+distribution; a data-preserving upgrade (export/restore of the two
+data zones) is a later slice, so today a reinstall replaces the
+distribution wholesale.
+
 Never `wsl --mount` (administrator) and never a second distribution.
 
 ### 2.5 Corporate networks
