@@ -12,6 +12,8 @@ mod git;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod handlers;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod jobs;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod outbound;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod server;
