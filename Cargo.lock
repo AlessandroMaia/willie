@@ -4007,6 +4007,7 @@ dependencies = [
  "tauri-build",
  "willie-core",
  "willie-engine",
+ "willie-proto",
 ]
 
 [[package]]

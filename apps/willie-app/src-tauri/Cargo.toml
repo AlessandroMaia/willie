@@ -21,6 +21,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 willie-core = { workspace = true }
 willie-engine = { workspace = true }
+willie-proto = { workspace = true }
 
 [lints]
 workspace = true
