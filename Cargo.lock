@@ -4096,7 +4096,9 @@ dependencies = [
 name = "willied"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "willie-core",
+ "willie-linux",
  "willie-proto",
 ]
 

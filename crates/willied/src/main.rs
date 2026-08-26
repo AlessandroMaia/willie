@@ -2,19 +2,27 @@
 //!
 //! Runs inside the Willie WSL distribution as an unprivileged user and owns
 //! projects, sessions, plugins and the SQLite index. Speaks the control
-//! protocol over stdio (to the engine) and over a Unix socket (to local
-//! clients). Only builds its real entry point on Linux; elsewhere it is a
-//! stub so the workspace still type-checks.
+//! protocol over stdio (to the engine). Only builds its real entry point on
+//! Linux; elsewhere it is a stub so the workspace still type-checks.
 
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod handlers;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod server;
+
 use std::process::ExitCode;
 
-/// Exit code for usage errors and unsupported platforms.
 const EXIT_USAGE: u8 = 2;
 
 fn version_line() -> String {
     format!("willied {}", willie_core::VERSION)
+}
+
+fn usage() -> ExitCode {
+    eprintln!("usage: willied --stdio | --version");
+    ExitCode::from(EXIT_USAGE)
 }
 
 #[cfg(target_os = "linux")]
@@ -25,21 +33,35 @@ fn main() -> ExitCode {
             println!("{}", version_line());
             ExitCode::SUCCESS
         }
-        _ => {
-            eprintln!("usage: willied --version");
-            eprintln!("the daemon itself is not implemented yet");
-            ExitCode::from(EXIT_USAGE)
+        Some("--stdio") => {
+            let stdin = std::io::stdin();
+            let stdout = std::io::stdout();
+            let mut server = server::Server::new(willie_linux::doctor::run_all);
+            match server.serve(stdin.lock(), stdout.lock()) {
+                Ok(reason) => {
+                    eprintln!("willied: exiting ({reason:?})");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("willied: transport error: {e}");
+                    ExitCode::FAILURE
+                }
+            }
         }
+        _ => usage(),
     }
 }
 
 #[cfg(not(target_os = "linux"))]
 fn main() -> ExitCode {
+    // The server is still compiled and unit-tested here; only the entry
+    // point is Linux-specific.
+    let _ = server::Server::new;
     eprintln!(
         "{} runs only inside the Willie Linux distribution",
         version_line()
     );
-    ExitCode::from(EXIT_USAGE)
+    usage()
 }
 
 #[cfg(test)]
