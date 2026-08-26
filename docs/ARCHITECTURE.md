@@ -142,6 +142,8 @@ enabled = false                          # the engine manages the profile
 ```ini
 [boot]
 systemd = false
+# /run is a fresh tmpfs; the unprivileged daemon needs its socket dir
+command = install -d -o willie -g willie -m 0750 /run/willie
 [automount]
 enabled = true
 options = "metadata"
@@ -175,7 +177,8 @@ The distribution starts implicitly when the engine spawns
 closed ⇒ daemon exits; with no supervisors left, the VM shuts down after
 WSL's idle timeout — zero cost while Willie is closed. Sessions open in
 Windows Terminal keep their supervisors (and the distribution) alive; on
-return the daemon re-adopts them (§3.2). No `[boot] command`, no systemd.
+return the daemon re-adopts them (§3.2). No systemd; the only
+`[boot] command` is the one-shot `mkdir` of §2.1.
 Willie **never writes the user's `.wslconfig`** (it is global).
 
 ### 2.4 Two update rhythms
@@ -499,7 +502,7 @@ wizard of §2.4. Code signing is out of scope for now.
 
 | Slice | Delivers                                                        | Components                                                                                           | Spike |
 | ----- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----- |
-| F0    | distribution registered; UI shows health; `doctor`             | `distro/`, engine (import, supervision), `willied` (hello/health/doctor), `willie doctor`, Dashboard, NSIS | S1 |
+| F0    | distribution registered; UI shows health; `doctor` — **delivered 2026-08-26** | `distro/`, engine (import, supervision), `willied` (hello/health/doctor), `willie doctor`, Dashboard, NSIS | S1 |
 | F1    | project on `C:\` + Claude Code session in WT, no sandbox       | `project.*`, `session.*`, `willie-sess` (PTY, socket, events — sandbox off), `willie attach`, WT profile, Projects/Sessions screens | S2, S5 |
 | F2    | proxy/CA propagated                                             | engine (WinHTTP, cert stores), `machine.env`, network `doctor`                                      | S4    |
 | F3    | sandbox with capabilities and layers                            | `willie-sess` (bwrap/seccomp/Landlock, `--inner`), `willie-core` (CapabilitySet, layers), `sandbox explain`, capability UI | S3 |

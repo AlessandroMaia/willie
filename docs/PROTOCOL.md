@@ -29,5 +29,6 @@ TCP loopback. Types live in `crates/willie-proto`.
 | --- | --- |
 | `method_not_found` | unknown method |
 | `invalid_params` | params did not deserialise |
+| `invalid_request` | the line was not a JSON-RPC request (malformed JSON or missing fields); the daemon answers with id 0 and keeps serving |
 | `protocol_version_mismatch` | client speaks another `PROTOCOL_VERSION` |
 | `internal_error` | handler failure; message says what, remediation says what to do |

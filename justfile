@@ -104,3 +104,8 @@ distro-install:
 [group('dev')]
 distro-uninstall:
     cargo xtask distro uninstall
+
+# Build the Windows installer (NSIS, per-user). Needs the distro image.
+[group('dev')]
+app-build: distro-build
+    pnpm -C {{web}} tauri build

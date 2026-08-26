@@ -12,7 +12,10 @@ warnings as errors, every test below, and the reference denylist scan.
 | Integration      | `crates/<crate>/tests/*.rs`, spawn bins | Windows or Linux   |
 | Linux (distro)   | inside the Willie distribution          | Linux only         |
 | Frontend         | `apps/willie-app/src/**/*.test.ts(x)`   | any host           |
-| Manual checklist | per slice, in the release notes         | human              |
+| Manual checklist | `docs/checklists/<slice>.md`            | human              |
+
+Manual checklists live in `docs/checklists/`; a slice is not done until
+its checklist has been walked and the results recorded in it.
 
 ## Rules
 

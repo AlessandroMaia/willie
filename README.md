@@ -9,8 +9,9 @@ talk to LLM APIs itself; it prepares, launches, observes and governs.
 
 ## Status
 
-Pre-alpha. The repository currently contains the workspace skeleton, the
-development tooling and the architecture documents. Nothing is shipped yet.
+Pre-alpha. The first slice (F0) is in: the distribution image builds and
+registers, its daemon answers, and the app shows health and `doctor`.
+Nothing is released yet.
 
 ## Prerequisites (development)
 
@@ -32,12 +33,15 @@ Run `just ensure` to check everything and get install hints.
 ## Development
 
 ```text
-just              list recipes
-just ensure       verify the toolchain
-just hooks        install the pre-commit hook
-just check        the local quality gate (format, clippy, tests, denylist)
-just dev          run the desktop app
-just build-linux  cross-compile the Linux binaries to musl
+just                 list recipes
+just ensure          verify the toolchain
+just hooks           install the pre-commit hook
+just check           the local quality gate (format, clippy, tests, denylist)
+just dev             run the desktop app
+just build-linux     cross-compile the Linux binaries to musl
+just distro-build    build the distribution image from distro/
+just distro-install  register the image as the `willie` distribution
+just app-build       build the Windows installer (NSIS, per-user)
 ```
 
 ## Documents
