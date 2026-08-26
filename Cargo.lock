@@ -4557,6 +4557,9 @@ dependencies = [
 [[package]]
 name = "xtask"
 version = "0.1.0"
+dependencies = [
+ "willie-engine",
+]
 
 [[package]]
 name = "yoke"

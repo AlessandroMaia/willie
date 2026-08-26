@@ -8,4 +8,6 @@
 //! Pure command-building logic is kept platform-independent so it can be
 //! unit-tested on any host; only process spawning is Windows-specific.
 
+pub mod paths;
+pub mod text;
 pub mod wsl;

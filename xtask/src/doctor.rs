@@ -159,7 +159,8 @@ fn detect(check: &Check) -> Option<String> {
         let Ok(output) = Command::new(program).args(args).output() else {
             continue;
         };
-        let text = decode(&output.stdout) + &decode(&output.stderr);
+        let text = willie_engine::text::decode_wsl_output(&output.stdout)
+            + &willie_engine::text::decode_wsl_output(&output.stderr);
         if let Some(line) = accept(probe, output.status.success(), &text) {
             return Some(line);
         }
@@ -181,30 +182,6 @@ fn accept(probe: &Probe, success: bool, text: &str) -> Option<String> {
         .map(str::trim)
         .find(|l| !l.is_empty())
         .map(str::to_owned)
-}
-
-/// Console tools on Windows mostly write UTF-8, but `wsl.exe` writes
-/// UTF-16LE. Detect the latter by its BOM or by the NUL high bytes that
-/// Latin text produces, and decode accordingly.
-fn decode(bytes: &[u8]) -> String {
-    let has_bom = bytes.starts_with(&[0xFF, 0xFE]);
-    let high_zeroes =
-        bytes.iter().skip(1).step_by(2).filter(|b| **b == 0).count();
-    let looks_utf16 =
-        has_bom || (bytes.len() >= 4 && high_zeroes > bytes.len() / 4);
-    if looks_utf16 {
-        let units: Vec<u16> = bytes
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|pair| u16::from_le_bytes(*pair))
-            .collect();
-        String::from_utf16_lossy(&units)
-            .trim_start_matches('\u{feff}')
-            .to_owned()
-    } else {
-        String::from_utf8_lossy(bytes).into_owned()
-    }
 }
 
 #[cfg(test)]
@@ -242,20 +219,5 @@ mod tests {
         let strict = probe(&["x"]);
         assert!(accept(&strict, false, "1.0").is_none());
         assert_eq!(accept(&strict, true, "\n 1.0 \n").unwrap(), "1.0");
-    }
-
-    #[test]
-    fn utf16le_output_is_decoded() {
-        let text = "Versão do WSL: 2.6.1.0";
-        let mut bytes = vec![0xFF, 0xFE];
-        for unit in text.encode_utf16() {
-            bytes.extend_from_slice(&unit.to_le_bytes());
-        }
-        assert_eq!(decode(&bytes), text);
-    }
-
-    #[test]
-    fn utf8_output_is_left_alone() {
-        assert_eq!(decode("cargo 1.98.0\n".as_bytes()), "cargo 1.98.0\n");
     }
 }
