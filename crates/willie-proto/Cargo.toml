@@ -8,10 +8,8 @@ publish.workspace = true
 
 [dependencies]
 serde = { workspace = true }
-willie-core = { workspace = true }
-
-[dev-dependencies]
 serde_json = { workspace = true }
+willie-core = { workspace = true }
 
 [lints]
 workspace = true
