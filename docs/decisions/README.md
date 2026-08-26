@@ -41,3 +41,4 @@ Things deliberately left open or explicitly rejected for now, and why.
 | 0007 | Sandbox capabilities are named, positive and monotonic        |
 | 0008 | Debian slim image, no systemd, three data zones               |
 | 0009 | Local-only quality gates on a pinned toolchain                |
+| 0010 | stdio transport findings (S1)                                 |

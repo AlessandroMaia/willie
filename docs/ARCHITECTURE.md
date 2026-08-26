@@ -507,12 +507,12 @@ the corporate machine.
 
 | Risk                                                             | Mitigation                                                                                                         |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `wsl.exe` mixes its own UTF-16LE messages with raw process bytes | S1 measures; the protocol is UTF-8 ndjson and ignores non-JSON lines; `wsl.exe` errors are read from exit code + UTF-16 stderr. |
+| `wsl.exe` mixes its own UTF-16LE messages with raw process bytes | Measured and handled (0010): the child's bytes arrive as raw UTF-8, `wsl.exe`'s own messages as UTF-16LE, and `text::decode_wsl_output` decodes them without replacement characters. The protocol is UTF-8 ndjson and ignores non-JSON lines; `wsl.exe` errors are read from exit code + decoded stderr. |
 | Daemon dies ⇒ engine misses events until reconnection            | Snapshot on reconnect replaces replay; supervisors log events on their own.                                        |
 | Landlock has no network rules at this kernel version             | Network is an always-on capability for now; egress by nftables/uid is a growth item; the UI says "the agent has network". |
 | Orphaned supervisors after a supervisor crash                    | `willied` removes dead sockets and marks the session `failed`; `spec.json` + `events.jsonl` keep the history.      |
 | Concurrent writers on multiple attaches                          | Accepted (multiplexer semantics); the UI shows how many clients are attached.                                       |
-| `wsl --import` refused by corporate policy                       | `doctor` diagnoses first; there is no administrator-free alternative — report clearly.                              |
+| `wsl --import` refused by corporate policy                       | Confirmed once on the corporate machine; cause and remediation known (0010): the virtual-machine account lacked the "Log on as a service" right, so VM creation failed with HCS `0x80070569`. `doctor` reports that code with its remediation; there is no administrator-free alternative. |
 | Undocumented usage endpoints change                              | `stale` + cache + JSONL fallback; never a visible failure; plugin isolated.                                          |
 | Windows Terminal absent or fragment format changes               | The JSON fragment is the official mechanism; fallback is `wsl.exe` in a plain console window.                       |
 | Scope creep during implementation                                | Slices are closed and tested one at a time; §5.5 is the contract.                                                   |
