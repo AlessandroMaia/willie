@@ -30,11 +30,16 @@ export function Dashboard() {
 
   useEffect(() => {
     refresh();
+    let cancelled = false;
     let unlisten: (() => void) | undefined;
     engine.onStatus(setStatus).then((fn) => {
-      unlisten = fn;
+      if (cancelled) fn();
+      else unlisten = fn;
     });
-    return () => unlisten?.();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
   }, [refresh]);
 
   async function run(name: string, action: () => Promise<unknown>) {

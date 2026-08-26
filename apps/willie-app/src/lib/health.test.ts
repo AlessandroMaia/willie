@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { EngineStatus } from "./engine";
+import type { DistroStatus, EngineStatus } from "./engine";
 import { lightFor, overallHealth } from "./health";
+
+const distro: DistroStatus = {
+  registered: true,
+  running: false,
+  install_dir: "C:\\x",
+};
 
 const base: EngineStatus = {
   engine_version: "0.1.0",
@@ -10,7 +16,7 @@ const base: EngineStatus = {
     meets_minimum: true,
     minimum: "2.4.4",
   },
-  distro: { registered: true, running: false, install_dir: "C:\\x" },
+  distro,
   distro_error: null,
   daemon: {
     state: "running",
@@ -49,7 +55,7 @@ describe("health lights", () => {
     expect(
       overallHealth({
         ...base,
-        distro: { ...base.distro!, registered: false },
+        distro: { ...distro, registered: false },
         daemon: { state: "stopped" },
       }),
     ).toBe("yellow");
