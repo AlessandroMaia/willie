@@ -134,7 +134,11 @@ impl DaemonSupervisor {
     pub fn health(&mut self) -> Result<Health, EngineError> {
         let result = self.client()?.call(method::HEALTH, serde_json::json!({}));
         if let Err(e) = &result {
-            self.record(e);
+            // A well-formed RPC error reply proves the daemon is alive;
+            // only other failures (timeout, transport, exit) record.
+            if !matches!(e, EngineError::Rpc(_)) {
+                self.record(e);
+            }
         }
         result
     }
@@ -142,7 +146,11 @@ impl DaemonSupervisor {
     pub fn doctor(&mut self) -> Result<DoctorReport, EngineError> {
         let result = self.client()?.call(method::DOCTOR, serde_json::json!({}));
         if let Err(e) = &result {
-            self.record(e);
+            // Same rule as `health`: an RPC error reply is not a dead
+            // daemon, so it must not trigger a kill and reap.
+            if !matches!(e, EngineError::Rpc(_)) {
+                self.record(e);
+            }
         }
         result
     }

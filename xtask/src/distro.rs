@@ -18,6 +18,7 @@ use std::{
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use willie_engine::{
+    distro::DISTRO_NAME,
     paths::{data_dir, to_wsl_path},
     wsl::{ExportFormat, WslCli, WslExec},
 };
@@ -30,8 +31,6 @@ pub const LOCK_PATH: &str = "distro/base.lock";
 /// Throwaway distribution the image is provisioned in.
 pub const BUILDER_NAME: &str = "willie-build";
 pub const IMAGE_NAME: &str = "willie-rootfs.tar.gz";
-/// Distribution the image is registered as on the developer's machine.
-pub const DISTRO_NAME: &str = "willie";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseLock {
