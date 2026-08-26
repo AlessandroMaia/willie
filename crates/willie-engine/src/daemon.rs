@@ -161,7 +161,7 @@ impl DaemonSupervisor {
     fn client(&mut self) -> Result<&mut RpcClient, EngineError> {
         match &mut self.live {
             Some((_, client)) => Ok(client),
-            None => Err(EngineError::Protocol("daemon is not running".into())),
+            None => Err(EngineError::DaemonNotRunning),
         }
     }
 

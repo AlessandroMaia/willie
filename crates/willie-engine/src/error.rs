@@ -78,6 +78,10 @@ pub enum EngineError {
     VersionMismatch { engine: String, daemon: String },
     #[error("distribution image {path} is invalid: {reason}")]
     ImageInvalid { path: String, reason: String },
+    #[error("no distribution image next to the app")]
+    ImageNotFound,
+    #[error("the daemon is not running")]
+    DaemonNotRunning,
     #[error("the `willie` distribution is not registered")]
     DistroNotRegistered,
 }
@@ -95,6 +99,8 @@ impl EngineError {
             Self::Protocol(_) => "protocol_violation",
             Self::VersionMismatch { .. } => "version_mismatch",
             Self::ImageInvalid { .. } => "image_invalid",
+            Self::ImageNotFound => "image_not_found",
+            Self::DaemonNotRunning => "daemon_not_running",
             Self::DistroNotRegistered => "distro_not_registered",
         }
     }
@@ -116,27 +122,67 @@ impl EngineError {
                  Install"
                     .into()
             }
-            Self::Wsl(WslError::NotInstalled(_)) => {
-                "enable WSL 2.4.4 or newer (administrator) and retry".into()
-            }
-            Self::Rpc(e) => e
-                .remediation
-                .clone()
-                .unwrap_or_else(|| "see the daemon log".into()),
+            Self::Wsl(err) => wsl_remediation(err),
+            Self::Rpc(e) => e.remediation.clone().unwrap_or_else(|| {
+                "the daemon rejected the request; the message names the \
+                 cause — click Run doctor to retry"
+                    .to_owned()
+            }),
             Self::Timeout { .. } | Self::Transport(_) => {
-                "restart the daemon from the dashboard".into()
+                "click Run doctor (it restarts the daemon)".into()
             }
             Self::DaemonExited { detail, .. } => {
                 daemon_exited_remediation(detail)
             }
+            Self::Protocol(_) => {
+                "click Run doctor (it restarts the daemon); if it repeats, \
+                 click Install distribution"
+                    .into()
+            }
             Self::VersionMismatch { .. } => {
-                "reinstall the distribution to update its binaries".into()
+                "click Install distribution: it reinstalls the \
+                 distribution with binaries matching this app"
+                    .into()
             }
             Self::ImageInvalid { .. } => {
-                "rebuild the image (just distro-build) and retry".into()
+                "rebuild the image with `just distro-build`, then click \
+                 Install distribution again"
+                    .into()
+            }
+            Self::ImageNotFound => {
+                "reinstall Willie; in development run `just distro-build`"
+                    .into()
+            }
+            Self::DaemonNotRunning => {
+                "click Run doctor (it starts the daemon)".into()
             }
             Self::DistroNotRegistered => "click Install distribution".into(),
-            _ => "see the engine log".into(),
+        }
+    }
+}
+
+/// The `wsl.exe` failures that are neither the missing service-logon
+/// right nor a failed import: no log to read, so each names the command
+/// the user can run to see the same message.
+fn wsl_remediation(err: &WslError) -> String {
+    match err {
+        WslError::NotInstalled(_) => {
+            "enable WSL 2.4.4 or newer (administrator) and retry".into()
+        }
+        WslError::CommandFailed { .. } => {
+            "`wsl.exe` refused the command; run it in PowerShell to see \
+             the same message, then click Run doctor again"
+                .into()
+        }
+        WslError::Unparseable { .. } => {
+            "unexpected output from `wsl.exe`: run `wsl --version` in \
+             PowerShell, update WSL if it is old, then click Run doctor"
+                .into()
+        }
+        WslError::Io(_) => {
+            "the pipe to `wsl.exe` broke; click Run doctor (it restarts \
+             the daemon)"
+                .into()
         }
     }
 }
@@ -232,5 +278,75 @@ mod tests {
     fn any_other_exit_asks_for_one_more_doctor_run() {
         let err = exited(Some(1), "willied: panicked");
         assert!(err.remediation().starts_with("click Run doctor again"));
+    }
+
+    /// One value per variant, the four `WslError` codes included. A new
+    /// variant is added here so the invariants below keep covering the
+    /// whole enum.
+    fn one_of_each_error() -> Vec<EngineError> {
+        vec![
+            EngineError::Wsl(WslError::NotInstalled(io::Error::other("x"))),
+            EngineError::Wsl(WslError::CommandFailed {
+                args: "--list --quiet".into(),
+                code: Some(1),
+                stderr: "boom".into(),
+            }),
+            EngineError::Wsl(WslError::Unparseable {
+                what: "wsl --version",
+                text: "no version here".into(),
+            }),
+            EngineError::Wsl(WslError::Io(io::Error::other("pipe"))),
+            EngineError::Rpc(RpcError::new("internal_error", "it broke")),
+            EngineError::Timeout {
+                method: "daemon.health".into(),
+            },
+            EngineError::Transport(io::Error::other("pipe")),
+            exited(Some(127), "no distribution with that name"),
+            EngineError::Protocol("daemon closed its stdout".into()),
+            EngineError::VersionMismatch {
+                engine: "0.1.0".into(),
+                daemon: "0.0.9".into(),
+            },
+            EngineError::ImageInvalid {
+                path: "C:\\x.tar.gz".into(),
+                reason: "empty".into(),
+            },
+            EngineError::ImageNotFound,
+            EngineError::DaemonNotRunning,
+            EngineError::DistroNotRegistered,
+        ]
+    }
+
+    /// The UI keys behaviour on the code, so two failures that need
+    /// different handling must never answer with the same one.
+    #[test]
+    fn every_error_code_is_unique() {
+        let mut codes: Vec<&str> =
+            one_of_each_error().iter().map(EngineError::code).collect();
+        let total = codes.len();
+        codes.sort_unstable();
+        codes.dedup();
+        assert_eq!(codes.len(), total, "duplicate code in {codes:?}");
+    }
+
+    /// F0 writes no log file, so no remediation may send the user to
+    /// one. "Log on as a service" is the name of a Windows right.
+    #[test]
+    fn no_remediation_mentions_a_log() {
+        const LOG_PHRASES: [&str; 6] = [
+            "engine log",
+            "daemon log",
+            "the log",
+            "a log",
+            "log file",
+            "logs",
+        ];
+        for err in one_of_each_error() {
+            let text = err.remediation().to_lowercase();
+            assert!(!text.is_empty(), "{} has no remediation", err.code());
+            for phrase in LOG_PHRASES {
+                assert!(!text.contains(phrase), "{}: {text}", err.code());
+            }
+        }
     }
 }

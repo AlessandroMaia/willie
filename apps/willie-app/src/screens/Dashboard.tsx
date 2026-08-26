@@ -148,9 +148,11 @@ export function Dashboard() {
 function describe(part: Part, s: EngineStatus): string {
   switch (part) {
     case "wsl":
-      return s.wsl.installed
-        ? `${s.wsl.version ?? "?"} (minimum ${s.wsl.minimum})`
-        : "not installed";
+      if (!s.wsl.installed) return "not installed";
+      /* wsl.exe ran but reported no version: an update, not an install. */
+      if (s.wsl.version === null)
+        return "installed, version unknown — update WSL";
+      return `${s.wsl.version} (minimum ${s.wsl.minimum})`;
     case "distro":
       if (s.distro_error) return s.distro_error.message;
       if (!s.distro?.registered) {

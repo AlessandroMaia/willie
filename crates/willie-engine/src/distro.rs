@@ -146,14 +146,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(windows)]
     #[test]
     fn install_dir_lives_under_the_willie_data_dir() {
-        if let Some(dir) = install_dir() {
-            assert!(
-                dir.ends_with(r"Willie\data\distro")
-                    || dir.ends_with("Willie/data/distro")
-            );
-        }
+        let dir = install_dir().expect("LOCALAPPDATA is always set on Windows");
+        assert!(
+            dir.ends_with(r"Willie\data\distro"),
+            "unexpected install dir {dir:?}"
+        );
     }
 
     fn temp_image(case: &str) -> (PathBuf, PathBuf) {

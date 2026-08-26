@@ -78,11 +78,8 @@ impl Engine {
     }
 
     pub fn install_distro(&mut self) -> Result<(), EngineError> {
-        let image = locate_image(&self.image_candidates).ok_or_else(|| {
-            EngineError::Protocol(
-                "no distribution image found next to the app".into(),
-            )
-        })?;
+        let image = locate_image(&self.image_candidates)
+            .ok_or(EngineError::ImageNotFound)?;
         self.daemon.stop()?;
         self.distro.install(&image)?;
         self.last_doctor = None;
