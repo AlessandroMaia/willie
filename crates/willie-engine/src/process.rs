@@ -139,12 +139,9 @@ mod tests {
     use super::*;
     use std::process::{Command, Stdio};
 
-    /// Re-runs this test binary as an echo peer: spawning `--exact
-    /// <test_name>` with `WILLIE_ECHO_MODE` set makes that same test
-    /// function become `echo_main` instead of exercising the transport.
-    /// Keeps the test hermetic on every host, no `--echo` flag needed.
-    /// `--exact` needs the module-qualified name to match exactly one
-    /// test; the bare function name matches none.
+    /// Re-runs this test binary as the echo peer: `--exact` with the
+    /// module-qualified name reruns just this function, which becomes
+    /// `echo_main` when `WILLIE_ECHO_MODE` is set.
     fn spawn_echo(test_name: &str) -> Child {
         Command::new(std::env::current_exe().unwrap())
             .args(["--exact", &format!("process::tests::{test_name}")])
@@ -156,10 +153,9 @@ mod tests {
             .unwrap()
     }
 
-    /// The test harness prints its own startup banner to the child's real
-    /// stdout before the echo peer's body runs, with no stable flag to
-    /// silence it. Drain lines until the peer's own readiness marker
-    /// instead of assuming the banner's exact wording or line count.
+    /// The harness prints its own startup banner to the real stdout
+    /// before this body runs, with no flag to silence it; drain lines
+    /// until the peer's readiness marker instead of counting them.
     fn await_echo_ready(transport: &mut LineTransport) {
         loop {
             match transport.recv_line(Duration::from_secs(5)).unwrap() {
