@@ -1,0 +1,7 @@
+# Pinned to an exact release on purpose: every developer and every build of
+# Willie compiles with the same compiler. Bump deliberately, in its own
+# commit, after running `just check` on the new version.
+[toolchain]
+channel = "1.98.0"
+components = ["clippy", "rustfmt", "rust-analyzer", "rust-src"]
+targets = ["x86_64-unknown-linux-musl"]

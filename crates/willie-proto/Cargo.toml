@@ -1,0 +1,17 @@
+[package]
+name = "willie-proto"
+description = "Wire types for the Willie control protocol (JSON-RPC over ndjson)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+willie-core = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

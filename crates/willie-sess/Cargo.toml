@@ -1,0 +1,18 @@
+[package]
+name = "willie-sess"
+description = "Per-session supervisor: PTY, sandbox, socket and event log."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "willie-sess"
+path = "src/main.rs"
+
+[dependencies]
+willie-core = { workspace = true }
+willie-harness = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,26 @@
+# Build outputs
+/target/
+/apps/willie-app/dist/
+/apps/willie-app/src-tauri/gen/schemas/
+node_modules/
+
+# Local working notes and plans — never versioned. Agents must not read
+# `docs/blueprint/` without explicit permission (see AGENTS.md and
+# .claude/hooks/guard-local-docs.mjs).
+/docs/blueprint/
+/docs/superpowers/
+
+# Per-user tool state
+/.claude/settings.local.json
+/.claude/.allow-local-docs
+/.vscode/*
+!/.vscode/extensions.json
+!/.vscode/settings.json
+.idea/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.log
+*.local

@@ -1,0 +1,10 @@
+# Only stable rustfmt options are used here so `cargo fmt --check` is
+# warning-free on the pinned stable toolchain. Import grouping/granularity
+# options are nightly-only and deliberately omitted.
+style_edition = "2024"
+max_width = 80
+newline_style = "Unix"
+reorder_imports = true
+reorder_modules = true
+use_field_init_shorthand = true
+use_try_shorthand = true

@@ -1,0 +1,18 @@
+[package]
+name = "willied"
+description = "Willie daemon: source of truth for projects, sessions and plugins."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "willied"
+path = "src/main.rs"
+
+[dependencies]
+willie-core = { workspace = true }
+willie-proto = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,6 @@
+#!/bin/sh
+# Installed with `just hooks` (sets core.hooksPath). Keep it fast: the full
+# gate is `just check`.
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+exec just precommit

@@ -1,0 +1,7 @@
+# Clippy configuration shared by the workspace.
+# Tests may unwrap/expect/dbg freely; production code may not (see
+# [workspace.lints.clippy] in Cargo.toml and the daemon crates).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true
+allow-print-in-tests = true

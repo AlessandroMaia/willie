@@ -1,0 +1,15 @@
+# Normalize line endings to LF in the repository; editors on Windows are
+# configured through .editorconfig and rustfmt (`newline_style = "Unix"`).
+* text=auto eol=lf
+
+# Binary assets
+*.png binary
+*.ico binary
+*.icns binary
+*.woff2 binary
+*.vhdx binary
+*.tar.gz binary
+
+# Generated lockfiles: keep, but do not clutter diffs.
+Cargo.lock -diff linguist-generated=true
+pnpm-lock.yaml -diff linguist-generated=true

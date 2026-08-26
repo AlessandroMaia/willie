@@ -1,0 +1,61 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/willie-core",
+    "crates/willie-proto",
+    "crates/willie-harness",
+    "crates/willie-plugin-api",
+    "crates/willie-plugins/profiles",
+    "crates/willie-plugins/usage",
+    "crates/willie-engine",
+    "crates/willied",
+    "crates/willie-sess",
+    "crates/willie-cli",
+    "xtask",
+    "apps/willie-app/src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+[workspace.dependencies]
+# Internal crates. Always depend on these through the workspace so the
+# dependency graph stays visible in one place.
+willie-core = { path = "crates/willie-core" }
+willie-proto = { path = "crates/willie-proto" }
+willie-harness = { path = "crates/willie-harness" }
+willie-plugin-api = { path = "crates/willie-plugin-api" }
+willie-engine = { path = "crates/willie-engine" }
+
+# External crates. Adding one requires a justification in the PR/commit
+# message; prefer std when it is enough.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+thiserror = "2"
+ulid = "1"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# Daemon-side crates promote these to `deny` in their crate root: a panic
+# in the daemon or a session supervisor takes user sessions down with it.
+unwrap_used = "warn"
+expect_used = "warn"
+dbg_macro = "warn"
+todo = "warn"
+print_stdout = "allow"
+print_stderr = "allow"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

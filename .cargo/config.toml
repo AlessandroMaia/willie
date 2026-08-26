@@ -1,0 +1,4 @@
+[alias]
+# Development tasks live in the `xtask` crate (Rust, cross-platform).
+# Usage: `cargo xtask <command>`; `just` recipes delegate here.
+xtask = "run --quiet --package xtask --"

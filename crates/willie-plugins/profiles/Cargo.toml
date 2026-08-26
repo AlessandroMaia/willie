@@ -1,0 +1,15 @@
+[package]
+name = "willie-plugin-profiles"
+description = "Per-project configuration profiles: check and apply."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+willie-core = { workspace = true }
+willie-harness = { workspace = true }
+willie-plugin-api = { workspace = true }
+
+[lints]
+workspace = true
