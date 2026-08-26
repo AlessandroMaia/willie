@@ -47,6 +47,10 @@ kind!(
     /// A configuration profile.
     Profile => "prof"
 );
+kind!(
+    /// A background daemon operation (clone, sync, remove).
+    Job => "job"
+);
 
 /// Identifier of a project.
 pub type ProjectId = Id<Project>;
@@ -56,6 +60,8 @@ pub type SessionId = Id<Session>;
 pub type ToolId = Id<Tool>;
 /// Identifier of a configuration profile.
 pub type ProfileId = Id<Profile>;
+/// Identifier of a background job.
+pub type JobId = Id<Job>;
 
 /// A typed, prefixed ULID.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
