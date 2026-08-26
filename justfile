@@ -79,3 +79,18 @@ dev:
 [group('dev')]
 build-linux:
     cargo xtask build-linux
+
+# Pin the Debian base root filesystem (writes distro/base.lock).
+[group('dev')]
+distro-pin:
+    cargo xtask distro pin
+
+# Download and verify the pinned base root filesystem.
+[group('dev')]
+distro-fetch:
+    cargo xtask distro fetch
+
+# Build target/distro/willie-rootfs.tar.gz (needs build-linux first).
+[group('dev')]
+distro-build: build-linux
+    cargo xtask distro build

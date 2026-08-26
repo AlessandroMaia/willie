@@ -17,11 +17,19 @@ use std::{
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use willie_engine::{
+    paths::to_wsl_path,
+    wsl::{ExportFormat, WslCli, WslExec},
+};
 
 pub const BASE_REPO: &str = "debuerreotype/docker-debian-artifacts";
 pub const BASE_BRANCH: &str = "dist-amd64";
 pub const BASE_DIR: &str = "trixie/slim/oci";
 pub const LOCK_PATH: &str = "distro/base.lock";
+
+/// Throwaway distribution the image is provisioned in.
+pub const BUILDER_NAME: &str = "willie-build";
+pub const IMAGE_NAME: &str = "willie-rootfs.tar.gz";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseLock {
@@ -306,12 +314,146 @@ pub fn fetch(root: &Path) -> Result<PathBuf, String> {
     Ok(target)
 }
 
+/// Image version: the workspace version plus the short commit it was
+/// built from, so a running distribution can be traced back to a tree.
+pub fn compose_image_version(workspace_version: &str, git_sha: &str) -> String {
+    let short: String = git_sha.chars().take(7).collect();
+    let short = if short.is_empty() {
+        "unknown".to_owned()
+    } else {
+        short
+    };
+    format!("{workspace_version}+{short}")
+}
+
+pub fn image_version(root: &Path) -> String {
+    let sha = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
+        .unwrap_or_default();
+    compose_image_version(willie_core::VERSION, &sha)
+}
+
+fn wsl_exec_as_root(program: &str, args: &[&str]) -> Result<(), String> {
+    let mut exec = WslExec::new(BUILDER_NAME, program).user("root");
+    for arg in args {
+        exec = exec.arg(*arg);
+    }
+    let status = Command::new("wsl.exe")
+        .args(exec.to_args())
+        .status()
+        .map_err(|e| format!("cannot run wsl.exe: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{program}` inside {BUILDER_NAME} exited with {status}"
+        ))
+    }
+}
+
+/// Unregisters the builder if a previous run left it behind.
+pub fn clean(_root: &Path) -> Result<(), String> {
+    let cli = WslCli;
+    let registered = cli.list().map_err(|e| e.to_string())?;
+    if registered
+        .iter()
+        .any(|d| d.eq_ignore_ascii_case(BUILDER_NAME))
+    {
+        cli.unregister(BUILDER_NAME).map_err(|e| e.to_string())?;
+        println!("unregistered leftover {BUILDER_NAME}");
+    }
+    Ok(())
+}
+
+pub fn build(root: &Path) -> Result<(), String> {
+    let base = fetch(root)?;
+    let bin_dir = root.join("target/x86_64-unknown-linux-musl/release");
+    for bin in ["willied", "willie-sess", "willie"] {
+        if !bin_dir.join(bin).is_file() {
+            return Err(format!(
+                "{bin} not built; run `just build-linux` first"
+            ));
+        }
+    }
+    clean(root)?;
+    let builder_dir = root.join("target/distro/build");
+    let _ = fs::remove_dir_all(&builder_dir);
+    fs::create_dir_all(&builder_dir)
+        .map_err(|e| format!("cannot create {}: {e}", builder_dir.display()))?;
+    let cli = WslCli;
+    println!("importing base as {BUILDER_NAME}…");
+    cli.import(BUILDER_NAME, &builder_dir, &base)
+        .map_err(|e| e.to_string())?;
+
+    // The builder exists from here on, so unregister it on every path: a
+    // failed build must not leave a half-provisioned distribution behind.
+    let outcome = provision_and_export(root, &bin_dir, &cli);
+    if let Err(e) = cli.unregister(BUILDER_NAME) {
+        eprintln!("xtask: cannot unregister {BUILDER_NAME}: {e}");
+    }
+    outcome
+}
+
+fn provision_and_export(
+    root: &Path,
+    bin_dir: &Path,
+    cli: &WslCli,
+) -> Result<(), String> {
+    let version = image_version(root);
+    let conf_dir = to_wsl_path(&root.join("distro"))
+        .ok_or("repository must live on a drive letter path")?;
+    let bins = to_wsl_path(bin_dir)
+        .ok_or("target directory must live on a drive letter path")?;
+    let script = format!("{conf_dir}/provision.sh");
+    println!("provisioning {version}…");
+    let provisioned =
+        wsl_exec_as_root("/bin/sh", &[&script, &version, &conf_dir, &bins]);
+    let terminated = cli.terminate(BUILDER_NAME).map_err(|e| e.to_string());
+    provisioned?;
+    terminated?;
+
+    let out_dir = root.join("target/distro");
+    let image = out_dir.join(IMAGE_NAME);
+    let _ = fs::remove_file(&image);
+    println!("exporting {}…", image.display());
+    cli.export(BUILDER_NAME, &image, ExportFormat::TarGz)
+        .map_err(|e| e.to_string())?;
+
+    let sha = sha256_file(&image)?;
+    write_sidecar(&out_dir, "sha256", &format!("{sha}  {IMAGE_NAME}\n"))?;
+    write_sidecar(&out_dir, "version", &format!("{version}\n"))?;
+    let size_mb = fs::metadata(&image)
+        .map(|m| m.len() / 1_000_000)
+        .unwrap_or(0);
+    println!(
+        "image {version}: {} ({size_mb} MB)\nsha256 {sha}",
+        image.display()
+    );
+    Ok(())
+}
+
+fn write_sidecar(
+    out_dir: &Path,
+    suffix: &str,
+    contents: &str,
+) -> Result<(), String> {
+    let path = out_dir.join(format!("{IMAGE_NAME}.{suffix}"));
+    fs::write(&path, contents)
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+}
+
 pub fn run(root: &Path, args: &[String]) -> crate::TaskResult {
     match args.first().map(String::as_str) {
         Some("pin") => pin(root),
         Some("fetch") => fetch(root).map(drop),
+        Some("build") => build(root),
+        Some("clean") => clean(root),
         other => Err(format!(
-            "unknown distro command {other:?}; expected pin | fetch"
+            "unknown distro command {other:?}; expected pin|fetch|build|clean"
         )),
     }
 }
@@ -417,6 +559,15 @@ mod tests {
             "#,
         );
         assert!(select_layer(&manifest).is_err());
+    }
+
+    #[test]
+    fn image_version_combines_workspace_version_and_short_sha() {
+        assert_eq!(
+            compose_image_version("0.1.0", "b16ec47abcdef"),
+            "0.1.0+b16ec47"
+        );
+        assert_eq!(compose_image_version("0.1.0", ""), "0.1.0+unknown");
     }
 
     #[test]

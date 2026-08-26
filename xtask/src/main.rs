@@ -43,11 +43,11 @@ fn main() -> ExitCode {
 const USAGE: &str = "\
 usage: cargo xtask <command>
 
-  doctor-tools           verify the local toolchain, print install hints
-  check-refs [--list F]  fail if versioned content matches the denylist
-  build-linux [--debug]  cross-compile willied, willie-sess and willie
-                         for x86_64-unknown-linux-musl
-  distro pin|fetch       pin/download the base root filesystem
+  doctor-tools                  verify the local toolchain, print hints
+  check-refs [--list F]         fail if content matches the denylist
+  build-linux [--debug]         cross-compile willied, willie-sess and
+                                willie for x86_64-unknown-linux-musl
+  distro pin|fetch|build|clean  manage the distribution image
 ";
 
 /// Root of the workspace: the parent of this crate's manifest directory.
