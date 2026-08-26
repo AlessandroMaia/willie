@@ -19,11 +19,12 @@ process-death questions.
 | Question | Result |
 | --- | --- |
 | Round-trip latency of one ndjson line through `/bin/cat` | median **0.47–0.55 ms** over 100 lines (three runs: 546.4 µs, 514.5 µs, 474.8 µs) |
-| Cost of the first line, which also pays for starting the child | **846 ms** with the VM cold, **226 ms** with it warm; an isolated probe puts the first round trip at 869 ms cold and 214–221 ms warm, against 0.60–0.70 ms for the second |
+| Cost of the first line, which also pays for starting the child | **214–226 ms** with a warm VM and no concurrent spawns; **778 ms** observed when three tests spawned `wsl.exe` concurrently; **869 ms** cold, VM boot included. The second round trip costs 0.60–0.70 ms |
 | Bytes written by the Linux child | raw UTF-8, unchanged (`olá ✓` round-trips) |
 | `wsl.exe`'s own messages | UTF-16LE; decoded by `text::decode_wsl_output`; no replacement characters |
-| Console window when spawned from a GUI process | none with `CREATE_NO_WINDOW`, over 16 spawns; the same command without the flag opens one, so the probe does detect windows |
+| Console window when spawned with `CREATE_NO_WINDOW` from a hidden console host | none, over eight test runs and a negative control; the same command without the flag opens one, so the probe does detect windows. The GUI-parent case is unmeasured |
 | Linux child when its Windows parent is killed | **dies** with it, reproduced twice — teardown is free, but the engine must not depend on the child outliving it, and the daemon still exits on stdin EOF for a graceful stop |
+| Linux child that has detached itself (`setsid`) | **survives** the normal exit of the `wsl.exe` that spawned it — still alive 1 s and 9 s later, the distribution still running. One that is merely backgrounded and still racing `setsid` when the spawner exits is killed with it |
 | Host prerequisite | creating the WSL 2 VM requires `NT VIRTUAL MACHINE\Virtual Machines` to hold "Log on as a service"; otherwise registration fails with HCS `0x80070569` (`ERROR_LOGON_TYPE_NOT_GRANTED`) |
 | `.tar.xz` accepted by `wsl --import` | n/a — the base is a gzip layer, imported directly |
 
@@ -46,9 +47,13 @@ anything non-JSON on the daemon's stdout is logged and ignored.
   virtual-machine account needs the "Log on as a service" right. The raw
   message says only "logon failure", which tells the user nothing about
   what to ask an administrator for.
-- Stopping the engine is enough to stop the daemon; a session supervisor
-  that has to outlive it must detach itself. That belongs to 0006 and is
-  S2's to confirm.
+- Stopping the engine is enough to stop the daemon, and that is the
+  intent: the daemon is meant to live and die with the engine (0005) and
+  also exits on stdin EOF. Session supervisors, which must outlive it
+  (0006), are launched through a detaching step (`setsid` or a double
+  fork), and the launcher confirms detachment before returning — one that
+  is still racing `setsid` when the spawning call returns is killed with
+  it. S2 confirms the attach path.
 
 ## Not decided
 

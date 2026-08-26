@@ -482,7 +482,7 @@ wizard of §2.4. Code signing is out of scope for now.
 
 | Spike | Before | Question                                                                                                   | Exit criterion                                                        |
 | ----- | ------ | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
-| S1    | F0     | stdio through `wsl.exe`: latency; UTF-16LE of `wsl.exe`'s own messages vs raw bytes of the Linux process; `CREATE_NO_WINDOW`; does the daemon die with its parent? | RPC ping < 50 ms; no window; death semantics known and handled |
+| S1    | F0     | stdio through `wsl.exe`: latency; UTF-16LE of `wsl.exe`'s own messages vs raw bytes of the Linux process; `CREATE_NO_WINDOW`; does the daemon die with its parent? | steady-state round trip < 50 ms (measured ≈0.5 ms); the first request after a spawn is budgeted in seconds (measured 0.2–0.9 s); no console window; a `--exec` child dies with its Windows parent — supervisors detach and confirm it |
 | S2    | F1     | PTY + supervisor + attach in Windows Terminal: resize, 24-bit colour, keys, faithful TUI; supervisor survives the daemon | a usable Claude Code session in a WT tab; killing `willied` does not kill it |
 | S3    | F3     | sandbox on the real kernel: `landlock` in `/sys/kernel/security/lsm`; Landlock ABI; `unshare -U`; `.exe` denied inside; CLI logs in with `agent.state` + tmpfs home | matrix of what works, recorded as a decision |
 | S4    | F2     | corporate network: what does `autoProxy` inject (PAC or static)? does `curl` to the API work with the imported CA? | exact list of variables/files to propagate |
