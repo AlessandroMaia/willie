@@ -1,4 +1,4 @@
-# 0011 — projects live in an ext4 workspace; DrvFs is a warned fallback (measured)
+# 0011 — ext4 workspace for projects; DrvFs is a warned fallback (measured)
 
 - **Date:** 2026-08-26
 - **Status:** accepted
