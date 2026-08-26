@@ -515,7 +515,7 @@ wizard of §2.4. Code signing is out of scope for now.
 
 | Slice | Delivers                                                        | Components                                                                                           | Spike |
 | ----- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----- |
-| F0    | distribution registered; UI shows health; `doctor` — **built 2026-08-26**, acceptance walk pending | `distro/`, engine (import, supervision), `willied` (hello/health/doctor), `willie doctor`, Dashboard, NSIS | S1 |
+| F0    | distribution registered; UI shows health; `doctor` — **delivered 2026-08-26** | `distro/`, engine (import, supervision), `willied` (hello/health/doctor), `willie doctor`, Dashboard, NSIS | S1 |
 | F1    | project on `C:\` + Claude Code session in WT, no sandbox       | `project.*`, `session.*`, `willie-sess` (PTY, socket, events — sandbox off), `willie attach`, WT profile, Projects/Sessions screens | S2, S5 |
 | F2    | proxy/CA propagated                                             | engine (WinHTTP, cert stores), `machine.env`, network `doctor`                                      | S4    |
 | F3    | sandbox with capabilities and layers                            | `willie-sess` (bwrap/seccomp/Landlock, `--inner`), `willie-core` (CapabilitySet, layers), `sandbox explain`, capability UI | S3 |
