@@ -167,6 +167,13 @@ impl FromStr for WslVersion {
     }
 }
 
+/// Recognises the failure `wsl.exe` reports when nothing is registered,
+/// whatever the language of the sentence around the code.
+#[must_use]
+fn is_no_distributions(text: &str) -> bool {
+    text.contains("WSL_E_DEFAULT_DISTRO_NOT_FOUND")
+}
+
 /// Parses `wsl --list --quiet` / `--list --running --quiet`: one name per
 /// line, blank lines ignored, a default marker `*` stripped.
 #[must_use]
@@ -220,6 +227,21 @@ mod cli_tests {
             parse_name_list("\n* Ubuntu\r\nwillie\r\n\n"),
             ["Ubuntu", "willie"]
         );
+    }
+
+    #[test]
+    fn the_default_distro_error_means_no_distributions() {
+        assert!(is_no_distributions(
+            "There is no distribution with the supplied name. \
+             Error code: Wsl/WSL_E_DEFAULT_DISTRO_NOT_FOUND"
+        ));
+    }
+
+    #[test]
+    fn another_failure_is_not_an_empty_list() {
+        assert!(!is_no_distributions(
+            "Error code: Wsl/Service/CreateInstance/0x80070569"
+        ));
     }
 }
 
@@ -285,16 +307,29 @@ impl WslCli {
         WslVersion::parse_report(&self.run(&["--version"])?)
     }
 
+    /// With no distribution registered, `wsl --list` reports
+    /// WSL_E_DEFAULT_DISTRO_NOT_FOUND and may exit non-zero; that is an
+    /// empty list, not a failure.
+    fn names(&self, args: &[&str]) -> Result<Vec<String>, WslError> {
+        match self.run(args) {
+            Ok(text) => Ok(parse_name_list(&text)),
+            // `run` folds stdout into `stderr` when stderr is empty, so
+            // this one field carries the whole combined output.
+            Err(WslError::CommandFailed { stderr, .. })
+                if is_no_distributions(&stderr) =>
+            {
+                Ok(Vec::new())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     pub fn list(&self) -> Result<Vec<String>, WslError> {
-        Ok(parse_name_list(&self.run(&["--list", "--quiet"])?))
+        self.names(&["--list", "--quiet"])
     }
 
     pub fn running(&self) -> Result<Vec<String>, WslError> {
-        Ok(parse_name_list(&self.run(&[
-            "--list",
-            "--running",
-            "--quiet",
-        ])?))
+        self.names(&["--list", "--running", "--quiet"])
     }
 
     pub fn import(
