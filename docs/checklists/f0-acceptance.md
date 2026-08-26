@@ -32,4 +32,16 @@ the doctor output in the notes.
 
 | Date | Row | Result | Notes |
 | ---- | --- | ------ | ----- |
-|      |     |        |       |
+| 2026-08-26 | env | note | Walk done on the corporate machine (WSL 2.6.1) after re-granting "Log on as a service" to `NT VIRTUAL MACHINE\Virtual Machines`; Group Policy had reverted it earlier that morning and the daemon then failed with `daemon_exited` carrying `HCS/0x80070569` (decision 0010). Installer built from `0e12fec`: image 70 MB, `0.1.0+0e12fec`. |
+| 2026-08-26 | gate | pass | `just check` with `WILLIE_TEST_DISTRO=willie` ran to the end: frontend 5/5, `check-refs: 129 files clean (16 terms)`; the gate stops at the first failure, so every Rust suite before it passed. |
+| 2026-08-26 | 0 | pass | `wsl --unregister willie` succeeded; `wsl --list --quiet; $LASTEXITCODE` printed nothing and `0` — with zero distributions WSL 2.6.1 returns an empty list and exit 0, so the `WSL_E_DEFAULT_DISTRO_NOT_FOUND` mapping was not exercised here. |
+| 2026-08-26 | 1 | pass | Installer run from a normal PowerShell prompt (walked in order, user report); the install path was not recorded. |
+| 2026-08-26 | 2 | pass | WSL row `2.6.1.0 (minimum 2.4.4)`; Distribution "not registered — image available" (the initial screen was not captured; both texts appear later in the walk). |
+| 2026-08-26 | 3 | pass | Distribution registered (later rows show "registered, running"); the `ext4.vhdx` path and `wsl --list --quiet` were not captured. |
+| 2026-08-26 | 4 | pass | Daemon `v0.1.0 · image 0.1.0+0e12fec`; 9 checks: `[ok]` unprivileged user uid 1000, state dir `/var/lib/willie`, run dir `/run/willie`, bubblewrap 0.11.0, git 2.47.3, curl 8.14.1, user namespaces; `[skip] landlock LSM`; `[ok] network (api.anthropic.com)`. |
+| 2026-08-26 | 5 | pass | Daemon "stopped" with the last report kept on screen; Distribution still "registered, running" right after the click (the VM shuts down lazily); `wsl --list --running` after 60 s was not captured. |
+| 2026-08-26 | 6 | pass | Walked in order (user report); the reopened screen was not captured. |
+| 2026-08-26 | 7 | pass | `wsl --terminate willie` succeeded; one **Run doctor** brought the Daemon row back to `v0.1.0 · image 0.1.0+0e12fec` with a fresh report. |
+| 2026-08-26 | 8 | pass | `wsl --unregister willie` while open, then **Run doctor**: red box `distro_not_registered — the willie distribution is not registered → click Install distribution`; Distribution "not registered — image available"; Daemon row `daemon_exited: daemon exited with code 1 (no output)` — the liveness probe saw the daemon the unregister killed; the Doctor row kept the last report; nothing crashed. |
+| 2026-08-26 | 9 | pass | `[ok] network (api.anthropic.com) ok` through the corporate proxy; no remediation needed. |
+| 2026-08-26 | 10 | pending | Not walked as written: the installer was re-run after the row 8 unregister instead of Settings → Apps uninstall with `willie` registered. Repeat with the distribution registered and record whether `ext4.vhdx` and the registration survive. |
