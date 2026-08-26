@@ -26,6 +26,22 @@ pub(crate) fn spawn_peer(qualified_test_name: &str, mode_env: &str) -> Child {
         .unwrap()
 }
 
+/// Like [`spawn_peer`] but pipes stderr too, for tests that assert on
+/// what the peer wrote there instead of discarding it.
+pub(crate) fn spawn_peer_with_stderr(
+    qualified_test_name: &str,
+    mode_env: &str,
+) -> Child {
+    Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", qualified_test_name])
+        .env(mode_env, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
 /// Called by the peer once it is ready to be driven.
 pub(crate) fn announce_ready() {
     let mut out = std::io::stdout();

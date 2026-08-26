@@ -47,6 +47,13 @@ impl RpcClient {
         self.transport.send_line(&line)?;
         let deadline = Instant::now() + self.timeout;
         loop {
+            // A flooding peer can keep `recv_line` returning instantly
+            // from its backlog; check the deadline explicitly too.
+            if Instant::now() >= deadline {
+                return Err(EngineError::Timeout {
+                    method: method.to_owned(),
+                });
+            }
             let remaining = deadline.saturating_duration_since(Instant::now());
             let line = match self.transport.recv_line(remaining) {
                 Ok(Some(line)) => line,
@@ -174,6 +181,44 @@ mod tests {
             ),
             "{err}"
         );
+        child.kill().unwrap();
+    }
+
+    /// A peer that never stops chattering must not starve the deadline:
+    /// the backlog can keep `recv_line` returning instantly, but the
+    /// call still has to give up within roughly its configured budget.
+    #[test]
+    fn floods_of_notifications_still_time_out() {
+        if std::env::var_os("WILLIE_PEER_MODE").is_some() {
+            announce_ready();
+            let mut out = std::io::stdout();
+            let notice = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "state.event",
+                "params": {},
+            });
+            let line = serde_json::to_string(&notice).unwrap();
+            loop {
+                if writeln!(out, "{line}").is_err() || out.flush().is_err() {
+                    break;
+                }
+            }
+            return;
+        }
+        let mut child = spawn_peer(
+            "rpc::tests::floods_of_notifications_still_time_out",
+            "WILLIE_PEER_MODE",
+        );
+        let mut transport = LineTransport::from_child(&mut child).unwrap();
+        await_ready(&mut transport);
+        let mut client = RpcClient::new(transport, Duration::from_millis(300));
+        let start = Instant::now();
+        let err = client
+            .call::<_, serde_json::Value>("daemon.health", ())
+            .unwrap_err();
+        let elapsed = start.elapsed();
+        assert!(matches!(err, EngineError::Timeout { .. }), "{err}");
+        assert!(elapsed < Duration::from_secs(2), "{elapsed:?}");
         child.kill().unwrap();
     }
 }

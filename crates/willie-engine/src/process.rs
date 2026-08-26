@@ -84,12 +84,13 @@ impl LineTransport {
 #[derive(Debug)]
 pub struct WslProcess {
     child: Child,
-    stderr: Receiver<String>,
+    stderr_rx: Receiver<String>,
+    stderr_cache: Option<String>,
 }
 
 impl WslProcess {
     pub fn spawn(exec: &WslExec) -> Result<Self, WslError> {
-        let mut child = wsl_command()
+        let child = wsl_command()
             .args(exec.to_args())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -99,6 +100,13 @@ impl WslProcess {
                 io::ErrorKind::NotFound => WslError::NotInstalled(e),
                 _ => WslError::Io(e),
             })?;
+        Self::from_child(child)
+    }
+
+    /// Wraps an already-spawned child with piped stderr and starts the
+    /// background reader thread; shared by `spawn` and by tests that
+    /// need a `WslProcess` without an actual WSL installation.
+    fn from_child(mut child: Child) -> Result<Self, WslError> {
         let (tx, rx) = mpsc::channel();
         if let Some(mut err) = child.stderr.take() {
             thread::Builder::new()
@@ -109,7 +117,11 @@ impl WslProcess {
                     let _ = tx.send(crate::text::decode_wsl_output(&buf));
                 })?;
         }
-        Ok(Self { child, stderr: rx })
+        Ok(Self {
+            child,
+            stderr_rx: rx,
+            stderr_cache: None,
+        })
     }
 
     pub fn transport(&mut self) -> Result<LineTransport, WslError> {
@@ -128,9 +140,19 @@ impl WslProcess {
         let _ = self.child.kill();
     }
 
-    /// Whatever the process wrote to stderr so far (decoded).
+    /// Whatever the process wrote to stderr, read once the pipe closes
+    /// (the process is dead, or killed and reaped) and cached from
+    /// then on so repeated calls return the same text.
     pub fn stderr_text(&mut self) -> String {
-        self.stderr.try_iter().collect::<Vec<_>>().join("")
+        if let Some(text) = &self.stderr_cache {
+            return text.clone();
+        }
+        let text = self
+            .stderr_rx
+            .recv_timeout(Duration::from_millis(500))
+            .unwrap_or_default();
+        self.stderr_cache = Some(text.clone());
+        text
     }
 }
 
@@ -184,5 +206,22 @@ mod tests {
             stdout.flush().unwrap();
         }
         std::process::exit(0);
+    }
+
+    #[test]
+    fn stderr_text_is_read_once_the_process_has_died() {
+        if std::env::var_os("WILLIE_STDERR_MODE").is_some() {
+            // `eprint!` goes through the harness's capture hook and
+            // never reaches the real pipe; write the handle directly.
+            write!(io::stderr(), "boom").unwrap();
+            std::process::exit(1);
+        }
+        let child = crate::test_support::spawn_peer_with_stderr(
+            "process::tests::stderr_text_is_read_once_the_process_has_died",
+            "WILLIE_STDERR_MODE",
+        );
+        let mut process = WslProcess::from_child(child).unwrap();
+        process.wait().unwrap();
+        assert_eq!(process.stderr_text(), "boom");
     }
 }

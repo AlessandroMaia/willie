@@ -9,8 +9,7 @@ use crate::{
     error::EngineError, process::WslProcess, rpc::RpcClient, wsl::WslExec,
 };
 
-/// Applied only to the first call after a spawn: a cold WSL 2 VM boot
-/// was measured at 0.2-0.9s, but can run longer under load.
+/// The first request pays for the VM boot; allow a minute.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(60);
 /// Applied to every call once the daemon has already said hello.
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
@@ -50,22 +49,43 @@ impl DaemonSupervisor {
 
     pub fn start(&mut self) -> Result<HelloReply, EngineError> {
         self.stop_quietly();
-        let mut process = WslProcess::spawn(&WslExec::daemon_stdio())?;
-        let transport = process.transport()?;
+        let mut process = match WslProcess::spawn(&WslExec::daemon_stdio()) {
+            Ok(process) => process,
+            Err(err) => {
+                let failure = EngineError::from(err);
+                self.record(&failure);
+                return Err(failure);
+            }
+        };
+        let transport = match process.transport() {
+            Ok(transport) => transport,
+            Err(err) => {
+                process.kill();
+                let _ = process.wait();
+                let failure = EngineError::from(err);
+                self.record(&failure);
+                return Err(failure);
+            }
+        };
         let mut client = RpcClient::new(transport, HELLO_TIMEOUT);
         let hello = Hello::for_client("willie-engine");
         let reply: HelloReply = match client.call(method::HELLO, hello) {
             Ok(reply) => reply,
             Err(err) => {
-                let stderr = process.stderr_text();
-                process.kill();
+                // Check before killing: a kill always makes `try_wait`
+                // report an exit, which would hide the real failure.
                 let failure = match process.try_wait() {
-                    Ok(Some(code)) => EngineError::DaemonExited {
-                        code: Some(code),
-                        stderr,
-                    },
+                    Ok(Some(code)) => {
+                        let stderr = process.stderr_text();
+                        EngineError::DaemonExited {
+                            code: Some(code),
+                            stderr,
+                        }
+                    }
                     _ => err,
                 };
+                process.kill();
+                let _ = process.wait();
                 self.record(&failure);
                 return Err(failure);
             }
@@ -77,6 +97,7 @@ impl DaemonSupervisor {
             };
             client.close();
             process.kill();
+            let _ = process.wait();
             self.record(&failure);
             return Err(failure);
         }
@@ -96,14 +117,18 @@ impl DaemonSupervisor {
         }
     }
 
-    /// Records a failed call as the reason the daemon is no longer live,
-    /// preserving the original error's code and message.
+    /// Kills and reaps the process before recording a failure, so an
+    /// unresponsive daemon is never left orphaned; preserves the
+    /// original error's code and message.
     fn record(&mut self, err: &EngineError) {
+        if let Some((mut process, _client)) = self.live.take() {
+            process.kill();
+            let _ = process.wait();
+        }
         self.state = DaemonState::Failed {
             code: err.code().to_owned(),
             message: err.to_string(),
         };
-        self.live = None;
     }
 
     pub fn health(&mut self) -> Result<Health, EngineError> {
@@ -130,13 +155,18 @@ impl DaemonSupervisor {
             );
             client.close();
             let deadline = std::time::Instant::now() + STOP_GRACE;
+            let mut exited = false;
             while std::time::Instant::now() < deadline {
-                if process.try_wait()?.is_some() {
+                if matches!(process.try_wait(), Ok(Some(_))) {
+                    exited = true;
                     break;
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            process.kill();
+            if !exited {
+                process.kill();
+                let _ = process.wait();
+            }
         }
         self.state = DaemonState::Stopped;
         Ok(())
@@ -150,5 +180,31 @@ impl DaemonSupervisor {
 impl Drop for DaemonSupervisor {
     fn drop(&mut self) {
         self.stop_quietly();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn daemon_state_serialises_with_the_state_tag() {
+        let stopped = serde_json::to_value(DaemonState::Stopped).unwrap();
+        assert_eq!(stopped, serde_json::json!({"state": "stopped"}));
+
+        let running = DaemonState::Running {
+            willie_version: "0.1.0".into(),
+            image_version: None,
+        };
+        let json = serde_json::to_string(&running).unwrap();
+        assert!(json.contains("\"state\":\"running\""));
+        assert!(json.contains("\"willie_version\""));
+
+        let failed = DaemonState::Failed {
+            code: "daemon_timeout".into(),
+            message: "no reply".into(),
+        };
+        let json = serde_json::to_string(&failed).unwrap();
+        assert!(json.contains("\"state\":\"failed\""));
     }
 }

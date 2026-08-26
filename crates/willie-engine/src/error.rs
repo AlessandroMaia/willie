@@ -102,3 +102,18 @@ impl EngineError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn logon_type_error_gets_the_host_prerequisite_remediation() {
+        let err = EngineError::Wsl(WslError::CommandFailed {
+            args: "--exec /opt/willie/bin/willied --stdio".into(),
+            code: Some(1),
+            stderr: "Error code: Wsl/Service/CreateInstance/0x80070569".into(),
+        });
+        assert!(err.remediation().contains("S-1-5-83-0"));
+    }
+}
