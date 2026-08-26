@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/willie-core",
     "crates/willie-proto",
+    "crates/willie-linux",
     "crates/willie-harness",
     "crates/willie-plugin-api",
     "crates/willie-plugins/profiles",
@@ -26,6 +27,7 @@ publish = false
 # dependency graph stays visible in one place.
 willie-core = { path = "crates/willie-core" }
 willie-proto = { path = "crates/willie-proto" }
+willie-linux = { path = "crates/willie-linux" }
 willie-harness = { path = "crates/willie-harness" }
 willie-plugin-api = { path = "crates/willie-plugin-api" }
 willie-engine = { path = "crates/willie-engine" }

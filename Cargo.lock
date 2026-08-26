@@ -4044,6 +4044,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "willie-linux"
+version = "0.1.0"
+dependencies = [
+ "willie-core",
+ "willie-proto",
+]
+
+[[package]]
 name = "willie-plugin-api"
 version = "0.1.0"
 dependencies = [

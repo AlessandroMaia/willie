@@ -90,6 +90,8 @@ plugins resolve host paths through `Harness::state_paths()`.
 ```
 crates/
   willie-core        domain: ids (ULID), Project, Session, CapabilitySet, config — ZERO I/O
+  willie-linux       Linux-side helpers shared by willied, willie-sess and willie-cli
+                     (well-known paths, doctor checks)
   willie-proto       JSON-RPC messages (serde), protocol version, snapshot/events
   willie-engine      Windows: wsl.exe wrapper, provisioning, proxy/CA, WT, supervision
   willied            Linux daemon: RPC server, projects, session index, plugin host, storage
@@ -106,8 +108,9 @@ distro/              reproducible rootfs recipe, wsl*.conf, oobe, sha256
 Dependency rules: `core` and `proto` depend on nothing internal; `engine`
 and `willied` never see each other (only `proto`); `willie-sess` depends
 on `core` + `harness`, not on the daemon; plugins depend on `plugin-api`
-+ `core` + `harness`, never on `willied`; the UI knows only `proto` (TS
-mirrors of the types).
++ `core` + `harness`, never on `willied`; `willie-linux` depends on
+`core` + `proto` only; the UI knows only `proto` (TS mirrors of the
+types).
 
 ## 2. The distribution
 
