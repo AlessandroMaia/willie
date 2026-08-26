@@ -137,36 +137,7 @@ impl WslProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::{Command, Stdio};
-
-    /// Re-runs this test binary as the echo peer: `--exact` with the
-    /// module-qualified name reruns just this function, which becomes
-    /// `echo_main` when `WILLIE_ECHO_MODE` is set.
-    fn spawn_echo(test_name: &str) -> Child {
-        Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", &format!("process::tests::{test_name}")])
-            .env("WILLIE_ECHO_MODE", "1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap()
-    }
-
-    /// The harness prints its own startup banner to the real stdout
-    /// before this body runs, with no flag to silence it; drain lines
-    /// until the peer's readiness marker instead of counting them.
-    fn await_echo_ready(transport: &mut LineTransport) {
-        loop {
-            match transport.recv_line(Duration::from_secs(5)).unwrap() {
-                Some(line) if line == ECHO_READY => return,
-                Some(_) => continue,
-                None => panic!("echo peer exited before signalling ready"),
-            }
-        }
-    }
-
-    const ECHO_READY: &str = "@@willie-echo-ready@@";
+    use crate::test_support::{announce_ready, await_ready, spawn_peer};
 
     #[test]
     fn lines_round_trip_through_the_transport() {
@@ -174,9 +145,12 @@ mod tests {
             echo_main();
             return;
         }
-        let mut child = spawn_echo("lines_round_trip_through_the_transport");
+        let mut child = spawn_peer(
+            "process::tests::lines_round_trip_through_the_transport",
+            "WILLIE_ECHO_MODE",
+        );
         let mut transport = LineTransport::from_child(&mut child).unwrap();
-        await_echo_ready(&mut transport);
+        await_ready(&mut transport);
         transport.send_line("{\"id\":1} Versão ✓").unwrap();
         let got = transport.recv_line(Duration::from_secs(5)).unwrap();
         assert_eq!(got.as_deref(), Some("{\"id\":1} Versão ✓"));
@@ -190,9 +164,12 @@ mod tests {
             echo_main();
             return;
         }
-        let mut child = spawn_echo("eof_is_reported_as_none");
+        let mut child = spawn_peer(
+            "process::tests::eof_is_reported_as_none",
+            "WILLIE_ECHO_MODE",
+        );
         let mut transport = LineTransport::from_child(&mut child).unwrap();
-        await_echo_ready(&mut transport);
+        await_ready(&mut transport);
         transport.close_input();
         assert_eq!(transport.recv_line(Duration::from_secs(5)).unwrap(), None);
         child.wait().unwrap();
@@ -201,8 +178,7 @@ mod tests {
     fn echo_main() {
         let stdin = io::stdin();
         let mut stdout = io::stdout();
-        writeln!(stdout, "{ECHO_READY}").unwrap();
-        stdout.flush().unwrap();
+        announce_ready();
         for line in stdin.lock().lines().map_while(Result::ok) {
             writeln!(stdout, "{line}").unwrap();
             stdout.flush().unwrap();
