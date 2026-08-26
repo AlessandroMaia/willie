@@ -25,10 +25,26 @@ fn check(
     }
 }
 
-/// Willie must not run as root inside the distribution.
+/// Willie must not run as root inside the distribution. `proc_status` is
+/// the content of `/proc/self/status` or the reason it could not be read;
+/// either way this check is required, so an undecidable answer is a
+/// failure and never a skip.
 #[must_use]
-pub fn check_uid_text(proc_status: &str) -> DoctorCheck {
-    let uid = proc_status
+pub fn check_uid_text(proc_status: Result<&str, &str>) -> DoctorCheck {
+    let unreadable = |reason: &str| {
+        check(
+            "unprivileged user",
+            CheckStatus::Fail,
+            format!("cannot read /proc/self/status: {reason}"),
+            Some("click Install distribution to reinstall the image"),
+            true,
+        )
+    };
+    let text = match proc_status {
+        Ok(text) => text,
+        Err(reason) => return unreadable(reason),
+    };
+    let uid = text
         .lines()
         .find_map(|l| l.strip_prefix("Uid:"))
         .and_then(|rest| rest.split_whitespace().next())
@@ -48,13 +64,7 @@ pub fn check_uid_text(proc_status: &str) -> DoctorCheck {
             None,
             true,
         ),
-        None => check(
-            "unprivileged user",
-            CheckStatus::Skip,
-            "cannot read /proc/self/status",
-            None,
-            true,
-        ),
+        None => unreadable("no Uid line"),
     }
 }
 
@@ -150,11 +160,11 @@ pub fn writable_dir_check(
 #[must_use]
 pub fn run_all() -> DoctorReport {
     let proc_status =
-        fs::read_to_string("/proc/self/status").unwrap_or_default();
+        fs::read_to_string("/proc/self/status").map_err(|e| e.to_string());
     let lsm =
         fs::read_to_string("/sys/kernel/security/lsm").unwrap_or_default();
     let checks = vec![
-        check_uid_text(&proc_status),
+        check_uid_text(proc_status.as_deref().map_err(String::as_str)),
         writable_dir_check("state dir", Path::new(STATE_DIR), true),
         writable_dir_check("run dir", Path::new(RUN_DIR), true),
         command_check(
@@ -224,7 +234,7 @@ mod tests {
     #[test]
     fn running_as_root_fails_the_uid_check() {
         let status = "Name:\twillied\nUid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\n";
-        let c = check_uid_text(status);
+        let c = check_uid_text(Ok(status));
         assert_eq!(c.status, CheckStatus::Fail);
         assert!(c.required);
     }
@@ -232,9 +242,30 @@ mod tests {
     #[test]
     fn an_unprivileged_uid_passes() {
         assert_eq!(
-            check_uid_text("Uid:\t1000\t1000\t1000\t1000\n").status,
+            check_uid_text(Ok("Uid:\t1000\t1000\t1000\t1000\n")).status,
             CheckStatus::Ok
         );
+    }
+
+    /// A required check that cannot decide must fail: "unknown" is not
+    /// "unprivileged".
+    #[test]
+    fn an_unreadable_proc_status_fails_the_user_check() {
+        let c = check_uid_text(Err("permission denied"));
+        assert_eq!(c.status, CheckStatus::Fail);
+        assert!(c.required);
+        assert_eq!(
+            c.detail,
+            "cannot read /proc/self/status: permission denied"
+        );
+        assert!(c.remediation.is_some());
+    }
+
+    #[test]
+    fn a_proc_status_without_a_uid_line_fails_too() {
+        let c = check_uid_text(Ok("Name:\twillied\n"));
+        assert_eq!(c.status, CheckStatus::Fail);
+        assert!(c.detail.starts_with("cannot read /proc/self/status"));
     }
 
     #[test]
