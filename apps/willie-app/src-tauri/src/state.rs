@@ -36,8 +36,14 @@ pub fn image_candidates(
 
 /// The repository root when running from `cargo tauri dev`
 /// (`apps/willie-app/src-tauri` → three levels up); harmless in a bundle.
+/// Cargo sets `CARGO_MANIFEST_DIR` at run time under `cargo run`, so a
+/// moved checkout is found without a rebuild; the compiled-in value is
+/// the fallback for the bundled binary, where the path goes unused.
 pub fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    manifest_dir
         .ancestors()
         .nth(3)
         .map(Path::to_path_buf)
@@ -47,6 +53,13 @@ pub fn workspace_root() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_root_holds_the_workspace_manifest() {
+        let manifest = workspace_root().join("Cargo.toml");
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        assert!(text.contains("[workspace]"), "{}", manifest.display());
+    }
 
     #[test]
     fn explicit_env_override_comes_first_then_resources_then_dev_target() {

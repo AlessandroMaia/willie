@@ -52,9 +52,27 @@ usage: cargo xtask <command>
 ";
 
 /// Root of the workspace: the parent of this crate's manifest directory.
+/// Cargo passes `CARGO_MANIFEST_DIR` to the binary under `cargo run`, so
+/// a moved checkout is found without a rebuild; the compiled-in value is
+/// only the fallback for a binary started by hand.
 fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
+    let manifest_dir = std::env::var_os("CARGO_MANIFEST_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+    manifest_dir
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn workspace_root_holds_the_workspace_manifest() {
+        let manifest = workspace_root().join("Cargo.toml");
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        assert!(text.contains("[workspace]"), "{}", manifest.display());
+    }
 }
