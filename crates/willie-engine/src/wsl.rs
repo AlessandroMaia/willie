@@ -4,6 +4,10 @@
 //! invocation can be tested and printed (`--dry-run` style) without a WSL
 //! installation.
 
+use std::{path::Path, process::Command, str::FromStr};
+
+use crate::{error::WslError, text::decode_wsl_output};
+
 /// Name under which the Willie distribution is registered.
 pub const DISTRO_NAME: &str = "willie";
 
@@ -71,38 +75,6 @@ impl WslExec {
             .arg("--stdio")
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn daemon_invocation_runs_unprivileged_over_stdio() {
-        let args = WslExec::daemon_stdio().to_args();
-        assert_eq!(
-            args,
-            [
-                "-d",
-                "willie",
-                "--user",
-                "willie",
-                "--exec",
-                "/opt/willie/bin/willied",
-                "--stdio",
-            ]
-        );
-    }
-
-    #[test]
-    fn user_is_omitted_unless_requested() {
-        let args = WslExec::new("willie", "/bin/true").to_args();
-        assert!(!args.iter().any(|a| a == "--user"));
-    }
-}
-
-use std::{path::Path, process::Command, str::FromStr};
-
-use crate::{error::WslError, text::decode_wsl_output};
 
 /// Version reported by `wsl.exe --version`, e.g. `2.6.1.0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -183,66 +155,6 @@ pub fn parse_name_list(text: &str) -> Vec<String> {
         .filter(|l| !l.is_empty())
         .map(str::to_owned)
         .collect()
-}
-
-#[cfg(test)]
-mod cli_tests {
-    use super::*;
-
-    #[test]
-    fn version_is_read_from_a_localised_first_line() {
-        let v = WslVersion::parse_report(
-            "Versão do WSL: 2.6.1.0\nVersão do kernel: 6.6.87.2-1\n",
-        )
-        .unwrap();
-        assert_eq!(
-            v,
-            WslVersion {
-                major: 2,
-                minor: 6,
-                patch: 1,
-                build: 0
-            }
-        );
-        assert!(v.meets_minimum());
-    }
-
-    #[test]
-    fn versions_below_the_minimum_are_rejected() {
-        assert!(!"2.3.26.0".parse::<WslVersion>().unwrap().meets_minimum());
-        assert!("2.4.4".parse::<WslVersion>().unwrap().meets_minimum());
-    }
-
-    #[test]
-    fn garbage_is_an_unparseable_error() {
-        assert!(matches!(
-            WslVersion::parse_report("no version here"),
-            Err(WslError::Unparseable { .. })
-        ));
-    }
-
-    #[test]
-    fn name_lists_drop_blank_lines_and_default_markers() {
-        assert_eq!(
-            parse_name_list("\n* Ubuntu\r\nwillie\r\n\n"),
-            ["Ubuntu", "willie"]
-        );
-    }
-
-    #[test]
-    fn the_default_distro_error_means_no_distributions() {
-        assert!(is_no_distributions(
-            "There is no distribution with the supplied name. \
-             Error code: Wsl/WSL_E_DEFAULT_DISTRO_NOT_FOUND"
-        ));
-    }
-
-    #[test]
-    fn another_failure_is_not_an_empty_list() {
-        assert!(!is_no_distributions(
-            "Error code: Wsl/Service/CreateInstance/0x80070569"
-        ));
-    }
 }
 
 /// `wsl.exe` prepared for a background engine: no console window.
@@ -361,5 +273,88 @@ impl WslCli {
         let file = file.to_string_lossy();
         self.run(&["--export", name, &file, "--format", format.flag()])
             .map(drop)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_is_read_from_a_localised_first_line() {
+        let v = WslVersion::parse_report(
+            "Versão do WSL: 2.6.1.0\nVersão do kernel: 6.6.87.2-1\n",
+        )
+        .unwrap();
+        assert_eq!(
+            v,
+            WslVersion {
+                major: 2,
+                minor: 6,
+                patch: 1,
+                build: 0
+            }
+        );
+        assert!(v.meets_minimum());
+    }
+
+    #[test]
+    fn versions_below_the_minimum_are_rejected() {
+        assert!(!"2.3.26.0".parse::<WslVersion>().unwrap().meets_minimum());
+        assert!("2.4.4".parse::<WslVersion>().unwrap().meets_minimum());
+    }
+
+    #[test]
+    fn garbage_is_an_unparseable_error() {
+        assert!(matches!(
+            WslVersion::parse_report("no version here"),
+            Err(WslError::Unparseable { .. })
+        ));
+    }
+
+    #[test]
+    fn name_lists_drop_blank_lines_and_default_markers() {
+        assert_eq!(
+            parse_name_list("\n* Ubuntu\r\nwillie\r\n\n"),
+            ["Ubuntu", "willie"]
+        );
+    }
+
+    #[test]
+    fn the_default_distro_error_means_no_distributions() {
+        assert!(is_no_distributions(
+            "There is no distribution with the supplied name. \
+             Error code: Wsl/WSL_E_DEFAULT_DISTRO_NOT_FOUND"
+        ));
+    }
+
+    #[test]
+    fn another_failure_is_not_an_empty_list() {
+        assert!(!is_no_distributions(
+            "Error code: Wsl/Service/CreateInstance/0x80070569"
+        ));
+    }
+
+    #[test]
+    fn daemon_invocation_runs_unprivileged_over_stdio() {
+        let args = WslExec::daemon_stdio().to_args();
+        assert_eq!(
+            args,
+            [
+                "-d",
+                "willie",
+                "--user",
+                "willie",
+                "--exec",
+                "/opt/willie/bin/willied",
+                "--stdio",
+            ]
+        );
+    }
+
+    #[test]
+    fn user_is_omitted_unless_requested() {
+        let args = WslExec::new("willie", "/bin/true").to_args();
+        assert!(!args.iter().any(|a| a == "--user"));
     }
 }
