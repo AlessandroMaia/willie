@@ -61,10 +61,10 @@ mod tests {
         assert_eq!(to_wsl_path(Path::new(r"\\server\share\x")), None);
     }
 
+    #[cfg(windows)]
     #[test]
-    fn data_dir_lives_under_localappdata() {
-        if let Some(dir) = data_dir() {
-            assert!(dir.ends_with("Willie"));
-        }
+    fn data_dir_is_willie_under_localappdata() {
+        let dir = data_dir().expect("LOCALAPPDATA is always set on Windows");
+        assert!(dir.ends_with("Willie"), "unexpected data dir {dir:?}");
     }
 }
