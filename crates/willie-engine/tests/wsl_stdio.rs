@@ -16,6 +16,7 @@
 use std::time::{Duration, Instant};
 
 use willie_engine::{
+    error::WslError,
     process::WslProcess,
     wsl::{WslCli, WslExec},
 };
@@ -81,14 +82,20 @@ fn wsl_errors_decode_to_readable_text() {
         return;
     }
     let err = WslCli.terminate("willie-does-not-exist-xyz").unwrap_err();
-    let text = err.to_string();
+    let WslError::CommandFailed { stderr, .. } = &err else {
+        panic!("expected CommandFailed, got {err}");
+    };
     assert!(
-        !text.contains('\u{fffd}'),
-        "UTF-16 output was mis-decoded: {text}"
+        !stderr.contains('\0'),
+        "UTF-16LE was read as raw bytes, NULs survived: {stderr:?}"
     );
     assert!(
-        text.chars().filter(|c| c.is_alphabetic()).count() > 10,
-        "stderr looks empty: {text}"
+        !stderr.contains('\u{fffd}'),
+        "UTF-16 output was mis-decoded: {stderr}"
+    );
+    assert!(
+        stderr.chars().filter(|c| c.is_alphabetic()).count() > 10,
+        "stderr looks empty: {stderr:?}"
     );
 }
 
