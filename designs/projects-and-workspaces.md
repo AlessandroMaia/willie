@@ -1,4 +1,4 @@
-# F1a — projects and ext4 workspaces
+# Projects and ext4 workspaces
 
 ## Problem
 
