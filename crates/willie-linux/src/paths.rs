@@ -1,4 +1,4 @@
-//! Well-known locations inside the distribution (see docs/ARCHITECTURE.md §1.2).
+//! Well-known locations inside the distribution (docs/ARCHITECTURE.md §1.2).
 
 use std::path::Path;
 

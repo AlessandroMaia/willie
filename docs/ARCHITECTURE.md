@@ -109,8 +109,7 @@ Dependency rules: `core` and `proto` depend on nothing internal; `engine`
 and `willied` never see each other (only `proto`); `willie-sess` depends
 on `core` + `harness`, not on the daemon; plugins depend on `plugin-api`
 + `core` + `harness`, never on `willied`; `willie-linux` depends on
-`core` + `proto` only; the UI knows only `proto` (TS mirrors of the
-types).
+`proto` only; the UI knows only `proto` (TS mirrors of the types).
 
 ## 2. The distribution
 

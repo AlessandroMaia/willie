@@ -4047,7 +4047,6 @@ dependencies = [
 name = "willie-linux"
 version = "0.1.0"
 dependencies = [
- "willie-core",
  "willie-proto",
 ]
 

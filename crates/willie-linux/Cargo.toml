@@ -1,13 +1,12 @@
 [package]
 name = "willie-linux"
-description = "Linux-side helpers shared by willied, willie-sess and willie-cli."
+description = "Linux-side helpers shared by willied, willie-sess, willie-cli."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
 [dependencies]
-willie-core = { workspace = true }
 willie-proto = { workspace = true }
 
 [lints]

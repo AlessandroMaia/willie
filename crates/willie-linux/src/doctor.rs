@@ -75,9 +75,7 @@ pub fn check_lsm_text(lsm_list: &str) -> DoctorCheck {
             "landlock LSM",
             CheckStatus::Skip,
             lsm_list.trim(),
-            Some(
-                "kernel without Landlock: filesystem sandboxing will be reduced",
-            ),
+            Some("kernel without Landlock: sandboxing will be reduced"),
             false,
         )
     }
@@ -142,9 +140,7 @@ pub fn writable_dir_check(
             name,
             CheckStatus::Fail,
             format!("{}: {e}", dir.display()),
-            Some(
-                "fix ownership: `sudo install -d -o willie -g willie /var/lib/willie /run/willie`",
-            ),
+            Some("run `sudo chown willie:willie /var/lib/willie /run/willie`"),
             required,
         ),
     }
@@ -183,7 +179,7 @@ pub fn run_all() -> DoctorReport {
             "user namespaces",
             &["unshare", "-U", "-r", "true"],
             false,
-            "unprivileged user namespaces disabled; sandbox will be unavailable",
+            "unprivileged user namespaces disabled; sandbox unavailable",
         ),
         check_lsm_text(&lsm),
         network_check(),
@@ -205,7 +201,7 @@ fn network_check() -> DoctorCheck {
             "https://api.anthropic.com",
         ],
         false,
-        "no route to the API: check proxy/CA propagation (engine → machine.env)",
+        "no route to the API: proxy/CA propagation (engine → machine.env)",
     )
 }
 
