@@ -7,6 +7,7 @@ mod distro;
 mod doctor;
 mod linux;
 mod refs;
+mod test_linux;
 
 use std::{
     path::{Path, PathBuf},
@@ -24,6 +25,7 @@ fn main() -> ExitCode {
         Some("doctor-tools") => doctor::run(&root),
         Some("check-refs") => refs::run(&root, &args[1..]),
         Some("build-linux") => linux::build(&root, &args[1..]),
+        Some("test-linux") => test_linux::run(&root, &args[1..]),
         Some("distro") => distro::run(&root, &args[1..]),
         Some("help") | Some("--help") | None => {
             print!("{USAGE}");
@@ -47,6 +49,8 @@ usage: cargo xtask <command>
   check-refs [--list F]         fail if content matches the denylist
   build-linux [--debug]         cross-compile willied, willie-sess and
                                 willie for x86_64-unknown-linux-musl
+  test-linux                    build the Linux crates' test binaries
+                                and run them inside WILLIE_TEST_DISTRO
   distro pin|fetch|build|clean|install|uninstall
                                 manage the distribution image
 ";
