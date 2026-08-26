@@ -7,14 +7,15 @@ lives on the Windows drive pays a 9p round trip inside the distribution:
 `git status` on a 129-file tree costs 511 ms on DrvFs against 4.9 ms on
 ext4, and a first run after a pause 3.1 s against 0.1 s (decision 0011).
 A realistic checkout would put every `git status` an agent runs at
-several seconds. Today Willie has no notion of a project at all: F0
-delivers the distribution, the daemon and health; the user's code is
-still only under `C:\`.
+several seconds. Today Willie has no notion of a project at all: the
+first slice delivered the distribution, the daemon and health; the
+user's code is still only under `C:\`.
 
-F1a gives Willie **projects**: a registered Windows checkout paired with
-a clone of it inside the distribution's ext4 disk, kept in sync through
-git, with the Projects screen to add, watch, sync and remove them. F1b
-(sessions) starts agents inside those workspaces.
+This feature gives Willie **projects**: a registered Windows checkout
+paired with a clone of it inside the distribution's ext4 disk, kept in
+sync through git, with the Projects screen to add, watch, sync and
+remove them. The sessions feature that follows it (slices table in
+`docs/ARCHITECTURE.md` §5.5) starts agents inside those workspaces.
 
 ## Goals
 
@@ -34,10 +35,10 @@ git, with the Projects screen to add, watch, sync and remove them. F1b
 ## Non-goals
 
 - Sessions, `willie-sess`, `willie attach`, Windows Terminal profile,
-  harness detection — F1b.
-- Sandbox and capabilities — F3 (a project's capabilities are not even
-  recorded yet).
-- Installing or updating tools — F4.
+  harness detection — the sessions feature, next in the slices table.
+- Sandbox and capabilities — the sandbox feature (a project's
+  capabilities are not even recorded yet).
+- Installing or updating tools — the managed-tools feature.
 - Submodules, git-lfs, worktrees per branch, a git client in the UI
   (branch switching stays in the terminal).
 - SQLite: the daemon indexes projects in memory from their TOML files;
@@ -79,7 +80,7 @@ to refuse registering the same checkout twice (`project_exists`).
 Truth on disk: `/var/lib/willie/projects/<id>.toml`, one file per
 project, rewritten on every state change. Workspaces live under
 `/home/willie/projects/` (user-data zone: a checkout is the user's;
-F3 mounts it rw as `project.rw`).
+the sandbox feature mounts it rw as `project.rw`).
 
 ### Daemon — `crates/willied/src/{state,projects,jobs,git}.rs`
 
@@ -197,8 +198,8 @@ states, flags and errors come from the daemon.
 
 ### Image — `distro/provision.sh`
 
-- `/etc/default/locale` with `LANG=C.UTF-8`; daemon and (in F1b) the
-  supervisor also pass `LANG` explicitly to children.
+- `/etc/default/locale` with `LANG=C.UTF-8`; daemon and, later, the
+  session supervisor also pass `LANG` explicitly to children.
 - `~/.willie/agent-state/claude/claude.json` placeholder is `{}`
   (0600), not empty — an empty file is rejected as corrupted.
 - `/home/willie/projects` created `0700 willie:willie`.
@@ -250,7 +251,7 @@ tail), `interrupted`, `cancelled`.
 | Engine config | `engine.toml` round-trip, roots absent ⇒ empty, unknown keys ignored | `willie-engine` |
 | Discover | temp tree with nested `.git` dirs and a `.git` file; depth limit | `willie-engine` |
 | UI store | snapshot replace, event apply, gap ⇒ resnapshot | Vitest `state.test.ts` |
-| Acceptance | `docs/checklists/f1a-acceptance.md` walked by the user | manual |
+| Acceptance | `docs/checklists/projects-and-workspaces-acceptance.md` walked by the user | manual |
 
 ## Rollout / compatibility
 
@@ -261,8 +262,8 @@ tail), `interrupted`, `cancelled`.
   login inside the distribution is redone once.
 - Documents in the same commits: `docs/PROTOCOL.md` (namespaces and
   codes), `docs/ARCHITECTURE.md` (§1.2 zone `/home/willie/projects`,
-  §3.4 and §5.1 Projects row without `/mnt/c` and `slow_fs`, §5.5 F1
-  split into F1a/F1b), `AGENTS.md` (`just test-linux`),
+  §3.4 and §5.1 Projects row without `/mnt/c` and `slow_fs`, the F1
+  row of §5.5 split into projects and sessions), `AGENTS.md` (`just test-linux`),
   `releases/v0.1.0.md`, decision **0013** — sync through git remotes
   with `updateInstead` (alternatives rejected: rsync or two-way file
   sync, mounting the workspace back under `C:\`).
