@@ -87,6 +87,8 @@ pub enum EngineError {
     DistroNotRegistered,
     #[error("path `{path}` does not exist")]
     PathNotFound { path: String },
+    #[error("cannot write {path}: {message}")]
+    ConfigWrite { path: String, message: String },
 }
 
 impl EngineError {
@@ -107,6 +109,7 @@ impl EngineError {
             Self::DaemonNotRunning => "daemon_not_running",
             Self::DistroNotRegistered => "distro_not_registered",
             Self::PathNotFound { .. } => "path_not_found",
+            Self::ConfigWrite { .. } => "config_write_failed",
         }
     }
 
@@ -165,6 +168,9 @@ impl EngineError {
             Self::PathNotFound { .. } => {
                 "pick a folder that exists on this machine".into()
             }
+            Self::ConfigWrite { .. } => "check that Willie can write to \
+                 %LOCALAPPDATA%\\Willie\\data"
+                .into(),
         }
     }
 }
@@ -324,6 +330,10 @@ mod tests {
             EngineError::DistroNotRegistered,
             EngineError::PathNotFound {
                 path: r"C:\does\not\exist".into(),
+            },
+            EngineError::ConfigWrite {
+                path: r"C:\LOCALAPPDATA\Willie\data\engine.toml".into(),
+                message: "access is denied".into(),
             },
         ]
     }

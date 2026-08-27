@@ -25,7 +25,7 @@ use crate::{
     daemon::{DaemonState, DaemonSupervisor},
     discover::{self, Candidate},
     distro::{DistroManager, DistroStatus, locate_image},
-    error::EngineError,
+    error::{EngineError, WslError},
     paths,
     prereqs::{WslStatus, wsl_status},
 };
@@ -254,16 +254,18 @@ impl Engine {
         &self,
         roots: Vec<String>,
     ) -> Result<(), EngineError> {
-        let path = paths::engine_toml_path().ok_or_else(|| {
-            crate::error::WslError::Unparseable {
+        let path =
+            paths::engine_toml_path().ok_or_else(|| WslError::Unparseable {
                 what: "LOCALAPPDATA",
                 text: String::new(),
-            }
-        })?;
+            })?;
         let config = EngineConfig {
             projects: Projects { roots },
         };
-        config.save(&path).map_err(EngineError::Transport)
+        config.save(&path).map_err(|e| EngineError::ConfigWrite {
+            path: path.display().to_string(),
+            message: e.to_string(),
+        })
     }
 
     /// Repositories found under the configured roots. Pure filesystem
