@@ -89,7 +89,7 @@ fn interrupt_preparing(
                     .to_owned(),
                 remediation: "remove the project and add it again".to_owned(),
             };
-            let _ = store::save(state_dir, p);
+            store::save_or_log(state_dir, p);
         }
     }
 }

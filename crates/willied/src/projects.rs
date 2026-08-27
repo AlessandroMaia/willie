@@ -135,15 +135,16 @@ struct JobCtx<'a> {
 
 /// Persists an edited copy of `project`, records the change in state and
 /// broadcasts the resulting event. Best-effort on disk: a write failure
-/// here is surfaced the next time the project is read, not by panicking a
-/// job thread.
+/// is logged to stderr, not propagated — in-memory state stays
+/// authoritative while the daemon runs, but the failure leaves a stale
+/// copy on disk that a restart will re-read.
 fn update_project(
     ctx: &JobCtx<'_>,
     mut project: Project,
     edit: impl FnOnce(&mut Project),
 ) {
     edit(&mut project);
-    let _ = store::save(ctx.state_dir, &project);
+    store::save_or_log(ctx.state_dir, &project);
     state::emit(ctx.state, ctx.out, |s| s.upsert_project(project));
 }
 
@@ -635,7 +636,7 @@ impl Ops {
             source_present: true,
             created_at: (self.clock)(),
         };
-        let _ = store::save(&self.state_dir, &project);
+        store::save_or_log(&self.state_dir, &project);
         state::emit(&self.state, &self.out, |s| {
             s.upsert_project(project.clone())
         });
@@ -812,11 +813,35 @@ impl Ops {
     /// Recomputes `source_present` for every project from the
     /// filesystem. Called before a snapshot so the flag is always
     /// fresh, never trusted from disk or from a job that ran earlier.
+    /// The project list is snapshotted under the lock, which is then
+    /// released before any `git`/filesystem call runs: a cold stat on a
+    /// `/mnt/c` source pays a 9p round trip, and no such call may ever
+    /// happen while the state mutex is held, or every other request
+    /// thread stalls behind it. The lock is re-acquired only to apply
+    /// the computed flags; a project removed in between is simply not
+    /// updated.
     pub fn refresh_source_present(&self) {
+        let sources: Vec<(ProjectId, Option<String>)> = {
+            let state = lock(&self.state);
+            state
+                .projects
+                .iter()
+                .map(|(id, p)| (*id, source_to_linux(&p.source)))
+                .collect()
+        };
+        let presence: Vec<(ProjectId, bool)> = sources
+            .into_iter()
+            .map(|(id, linux)| {
+                let present =
+                    linux.is_some_and(|linux| git::is_repo(Path::new(&linux)));
+                (id, present)
+            })
+            .collect();
         let mut state = lock(&self.state);
-        for project in state.projects.values_mut() {
-            project.source_present = source_to_linux(&project.source)
-                .is_some_and(|linux| git::is_repo(Path::new(&linux)));
+        for (id, present) in presence {
+            if let Some(project) = state.projects.get_mut(&id) {
+                project.source_present = present;
+            }
         }
     }
 }

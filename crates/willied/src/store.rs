@@ -50,6 +50,19 @@ pub fn save(state_dir: &Path, p: &Project) -> io::Result<()> {
     fs::rename(&tmp, &final_path)
 }
 
+/// Persists `p`, logging a write failure to stderr instead of
+/// discarding it. In-memory state stays the truth for as long as the
+/// daemon runs; a failed write here only leaves a stale copy on disk
+/// for the next restart to re-read.
+pub(crate) fn save_or_log(state_dir: &Path, p: &Project) {
+    if let Err(e) = save(state_dir, p) {
+        eprintln!(
+            "willied: could not persist project {} ({}): {}",
+            p.id, p.slug, e
+        );
+    }
+}
+
 pub fn delete(state_dir: &Path, id: &ProjectId) -> io::Result<()> {
     let path = projects_dir(state_dir).join(format!("{id}.toml"));
     match fs::remove_file(&path) {
