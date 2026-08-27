@@ -16,6 +16,8 @@ mod jobs;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod outbound;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod projects;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod server;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod state;
