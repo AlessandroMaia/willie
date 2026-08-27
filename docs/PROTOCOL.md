@@ -61,6 +61,52 @@ Notification (daemon → client), recognised by having no `id`:
 | `daemon.doctor` | `{}` | `DoctorReport { checks: [ { name, status: ok|fail|skip, detail, remediation?, required } ] }` |
 | `daemon.shutdown` | `{}` | `null` — the daemon replies, then exits 0 |
 
+## `project.*`
+
+Long operations (`add`, `remove`, `sync_to_windows`, `update_from_windows`,
+`relocate`) validate on the calling thread, then run their git work as a
+background job: the reply carries a `JobRef`/`AddResult` and the outcome
+arrives later as a `state.event`. `rename` is synchronous.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `project.list` | `{}` | `ProjectList { projects: [Project] }` |
+| `project.add` | `AddParams { windows_path, name? }` | `AddResult { project_id, job_id }` |
+| `project.remove` | `RemoveParams { id, delete_workspace?, force? }` | `JobRef { job_id }` |
+| `project.sync_to_windows` | `{ id }` | `JobRef { job_id }` |
+| `project.update_from_windows` | `{ id }` | `JobRef { job_id }` |
+| `project.relocate` | `RelocateParams { id, windows_path }` | `JobRef { job_id }` |
+| `project.rename` | `RenameParams { id, name }` | `Project` |
+
+A `Project` is `{ id, name, slug, source, workspace, branch, state,
+source_present, created_at }`; `state` is `preparing`, `ready` or `failed
+{ code, message, remediation }`. `source_present` is recomputed from the
+filesystem on every `state.snapshot`, never trusted from disk.
+
+## `job.*`
+| Method | Params | Result |
+| --- | --- | --- |
+| `job.list` | `{}` | `{ jobs: [Job] }` |
+| `job.get` | `{ id }` | `Job` |
+| `job.cancel` | `{ id }` | `null` — trips the cancel flag; a no-op once finished |
+
+A `Job` is `{ id, kind, project_id, state, started_at, finished_at?,
+log_tail }`; `state` is `running`, `done` or `failed { code, message,
+remediation }`.
+
+## `state.*`
+| Method | Params | Result |
+| --- | --- | --- |
+| `state.snapshot` | `{}` | `Snapshot { seq, projects: [Project], jobs: [Job] }` |
+
+`state.event` is a notification (daemon → client), never a request. Its
+params are `Event { seq, kind }` where `kind` is `project_changed
+{ project }`, `project_removed { id }` or `job_changed { job }`. `seq` is a
+monotonic counter shared by the snapshot and every event: a client that
+holds a snapshot at `seq = N` applies every event with `seq > N` in order.
+A single writer owns stdout, so events never interleave and their `seq`
+values always arrive strictly increasing.
+
 ## Error codes (daemon)
 | Code | Meaning |
 | --- | --- |
@@ -69,6 +115,31 @@ Notification (daemon → client), recognised by having no `id`:
 | `invalid_request` | the line was not a JSON-RPC request (malformed JSON or missing fields); the daemon answers with id 0 and keeps serving |
 | `protocol_version_mismatch` | client speaks another `PROTOCOL_VERSION` |
 | `internal_error` | handler failure; message says what, remediation says what to do |
+
+## Error codes (project and job)
+
+These come back as the `error` of a `project.*` or `job.*` reply when the
+fast validation refuses before any job starts.
+
+| Code | Meaning |
+| --- | --- |
+| `path_not_windows` | the source is not a path on a Windows drive |
+| `not_a_git_repository` | the source is not a git checkout |
+| `project_exists` | this checkout is already registered |
+| `workspace_exists` | the workspace directory is already present |
+| `project_not_found` | no project with that id |
+| `project_busy` | a job is already running for that project |
+| `source_detached_head` | the source is on a detached HEAD; no branch to track |
+| `job_not_found` | no job with that id |
+
+A job that starts and then fails carries its own code in the resulting
+`job_changed` event's `state: failed { code }`, and — for `add` — in the
+project's `state: failed { code }`. Those codes include `git_failed`,
+`cancelled`, `interrupted`, `job_panicked`, `source_missing`,
+`windows_tree_dirty`, `windows_branch_mismatch`, `workspace_diverged`,
+`workspace_dirty` and `source_unrelated`. A daemon that stops mid-`add`
+turns the stuck project `failed { code: "interrupted" }` on its next
+start.
 
 ## Engine problem codes
 

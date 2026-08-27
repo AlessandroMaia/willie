@@ -1,9 +1,5 @@
 //! Thin wrapper over the `git` binary. The daemon runs inside the
 //! distribution; every path here is already a Linux path.
-//!
-//! Scaffolding until project operations (add, sync, relocate) wire this
-//! module in; only tests exercise it until then.
-#![cfg_attr(target_os = "linux", allow(dead_code))]
 
 use std::{path::Path, process::Command};
 

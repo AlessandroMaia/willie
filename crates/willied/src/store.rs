@@ -1,9 +1,5 @@
 //! Projects persist as one TOML file per project under the state dir.
 //! These files are the truth; the in-memory index is rebuilt from them.
-//!
-//! The daemon does not yet load persisted projects at startup, so these
-//! entry points are only exercised by tests until it does.
-#![cfg_attr(target_os = "linux", allow(dead_code))]
 
 use std::{
     fs, io,

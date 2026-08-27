@@ -1,10 +1,11 @@
 //! The daemon's in-memory truth: projects (mirroring the TOML files),
 //! jobs (transient), and a monotonic sequence for the event stream.
-//!
-//! Scaffolding until the daemon wires this module in (Task 9).
-#![cfg_attr(target_os = "linux", allow(dead_code))]
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::BTreeMap,
+    path::Path,
+    sync::{Mutex, MutexGuard, PoisonError},
+};
 
 use willie_core::{
     id::{JobId, ProjectId},
@@ -15,7 +16,7 @@ use willie_proto::{
     state::{Event, EventKind, Snapshot},
 };
 
-use crate::store;
+use crate::{outbound::Outbound, store};
 
 #[derive(Debug, Default)]
 pub struct State {
@@ -81,6 +82,27 @@ impl State {
             kind: EventKind::JobChanged { job },
         }
     }
+}
+
+/// Recovers a poisoned lock instead of panicking, matching the discipline
+/// in `jobs` and `projects`: one worker's panic must not wedge state.
+fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
+    state.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Commits a state mutation and broadcasts its event while still holding
+/// the lock, so the event stream's `seq` order always matches the order
+/// mutations committed in -- even when several worker threads mutate at
+/// once. `send_event` only enqueues, so holding the lock across it never
+/// blocks on I/O.
+pub fn emit(
+    state: &Mutex<State>,
+    out: &Outbound,
+    mutate: impl FnOnce(&mut State) -> Event,
+) {
+    let mut guard = lock(state);
+    let event = mutate(&mut guard);
+    out.send_event(event);
 }
 
 #[cfg(test)]

@@ -1,8 +1,5 @@
 //! Background job runner: bounded concurrency, per-project exclusion,
 //! cancellation and a clean shutdown that fails still-running jobs.
-//!
-//! Scaffolding until the daemon wires this module in (Task 9).
-#![cfg_attr(target_os = "linux", allow(dead_code))]
 
 use std::{
     any::Any,
@@ -16,11 +13,7 @@ use std::{
 };
 
 use willie_core::id::{JobId, ProjectId};
-use willie_proto::{
-    job::{Job, JobKind, JobState},
-    rpc::Notification,
-    state::{Event, method::EVENT},
-};
+use willie_proto::job::{Job, JobKind, JobState};
 
 use crate::{outbound::Outbound, state::State};
 
@@ -212,8 +205,7 @@ impl Runner {
                 finished_at: Some(clock()),
                 log_tail: tail(&log),
             };
-            let event = lock(&state).upsert_job(done);
-            out.send_notification(event_notification(event));
+            crate::state::emit(&state, &out, |s| s.upsert_job(done));
         });
         Ok(id)
     }
@@ -234,8 +226,7 @@ impl Runner {
     }
 
     fn emit_job(&self, job: Job) {
-        let event = lock(&self.state).upsert_job(job);
-        self.out.send_notification(event_notification(event));
+        crate::state::emit(&self.state, &self.out, |s| s.upsert_job(job));
     }
 }
 
@@ -281,11 +272,6 @@ fn tail(log: &str) -> String {
         start += 1;
     }
     log[start..].to_owned()
-}
-
-fn event_notification(event: Event) -> Notification {
-    let params = serde_json::to_value(event).unwrap_or(serde_json::Value::Null);
-    Notification::new(EVENT, params)
 }
 
 #[cfg(test)]

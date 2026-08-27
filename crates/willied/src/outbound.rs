@@ -1,16 +1,16 @@
 //! One thread owns the daemon's stdout so responses and notifications
 //! never interleave. Everything else sends through a channel.
-//!
-//! Scaffolding until the daemon wires this module in (Task 9).
-#![cfg_attr(target_os = "linux", allow(dead_code))]
 
 use std::{
-    io::{self, Write},
+    io::Write,
     sync::mpsc::{self, Sender},
     thread::{self, JoinHandle},
 };
 
-use willie_proto::rpc::{Notification, Response};
+use willie_proto::{
+    rpc::{Notification, Response},
+    state::{self, Event},
+};
 
 enum Out {
     Response(Box<Response>),
@@ -57,20 +57,45 @@ impl Outbound {
     pub fn send_notification(&self, n: Notification) {
         let _ = self.tx.send(Out::Notification(Box::new(n)));
     }
-}
 
-/// Convenience for a writer that is not `Send` (e.g. a stdout lock): the
-/// caller owns the loop. Used by tests and by the real server, which
-/// holds `io::Stdout` (which is `Send`).
-pub fn write_line<W: Write>(writer: &mut W, line: &str) -> io::Result<()> {
-    writeln!(writer, "{line}")?;
-    writer.flush()
+    /// The one place an [`Event`] becomes a wire notification, so the whole
+    /// daemon serialises state changes the same way. Job and project code
+    /// both funnel through here.
+    pub fn send_event(&self, event: Event) {
+        let params =
+            serde_json::to_value(event).unwrap_or(serde_json::Value::Null);
+        self.send_notification(Notification::new(state::method::EVENT, params));
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use super::*;
-    use willie_proto::rpc::RpcError;
+    use willie_core::id::ProjectId;
+    use willie_proto::{
+        rpc::RpcError,
+        state::{Event, EventKind},
+    };
+
+    #[test]
+    fn send_event_writes_a_state_event_notification() {
+        let buf = SharedBuf::default();
+        let (out, handle) = Outbound::spawn(buf.clone());
+        out.send_event(Event {
+            seq: 3,
+            kind: EventKind::ProjectRemoved {
+                id: ProjectId::new(),
+            },
+        });
+        drop(out);
+        handle.join().unwrap();
+        let text = buf.contents();
+        assert!(text.contains("state.event"), "{text}");
+        assert!(text.contains("\"seq\":3"), "{text}");
+        assert!(text.contains("project_removed"), "{text}");
+    }
 
     #[test]
     fn responses_and_notifications_reach_the_writer_in_order() {

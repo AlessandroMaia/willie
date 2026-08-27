@@ -1,7 +1,6 @@
 //! The six project operations. Fast validation on the calling thread;
 //! the git work runs in a job. Every path handed to `git` is a Linux
 //! path (`windows_to_drvfs` maps the registered `C:\` source first).
-#![cfg_attr(target_os = "linux", allow(dead_code))]
 
 use std::{
     fs,
@@ -10,7 +9,7 @@ use std::{
 };
 
 use willie_core::{
-    id::ProjectId,
+    id::{JobId, ProjectId},
     paths::windows_to_drvfs,
     project::{Project, ProjectState, slug_for, source_key},
 };
@@ -22,7 +21,8 @@ use willie_proto::{
 use crate::{
     git::{self, GitError},
     jobs::{Cancel, JobOutcome, Runner, Work},
-    state::State,
+    outbound::Outbound,
+    state::{self, State},
     store,
 };
 
@@ -54,6 +54,7 @@ pub struct Ops {
     state_dir: PathBuf,
     workspaces_dir: PathBuf,
     clock: fn() -> String,
+    out: Outbound,
 }
 
 /// The Linux path git should use for a registered source. A real source
@@ -122,22 +123,32 @@ fn refuse(
     (code.to_owned(), message.into(), remediation.into())
 }
 
-/// Persists an edited copy of `project` and records the change in
-/// state. Best-effort on disk: a write failure here is surfaced the
-/// next time the project is read, not by panicking a job thread.
+/// What a job's git work threads through: the shared state it mutates,
+/// where projects persist, and the writer that broadcasts the events.
+/// Bundling these three keeps the `run_*` signatures readable and lets one
+/// place emit an event under the state lock.
+struct JobCtx<'a> {
+    state: &'a Mutex<State>,
+    state_dir: &'a Path,
+    out: &'a Outbound,
+}
+
+/// Persists an edited copy of `project`, records the change in state and
+/// broadcasts the resulting event. Best-effort on disk: a write failure
+/// here is surfaced the next time the project is read, not by panicking a
+/// job thread.
 fn update_project(
-    state: &Mutex<State>,
-    state_dir: &Path,
+    ctx: &JobCtx<'_>,
     mut project: Project,
     edit: impl FnOnce(&mut Project),
 ) {
     edit(&mut project);
-    let _ = store::save(state_dir, &project);
-    let _ = lock(state).upsert_project(project);
+    let _ = store::save(ctx.state_dir, &project);
+    state::emit(ctx.state, ctx.out, |s| s.upsert_project(project));
 }
 
-fn mark_ready(state: &Mutex<State>, state_dir: &Path, project: Project) {
-    update_project(state, state_dir, project, |p| {
+fn mark_ready(ctx: &JobCtx<'_>, project: Project) {
+    update_project(ctx, project, |p| {
         p.state = ProjectState::Ready;
     });
 }
@@ -146,15 +157,14 @@ fn mark_ready(state: &Mutex<State>, state_dir: &Path, project: Project) {
 /// the matching job outcome. Only `add` uses this: a project that never
 /// finished being created has no other valid state to fall back to.
 fn add_fail(
-    state: &Mutex<State>,
-    state_dir: &Path,
+    ctx: &JobCtx<'_>,
     project: &Project,
     e: GitError,
 ) -> (String, String, String) {
     let code = e.code;
     let message = e.message;
     let remediation = remediation_for(code).to_owned();
-    update_project(state, state_dir, project.clone(), |p| {
+    update_project(ctx, project.clone(), |p| {
         p.state = ProjectState::Failed {
             code: code.to_owned(),
             message: message.clone(),
@@ -171,8 +181,7 @@ fn add_fail(
 /// is this module's responsibility) and returns the matching outcome.
 fn check_cancelled(
     cancel: &Cancel,
-    state: &Mutex<State>,
-    state_dir: &Path,
+    ctx: &JobCtx<'_>,
     project: &Project,
 ) -> Option<(String, String, String)> {
     if !cancel.is_cancelled() {
@@ -180,7 +189,7 @@ fn check_cancelled(
     }
     let message = "the job was interrupted before it finished".to_owned();
     let remediation = "retry the operation".to_owned();
-    update_project(state, state_dir, project.clone(), |p| {
+    update_project(ctx, project.clone(), |p| {
         p.state = ProjectState::Failed {
             code: "interrupted".to_owned(),
             message: message.clone(),
@@ -229,49 +238,48 @@ fn not_a_git_repository_err(windows_path: &str) -> OpError {
 /// it becomes `Failed { code, .. }` with that failure's code.
 fn run_add(
     cancel: &Cancel,
-    state: &Mutex<State>,
-    state_dir: &Path,
+    ctx: &JobCtx<'_>,
     src_linux: &str,
     workspace: &Path,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, state, state_dir, &project) {
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
     let src = Path::new(src_linux);
-    let clone_out = git::clone(src, workspace)
-        .map_err(|e| add_fail(state, state_dir, &project, e))?;
-    if let Some(err) = check_cancelled(cancel, state, state_dir, &project) {
+    let clone_out =
+        git::clone(src, workspace).map_err(|e| add_fail(ctx, &project, e))?;
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
     git::run(workspace, &["remote", "rename", "origin", "windows"])
-        .map_err(|e| add_fail(state, state_dir, &project, e))?;
-    let remotes = git::run(src, &["remote"])
-        .map_err(|e| add_fail(state, state_dir, &project, e))?;
+        .map_err(|e| add_fail(ctx, &project, e))?;
+    let remotes =
+        git::run(src, &["remote"]).map_err(|e| add_fail(ctx, &project, e))?;
     for name in remotes
         .lines()
         .map(str::trim)
         .filter(|n| !n.is_empty() && *n != "origin")
     {
         let url = git::run(src, &["remote", "get-url", name])
-            .map_err(|e| add_fail(state, state_dir, &project, e))?;
+            .map_err(|e| add_fail(ctx, &project, e))?;
         git::run(workspace, &["remote", "add", name, url.trim()])
-            .map_err(|e| add_fail(state, state_dir, &project, e))?;
+            .map_err(|e| add_fail(ctx, &project, e))?;
     }
-    if let Some(err) = check_cancelled(cancel, state, state_dir, &project) {
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
     git::run(workspace, &["config", "core.autocrlf", "false"])
-        .map_err(|e| add_fail(state, state_dir, &project, e))?;
+        .map_err(|e| add_fail(ctx, &project, e))?;
     git::run(
         src,
         &["config", "receive.denyCurrentBranch", "updateInstead"],
     )
-    .map_err(|e| add_fail(state, state_dir, &project, e))?;
-    if let Some(err) = check_cancelled(cancel, state, state_dir, &project) {
+    .map_err(|e| add_fail(ctx, &project, e))?;
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
-    mark_ready(state, state_dir, project);
+    mark_ready(ctx, project);
     Ok(clone_out.log)
 }
 
@@ -280,14 +288,13 @@ fn run_add(
 /// branch into it (accepted by the `updateInstead` config `add` set).
 fn run_sync(
     cancel: &Cancel,
-    state: &Mutex<State>,
-    state_dir: &Path,
+    ctx: &JobCtx<'_>,
     src_linux: &str,
     workspace: &Path,
     branch: &str,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, state, state_dir, &project) {
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
     let src = Path::new(src_linux);
@@ -321,7 +328,7 @@ fn run_sync(
              then try again",
         ));
     }
-    if let Some(err) = check_cancelled(cancel, state, state_dir, &project) {
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
     let refspec = format!("HEAD:{branch}");
@@ -332,14 +339,13 @@ fn run_sync(
 /// a workspace with commits the source lacks is refused, not merged.
 fn run_update(
     cancel: &Cancel,
-    state: &Mutex<State>,
-    state_dir: &Path,
+    ctx: &JobCtx<'_>,
     src_linux: &str,
     workspace: &Path,
     branch: &str,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, state, state_dir, &project) {
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
     if !Path::new(src_linux).exists() {
@@ -350,7 +356,7 @@ fn run_update(
         ));
     }
     git::run(workspace, &["fetch", "windows"]).map_err(git_err_outcome)?;
-    if let Some(err) = check_cancelled(cancel, state, state_dir, &project) {
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
     let ff_ref = format!("windows/{branch}");
@@ -373,14 +379,13 @@ fn run_update(
 /// forget the project. Never touches the Windows checkout.
 fn run_remove(
     cancel: &Cancel,
-    state: &Mutex<State>,
-    state_dir: &Path,
+    ctx: &JobCtx<'_>,
     workspace: &Path,
     delete_workspace: bool,
     force: bool,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, state, state_dir, &project) {
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
     if delete_workspace && !force {
@@ -394,7 +399,7 @@ fn run_remove(
             ));
         }
     }
-    if let Some(err) = check_cancelled(cancel, state, state_dir, &project) {
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
     if delete_workspace {
@@ -407,8 +412,8 @@ fn run_remove(
             )
         })?;
     }
-    let _ = store::delete(state_dir, &project.id);
-    let _ = lock(state).remove_project(&project.id);
+    let _ = store::delete(ctx.state_dir, &project.id);
+    state::emit(ctx.state, ctx.out, |s| s.remove_project(&project.id));
     Ok(String::new())
 }
 
@@ -417,14 +422,13 @@ fn run_remove(
 /// the stored source at it.
 fn run_relocate(
     cancel: &Cancel,
-    state: &Mutex<State>,
-    state_dir: &Path,
+    ctx: &JobCtx<'_>,
     workspace: &Path,
     new_src_linux: &str,
     new_windows_path: &str,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, state, state_dir, &project) {
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
     let new_src = Path::new(new_src_linux);
@@ -439,12 +443,12 @@ fn run_relocate(
              workspace",
         ));
     }
-    if let Some(err) = check_cancelled(cancel, state, state_dir, &project) {
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
     git::run(workspace, &["remote", "set-url", "windows", new_src_linux])
         .map_err(git_err_outcome)?;
-    update_project(state, state_dir, project, |p| {
+    update_project(ctx, project, |p| {
         p.source = new_windows_path.to_owned();
         p.source_present = true;
     });
@@ -459,6 +463,7 @@ impl Ops {
         state_dir: PathBuf,
         workspaces_dir: PathBuf,
         clock: fn() -> String,
+        out: Outbound,
     ) -> Self {
         Self {
             state,
@@ -466,7 +471,18 @@ impl Ops {
             state_dir,
             workspaces_dir,
             clock,
+            out,
         }
+    }
+
+    /// Trips a running job's cancel flag; a no-op once it has finished.
+    pub fn cancel_job(&self, id: &JobId) {
+        self.runner.cancel(id);
+    }
+
+    /// Trips every registered job's cancel, run on daemon shutdown.
+    pub fn shutdown(&self) {
+        self.runner.shutdown();
     }
 
     fn get_project(&self, id: ProjectId) -> Result<Project, OpError> {
@@ -530,20 +546,21 @@ impl Ops {
             created_at: (self.clock)(),
         };
         let _ = store::save(&self.state_dir, &project);
-        let _ = lock(&self.state).upsert_project(project.clone());
+        state::emit(&self.state, &self.out, |s| {
+            s.upsert_project(project.clone())
+        });
 
         let state = Arc::clone(&self.state);
         let state_dir = self.state_dir.clone();
+        let out = self.out.clone();
         let job_project = project.clone();
         let work: Work = Box::new(move |cancel| {
-            run_add(
-                cancel,
-                &state,
-                &state_dir,
-                &src_linux,
-                &workspace,
-                job_project,
-            )
+            let ctx = JobCtx {
+                state: &state,
+                state_dir: &state_dir,
+                out: &out,
+            };
+            run_add(cancel, &ctx, &src_linux, &workspace, job_project)
         });
         let job_id = self
             .runner
@@ -561,19 +578,17 @@ impl Ops {
             .ok_or_else(|| path_not_windows_err(&project.source))?;
         let state = Arc::clone(&self.state);
         let state_dir = self.state_dir.clone();
+        let out = self.out.clone();
         let workspace = PathBuf::from(project.workspace.clone());
         let branch = project.branch.clone();
         let job_project = project;
         let work: Work = Box::new(move |cancel| {
-            run_sync(
-                cancel,
-                &state,
-                &state_dir,
-                &src_linux,
-                &workspace,
-                &branch,
-                job_project,
-            )
+            let ctx = JobCtx {
+                state: &state,
+                state_dir: &state_dir,
+                out: &out,
+            };
+            run_sync(cancel, &ctx, &src_linux, &workspace, &branch, job_project)
         });
         let job_id = self
             .runner
@@ -591,14 +606,19 @@ impl Ops {
             .ok_or_else(|| path_not_windows_err(&project.source))?;
         let state = Arc::clone(&self.state);
         let state_dir = self.state_dir.clone();
+        let out = self.out.clone();
         let workspace = PathBuf::from(project.workspace.clone());
         let branch = project.branch.clone();
         let job_project = project;
         let work: Work = Box::new(move |cancel| {
+            let ctx = JobCtx {
+                state: &state,
+                state_dir: &state_dir,
+                out: &out,
+            };
             run_update(
                 cancel,
-                &state,
-                &state_dir,
+                &ctx,
                 &src_linux,
                 &workspace,
                 &branch,
@@ -621,13 +641,18 @@ impl Ops {
         let project = self.get_project(id)?;
         let state = Arc::clone(&self.state);
         let state_dir = self.state_dir.clone();
+        let out = self.out.clone();
         let workspace = PathBuf::from(project.workspace.clone());
         let job_project = project;
         let work: Work = Box::new(move |cancel| {
+            let ctx = JobCtx {
+                state: &state,
+                state_dir: &state_dir,
+                out: &out,
+            };
             run_remove(
                 cancel,
-                &state,
-                &state_dir,
+                &ctx,
                 &workspace,
                 delete_workspace,
                 force,
@@ -651,13 +676,18 @@ impl Ops {
         }
         let state = Arc::clone(&self.state);
         let state_dir = self.state_dir.clone();
+        let out = self.out.clone();
         let workspace = PathBuf::from(project.workspace.clone());
         let job_project = project;
         let work: Work = Box::new(move |cancel| {
+            let ctx = JobCtx {
+                state: &state,
+                state_dir: &state_dir,
+                out: &out,
+            };
             run_relocate(
                 cancel,
-                &state,
-                &state_dir,
+                &ctx,
                 &workspace,
                 &new_src_linux,
                 &windows_path,
@@ -683,7 +713,9 @@ impl Ops {
                  try again",
             )
         })?;
-        let _ = lock(&self.state).upsert_project(project.clone());
+        state::emit(&self.state, &self.out, |s| {
+            s.upsert_project(project.clone())
+        });
         Ok(project)
     }
 
@@ -712,14 +744,15 @@ mod tests {
 
     fn ops(root: &Path) -> (Ops, Arc<Mutex<State>>) {
         let state = Arc::new(Mutex::new(State::default()));
-        let (out, _h) = crate::outbound::Outbound::spawn(std::io::sink());
-        let runner = Runner::new(Arc::clone(&state), out, clock);
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner = Runner::new(Arc::clone(&state), out.clone(), clock);
         let ops = Ops::new(
             Arc::clone(&state),
             runner,
             root.join("state"),
             root.join("workspaces"),
             clock,
+            out,
         );
         (ops, state)
     }
