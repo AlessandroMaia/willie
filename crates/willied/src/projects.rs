@@ -822,32 +822,49 @@ impl Ops {
     /// Recomputes `source_present` for every project from the
     /// filesystem. Called before a snapshot so the flag is always
     /// fresh, never trusted from disk or from a job that ran earlier.
-    /// The project list is snapshotted under the lock, which is then
-    /// released before any `git`/filesystem call runs: a cold stat on a
-    /// `/mnt/c` source pays a 9p round trip, and no such call may ever
-    /// happen while the state mutex is held, or every other request
-    /// thread stalls behind it. The lock is re-acquired only to apply
-    /// the computed flags; a project removed in between is simply not
-    /// updated, and a project whose source changed in between (a
-    /// concurrent relocate) is skipped the same way, since the flag
-    /// was computed for a path it no longer has.
+    /// The three steps stay separate so the invariant is plain to see:
+    /// only the first and the last touch the state lock, and the
+    /// filesystem work between them runs with no lock held.
     pub fn refresh_source_present(&self) {
-        let sources: Vec<(ProjectId, String)> = {
-            let state = lock(&self.state);
-            state
-                .projects
-                .iter()
-                .map(|(id, p)| (*id, p.source.clone()))
-                .collect()
-        };
-        let presence: Vec<(ProjectId, String, bool)> = sources
+        let sources = self.snapshot_sources();
+        let presence = Self::compute_presence(sources);
+        self.apply_presence(presence);
+    }
+
+    /// Every project's id and source path, copied out under the lock
+    /// and nothing more: no `git` or filesystem call may run while the
+    /// state mutex is held.
+    fn snapshot_sources(&self) -> Vec<(ProjectId, String)> {
+        let state = lock(&self.state);
+        state
+            .projects
+            .iter()
+            .map(|(id, p)| (*id, p.source.clone()))
+            .collect()
+    }
+
+    /// Stats each snapshotted source with no lock held: a cold stat on
+    /// a `/mnt/c` source pays a 9p round trip, and every other request
+    /// thread would stall behind it. The path travels alongside the
+    /// flag so the applying step can see which source it describes.
+    fn compute_presence(
+        sources: Vec<(ProjectId, String)>,
+    ) -> Vec<(ProjectId, String, bool)> {
+        sources
             .into_iter()
             .map(|(id, source)| {
                 let present = source_to_linux(&source)
                     .is_some_and(|linux| git::is_repo(Path::new(&linux)));
                 (id, source, present)
             })
-            .collect();
+            .collect()
+    }
+
+    /// Re-acquires the lock to store the computed flags. A project
+    /// removed while they were being computed is simply not updated,
+    /// and one whose source changed (a concurrent relocate) is skipped
+    /// the same way: the flag describes a path it no longer has.
+    fn apply_presence(&self, presence: Vec<(ProjectId, String, bool)>) {
         let mut state = lock(&self.state);
         for (id, source, present) in presence {
             if let Some(project) = state.projects.get_mut(&id)
@@ -1534,6 +1551,45 @@ mod tests {
         assert!(
             !state.lock().unwrap().projects[&res.project_id].source_present
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_project_relocated_mid_refresh_keeps_its_fresh_source_flag() {
+        let root = scratch("refresh-relocate");
+        let src = root.join("src");
+        init_repo(&src);
+        let (ops, state) = ops(&root);
+        let res = ops
+            .add(AddParams {
+                windows_path: src.to_string_lossy().into_owned(),
+                name: None,
+            })
+            .unwrap();
+        wait_job_done(&state);
+        // The relocate target shares history with the workspace, so it
+        // has to be cloned while the original source is still whole.
+        let moved = root.join("moved");
+        git::clone(&src, &moved).unwrap();
+        // A refresh reads the old source and finds it gone.
+        fs::remove_dir_all(src.join(".git")).unwrap();
+        let stale = Ops::compute_presence(ops.snapshot_sources());
+        assert_eq!(stale.len(), 1);
+        assert!(!stale[0].2, "the source lost its .git, so it is absent");
+        // A relocate lands before those flags are applied, pointing the
+        // project at a source that does exist.
+        state.lock().unwrap().jobs.clear();
+        ops.relocate(RelocateParams {
+            id: res.project_id,
+            windows_path: moved.to_string_lossy().into_owned(),
+        })
+        .unwrap();
+        let done = wait_job_done(&state);
+        assert!(matches!(done, JobState::Done), "{done:?}");
+        // The stale `false` describes the path the project no longer
+        // has and must not overwrite the relocate's fresh flag.
+        ops.apply_presence(stale);
+        assert!(state.lock().unwrap().projects[&res.project_id].source_present);
         let _ = fs::remove_dir_all(&root);
     }
 
