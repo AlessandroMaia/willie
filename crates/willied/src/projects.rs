@@ -700,6 +700,7 @@ impl Ops {
 }
 
 #[cfg(test)]
+#[cfg(target_os = "linux")]
 mod tests {
     use super::*;
     use std::sync::mpsc;
