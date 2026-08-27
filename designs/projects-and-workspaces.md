@@ -278,10 +278,13 @@ tail), `interrupted`, `cancelled`.
 ## Follow-ups for the next slice
 
 - **Git identity for workspace commits.** The distribution's `willie`
-  user has no git identity, so a commit made in a workspace (by a person
-  in a plain shell, or by the agent) fails with "Please tell me who you
-  are" until `git config --global user.{email,name}` is set by hand. The
-  sessions/sandbox slice should give the workspace an identity — mount the
-  user's Windows `~/.gitconfig` (the `git.identity` capability in
-  ARCHITECTURE §3.3), or provision a default one — so commits work without
-  a manual step. Until then the acceptance checklist sets it by hand.
+  user has no git identity of its own. As a stopgap, `add` now copies the
+  source checkout's `HEAD` commit author into the clone's local
+  `user.name`/`user.email`, so a commit made in a workspace (by a person
+  in a plain shell, or by the agent) works without a manual step in the
+  common case. It does not cover a checkout whose history has no
+  readable author, or a workspace commit that should carry the *current*
+  user's identity rather than the source's original author — the
+  sessions/sandbox slice still owns that full story: mount the user's
+  Windows `~/.gitconfig` (the `git.identity` capability in ARCHITECTURE
+  §3.3), or provision a default one.

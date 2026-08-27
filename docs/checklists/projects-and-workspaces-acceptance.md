@@ -15,12 +15,15 @@ Before the walk:
 - Have a root folder holding one or two Windows git checkouts to register.
   **Each checkout must have at least one commit** — a folder freshly
   `git init`'d with no commit is refused.
-- Set a git identity for the distribution user once, so the workspace
-  commit steps below can commit (the image does not set one yet — see the
-  design's follow-up):
+- Git identity for the workspace commit steps below is set
+  automatically: `add` copies the source checkout's `HEAD` commit author
+  into the workspace's local git config. If the checkout's history has
+  no author (rare — a shallow or sanitized history), set one on that
+  checkout before adding it, so there is something to copy (see the
+  design's follow-up for the full story):
   ```powershell
-  wsl -d willie --user willie -- git config --global user.email "you@example.com"
-  wsl -d willie --user willie -- git config --global user.name "Your Name"
+  git config user.email "you@example.com"
+  git config user.name "Your Name"
   ```
 
 Placeholders used below: `<root>` is that folder; `<slug>` is the
