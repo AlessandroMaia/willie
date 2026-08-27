@@ -153,7 +153,7 @@ impl Runner {
         let job = Job {
             id,
             kind,
-            project_id,
+            project_id: Some(project_id),
             state: JobState::Running,
             started_at: started_at.clone(),
             finished_at: None,
@@ -199,7 +199,7 @@ impl Runner {
             let done = Job {
                 id,
                 kind,
-                project_id,
+                project_id: Some(project_id),
                 state: final_state,
                 started_at,
                 finished_at: Some(clock()),

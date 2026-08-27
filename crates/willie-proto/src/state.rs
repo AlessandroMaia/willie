@@ -1,7 +1,7 @@
 //! Snapshot and event types shared by every client.
 
 use serde::{Deserialize, Serialize};
-use willie_core::{id::ProjectId, project::Project};
+use willie_core::{id::ProjectId, project::Project, session::Session};
 
 use crate::job::Job;
 
@@ -15,6 +15,8 @@ pub struct Snapshot {
     pub seq: u64,
     pub projects: Vec<Project>,
     pub jobs: Vec<Job>,
+    #[serde(default)]
+    pub sessions: Vec<Session>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +32,7 @@ pub enum EventKind {
     ProjectChanged { project: Project },
     ProjectRemoved { id: ProjectId },
     JobChanged { job: Job },
+    SessionChanged { session: Session },
 }
 
 #[cfg(test)]
@@ -67,7 +70,7 @@ mod tests {
             let job = Job {
                 id: JobId::new(),
                 kind: JobKind::Add,
-                project_id: ProjectId::new(),
+                project_id: Some(ProjectId::new()),
                 state: st.clone(),
                 started_at: "t".into(),
                 finished_at: None,
@@ -78,5 +81,37 @@ mod tests {
                     .unwrap();
             assert_eq!(job, back);
         }
+    }
+
+    fn sample_session() -> Session {
+        use willie_core::session::SessionState;
+        Session {
+            id: willie_core::id::SessionId::new(),
+            project_id: ProjectId::new(),
+            harness: "claude-code".into(),
+            workspace: "/home/willie/projects/x".into(),
+            state: SessionState::Running,
+            created_at: "1".into(),
+            started_at: Some("1".into()),
+            finished_at: None,
+            pid: Some(4),
+            clients: 1,
+        }
+    }
+
+    #[test]
+    fn a_snapshot_without_sessions_still_parses_and_session_events_tag() {
+        let v = serde_json::json!({ "seq": 1, "projects": [], "jobs": [] });
+        let snap: Snapshot = serde_json::from_value(v).unwrap();
+        assert!(snap.sessions.is_empty());
+        let ev = Event {
+            seq: 2,
+            kind: EventKind::SessionChanged {
+                session: sample_session(),
+            },
+        };
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["kind"], "session_changed");
+        assert_eq!(v["session"]["state"]["state"], "running");
     }
 }

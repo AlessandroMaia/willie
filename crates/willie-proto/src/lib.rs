@@ -12,7 +12,10 @@ pub mod daemon;
 pub mod job;
 pub mod project;
 pub mod rpc;
+pub mod session;
 pub mod state;
+pub mod supervisor;
+pub mod tool;
 
 pub use daemon::{Hello, HelloReply};
 pub use rpc::RpcError;

@@ -25,7 +25,8 @@ export type JobKind =
   | "remove"
   | "sync_to_windows"
   | "update_from_windows"
-  | "relocate";
+  | "relocate"
+  | "install_harness";
 export type JobState =
   | { state: "running" }
   | { state: "done" }
@@ -33,7 +34,8 @@ export type JobState =
 export interface Job {
   id: string;
   kind: JobKind;
-  project_id: string;
+  /* Absent for tool jobs (Rust omits a None). */
+  project_id?: string;
   state: JobState;
   started_at: string;
   /* Rust omits this field when `None` (serde skip_serializing_if). */

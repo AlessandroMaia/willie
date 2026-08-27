@@ -45,6 +45,9 @@ impl State {
             seq: self.seq,
             projects: self.projects.values().cloned().collect(),
             jobs: self.jobs.values().cloned().collect(),
+            // The daemon does not track sessions yet; a later task adds
+            // the field to `State` and populates this from it.
+            sessions: Vec::new(),
         }
     }
 
