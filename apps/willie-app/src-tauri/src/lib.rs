@@ -1,17 +1,26 @@
 //! Tauri application shell.
 //!
 //! Commands are thin: lock the engine, call one method, emit the fresh
-//! status. The UI never computes truth; it renders `EngineStatus`.
+//! status. The UI never computes truth; it renders `EngineStatus` for
+//! the engine/daemon lifecycle and the `daemon://event` stream (see
+//! `events`) for project and job state.
 
+mod events;
 mod state;
 
 use std::path::PathBuf;
 
 use tauri::{AppHandle, Emitter, Manager, State};
+use willie_core::id::{JobId, ProjectId};
+use willie_core::project::Project;
+use willie_engine::discover::Candidate;
 use willie_engine::error::EngineError;
 use willie_engine::{Engine, EngineStatus, Problem};
 use willie_proto::daemon::DoctorReport;
+use willie_proto::project::{AddResult, JobRef, ProjectList};
+use willie_proto::state::Snapshot;
 
+use crate::events::EventPump;
 use crate::state::{EngineState, image_candidates, workspace_root};
 
 const STATUS_EVENT: &str = "engine://status";
@@ -99,11 +108,184 @@ fn engine_doctor(
     outcome.0
 }
 
+/// A read-only engine call that never touches the daemon (host-side
+/// filesystem work only): lock, call, flatten the `EngineError`. No
+/// status to emit, no event pump to establish.
+fn query<T>(
+    state: &State<'_, EngineState>,
+    op: impl FnOnce(&mut Engine) -> Result<T, EngineError>,
+) -> Result<T, Problem> {
+    with_engine(state, op)?.map_err(|e| Problem::from(&e))
+}
+
+/// Every project and job command goes through here: it starts the daemon
+/// on demand (`Engine::daemon_call`, inside `op`), so the fresh
+/// `engine://status` is always worth re-emitting, and the event pump
+/// needs a chance to (re)attach to whatever `RpcClient` the daemon start
+/// just created. Project and job truth itself is not returned here — it
+/// flows to the webview only through `daemon://event` — so the command's
+/// own result is just the raw RPC reply.
+fn daemon_command<T>(
+    app: &AppHandle,
+    state: &State<'_, EngineState>,
+    pump: &State<'_, EventPump>,
+    op: impl FnOnce(&mut Engine) -> Result<T, EngineError>,
+) -> Result<T, Problem> {
+    let outcome = with_engine(state, |engine| {
+        let result = op(engine).map_err(|e| Problem::from(&e));
+        (result, engine.status())
+    })?;
+    emit_status(app, &outcome.1);
+    pump.ensure(app, state);
+    outcome.0
+}
+
+#[tauri::command(async)]
+fn project_list(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+) -> Result<ProjectList, Problem> {
+    daemon_command(&app, &state, &pump, Engine::project_list)
+}
+
+#[tauri::command(async)]
+fn project_add(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    windows_path: String,
+    name: Option<String>,
+) -> Result<AddResult, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.project_add(&windows_path, name)
+    })
+}
+
+#[tauri::command(async)]
+fn project_remove(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: ProjectId,
+    delete_workspace: bool,
+    force: bool,
+) -> Result<JobRef, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.project_remove(id, delete_workspace, force)
+    })
+}
+
+#[tauri::command(async)]
+fn project_sync_to_windows(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: ProjectId,
+) -> Result<JobRef, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.project_sync_to_windows(id)
+    })
+}
+
+#[tauri::command(async)]
+fn project_update_from_windows(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: ProjectId,
+) -> Result<JobRef, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.project_update_from_windows(id)
+    })
+}
+
+#[tauri::command(async)]
+fn project_relocate(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: ProjectId,
+    windows_path: String,
+) -> Result<JobRef, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.project_relocate(id, windows_path)
+    })
+}
+
+#[tauri::command(async)]
+fn project_rename(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: ProjectId,
+    name: String,
+) -> Result<Project, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.project_rename(id, name)
+    })
+}
+
+#[tauri::command(async)]
+fn job_cancel(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: JobId,
+) -> Result<(), Problem> {
+    daemon_command(&app, &state, &pump, |engine| engine.job_cancel(id))
+}
+
+#[tauri::command(async)]
+fn state_snapshot(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+) -> Result<Snapshot, Problem> {
+    daemon_command(&app, &state, &pump, Engine::state_snapshot)
+}
+
+#[tauri::command(async)]
+fn projects_roots(
+    state: State<'_, EngineState>,
+) -> Result<Vec<String>, Problem> {
+    with_engine(&state, |engine| engine.projects_roots())
+}
+
+#[tauri::command(async)]
+fn set_projects_roots(
+    state: State<'_, EngineState>,
+    roots: Vec<String>,
+) -> Result<(), Problem> {
+    query(&state, |engine| engine.set_projects_roots(roots))
+}
+
+#[tauri::command(async)]
+fn discover_projects(
+    state: State<'_, EngineState>,
+) -> Result<Vec<Candidate>, Problem> {
+    query(&state, |engine| engine.discover_projects())
+}
+
+#[tauri::command(async)]
+fn open_in_explorer(path: String) -> Result<(), Problem> {
+    std::process::Command::new("explorer.exe")
+        .arg(&path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| Problem {
+            code: "explorer_failed".into(),
+            message: e.to_string(),
+            remediation: "open the path manually".into(),
+        })
+}
+
 /// Starts the desktop application. Exits the process on a startup failure
 /// because there is no UI yet to report it.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let result = tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let resource_dir = app.path().resource_dir().ok();
             let env_override =
@@ -112,6 +294,10 @@ pub fn run() {
                 image_candidates(env_override, resource_dir, &workspace_root());
             let engine = Engine::new(candidates);
             app.manage(EngineState(std::sync::Mutex::new(engine)));
+            // No daemon runs yet at startup, so there is nothing to
+            // subscribe to; the pump attaches lazily the first time a
+            // command starts the daemon. See `events`.
+            app.manage(EventPump::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -120,7 +306,20 @@ pub fn run() {
             engine_install_distro,
             engine_start_daemon,
             engine_stop_daemon,
-            engine_doctor
+            engine_doctor,
+            project_list,
+            project_add,
+            project_remove,
+            project_sync_to_windows,
+            project_update_from_windows,
+            project_relocate,
+            project_rename,
+            job_cancel,
+            state_snapshot,
+            projects_roots,
+            set_projects_roots,
+            discover_projects,
+            open_in_explorer
         ])
         .run(tauri::generate_context!());
     if let Err(error) = result {
