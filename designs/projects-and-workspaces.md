@@ -162,7 +162,7 @@ existing classification.
   `project_add`, `project_remove`, `project_sync_to_windows`,
   `project_update_from_windows`, `project_relocate`, `project_rename`,
   `job_cancel`, `state_snapshot`.
-- `engine.toml` appears: `[projects] roots = ["C:\\github\\pessoal"]`
+- `engine.toml` appears: `[projects] roots = ["C:\\path\\to\\repos"]`
   — user-entered, **no default value in the code**. Read and written by
   `config.rs` with `toml`.
 - `discover(roots) -> Vec<Candidate { path, name, registered: bool }>`
@@ -263,8 +263,9 @@ tail), `interrupted`, `cancelled`.
 - Documents in the same commits: `docs/PROTOCOL.md` (namespaces and
   codes), `docs/ARCHITECTURE.md` (§1.2 zone `/home/willie/projects`,
   §3.4 and §5.1 Projects row without `/mnt/c` and `slow_fs`, the F1
-  row of §5.5 split into projects and sessions), `AGENTS.md` (`just test-linux`),
-  `releases/v0.1.0.md`, decision **0013** — sync through git remotes
+  row of §5.5 split into projects and sessions), `AGENTS.md`
+  (`just test-linux`), `releases/v0.1.0.md`, decision **0013** — sync
+  through git remotes
   with `updateInstead` (alternatives rejected: rsync or two-way file
   sync, mounting the workspace back under `C:\`).
 
@@ -273,3 +274,14 @@ tail), `interrupted`, `cancelled`.
 - Concurrency limit of 3 jobs: a guess; revisit with real repositories.
 - Whether *Discover* should also list repositories already registered as
   greyed rows (favoured) or hide them.
+
+## Follow-ups for the next slice
+
+- **Git identity for workspace commits.** The distribution's `willie`
+  user has no git identity, so a commit made in a workspace (by a person
+  in a plain shell, or by the agent) fails with "Please tell me who you
+  are" until `git config --global user.{email,name}` is set by hand. The
+  sessions/sandbox slice should give the workspace an identity — mount the
+  user's Windows `~/.gitconfig` (the `git.identity` capability in
+  ARCHITECTURE §3.3), or provision a default one — so commits work without
+  a manual step. Until then the acceptance checklist sets it by hand.
