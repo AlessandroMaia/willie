@@ -452,8 +452,8 @@ fn run_update(
         return Err(refuse(
             "workspace_diverged",
             "the workspace has commits the Windows checkout does not",
-            "the workspace has commits Windows does not; send them to \
-             Windows first",
+            "the workspace and the Windows checkout have both moved; \
+             reconcile them (rebase or merge in a terminal), then sync",
         ));
     }
     git::run(workspace, &["merge", "--ff-only", &ff_ref])
