@@ -1,10 +1,6 @@
 //! The launch spec and the files that sit beside it. The daemon writes
 //! `spec.json` once; everything else in the directory is the supervisor's.
 
-// The real supervisor entry point calls `load`; until then this file's
-// public surface is exercised only by its own tests.
-#![allow(dead_code)]
-
 use std::{
     fs, io,
     path::{Path, PathBuf},

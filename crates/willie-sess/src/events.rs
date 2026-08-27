@@ -1,14 +1,10 @@
 //! `events.jsonl`: the append-only truth about one session's lifetime.
 //! Only the supervisor writes it; the daemon and the tests read it.
 
-// The real supervisor entry point opens and appends to the log; until
-// then this file's public surface is exercised only by its own tests.
-#![allow(dead_code)]
-
 use std::{
     fs::{File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
-    path::{Path, PathBuf},
+    path::Path,
     sync::{Mutex, MutexGuard, PoisonError},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -34,7 +30,6 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 #[derive(Debug)]
 pub struct EventLog {
     file: Mutex<File>,
-    path: PathBuf,
     clock: fn() -> String,
 }
 
@@ -52,14 +47,8 @@ impl EventLog {
         let file = options.open(path)?;
         Ok(Self {
             file: Mutex::new(file),
-            path: path.to_path_buf(),
             clock,
         })
-    }
-
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
     }
 
     /// Append one event and return it, stamped, for live fan-out. A write
@@ -94,6 +83,11 @@ fn libc_o_cloexec() -> i32 {
 
 /// Every parseable line, in order. Lines that do not parse are skipped:
 /// a torn last line from a killed supervisor must not hide the rest.
+///
+/// The read side of the log: the supervisor only appends, so today the
+/// round-trip tests are the only readers. Kept as the log's reader for a
+/// daemon that re-adopts a running session.
+#[allow(dead_code)]
 pub fn read_all(path: &Path) -> io::Result<Vec<SessionEvent>> {
     let reader = BufReader::new(File::open(path)?);
     let mut out = Vec::new();

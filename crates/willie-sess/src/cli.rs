@@ -1,10 +1,6 @@
 //! Command line of the supervisor. Portable on purpose: parsing has no
 //! Linux in it, so its tests run wherever `cargo test` runs.
 
-// The real supervisor entry point calls `parse`; until then this file's
-// public surface is exercised only by its own tests.
-#![allow(dead_code)]
-
 /// What the command line asked for.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
