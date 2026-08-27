@@ -1,9 +1,15 @@
 //! Starts, questions and stops `willied` inside the distribution.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::mpsc::Receiver,
+    time::{Duration, Instant},
+};
 
 use serde::{Deserialize, Serialize};
-use willie_proto::daemon::{DoctorReport, Health, Hello, HelloReply, method};
+use willie_proto::{
+    daemon::{DoctorReport, Health, Hello, HelloReply, method},
+    rpc::Notification,
+};
 
 use crate::{
     error::EngineError, process::WslProcess, rpc::RpcClient, wsl::WslExec,
@@ -44,6 +50,14 @@ impl DaemonSupervisor {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A live subscription to the daemon's notification stream, or `None`
+    /// when no daemon is running. The engine forwards these to the app so
+    /// it can watch the `state.event` stream as it arrives.
+    #[must_use]
+    pub fn subscribe(&self) -> Option<Receiver<Notification>> {
+        self.live.as_ref().map(|(_, client)| client.subscribe())
     }
 
     /// Re-checks the child before answering: a daemon that died behind

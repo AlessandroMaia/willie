@@ -71,6 +71,14 @@ impl LineTransport {
     pub fn close_input(&mut self) {
         self.input = None;
     }
+
+    /// Hands the write half (the peer's stdin) and the read half (the
+    /// decoded line stream) to separate owners. The RPC router blocks a
+    /// thread on the reads while calls keep sending, so a blocking read
+    /// never holds up a send; splitting the two makes that safe.
+    pub(crate) fn split(self) -> (Option<ChildStdin>, Receiver<String>) {
+        (self.input, self.lines)
+    }
 }
 
 /// Forwards one line per read until EOF or a read error.
