@@ -43,7 +43,18 @@ export function Dashboard() {
     };
   }, [refresh]);
 
+  const daemonState = status?.daemon.state ?? null;
+
   useEffect(() => {
+    /* `state_snapshot` starts the daemon on demand when it is not
+     * already running (booting the WSL VM, up to a 60s HELLO
+     * timeout) — opening the Dashboard must never be what boots
+     * Willie, so the count is only fetched once the daemon is
+     * already up, and the effect re-runs as `daemonState` changes. */
+    if (daemonState !== "running") {
+      setProjectCount(null);
+      return;
+    }
     let cancelled = false;
     projects
       .snapshot()
@@ -51,12 +62,12 @@ export function Dashboard() {
         if (!cancelled) setProjectCount(snap.projects.length);
       })
       .catch(() => {
-        /* the daemon may not be running yet; the count is a nicety */
+        /* the count is a nicety; a failed snapshot just hides it */
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [daemonState]);
 
   async function run(name: string, action: () => Promise<unknown>) {
     setBusy(name);
