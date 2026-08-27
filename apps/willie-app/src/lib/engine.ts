@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import type { Candidate, Event, Snapshot } from "./proto";
 
 /* Mirrors of crates/willie-engine (EngineStatus) and willie-proto. */
 export type CheckStatus = "ok" | "fail" | "skip";
@@ -45,6 +46,7 @@ export interface EngineStatus {
 }
 
 const STATUS_EVENT = "engine://status";
+const DAEMON_EVENT = "daemon://event";
 
 export const engine = {
   status: () => invoke<EngineStatus>("engine_status"),
@@ -55,6 +57,32 @@ export const engine = {
   onStatus: (cb: (status: EngineStatus) => void): Promise<UnlistenFn> =>
     listen<EngineStatus>(STATUS_EVENT, (event) => cb(event.payload)),
 };
+
+/* Project and job truth flows to the webview only through
+ * `daemon://event` (see `onDaemonEvent`); every command here returns
+ * just the raw RPC reply, never something the UI should render as
+ * truth on its own. */
+export const projects = {
+  snapshot: () => invoke<Snapshot>("state_snapshot"),
+  add: (windowsPath: string, name?: string) =>
+    invoke("project_add", { windowsPath, name }),
+  remove: (id: string, deleteWorkspace: boolean, force: boolean) =>
+    invoke("project_remove", { id, deleteWorkspace, force }),
+  syncToWindows: (id: string) => invoke("project_sync_to_windows", { id }),
+  updateFromWindows: (id: string) =>
+    invoke("project_update_from_windows", { id }),
+  relocate: (id: string, windowsPath: string) =>
+    invoke("project_relocate", { id, windowsPath }),
+  rename: (id: string, name: string) => invoke("project_rename", { id, name }),
+  cancelJob: (id: string) => invoke("job_cancel", { id }),
+  roots: () => invoke<string[]>("projects_roots"),
+  setRoots: (roots: string[]) => invoke("set_projects_roots", { roots }),
+  discover: () => invoke<Candidate[]>("discover_projects"),
+  openInExplorer: (path: string) => invoke("open_in_explorer", { path }),
+};
+
+export const onDaemonEvent = (cb: (ev: Event) => void): Promise<UnlistenFn> =>
+  listen<Event>(DAEMON_EVENT, (event) => cb(event.payload));
 
 export function isProblem(value: unknown): value is Problem {
   return (

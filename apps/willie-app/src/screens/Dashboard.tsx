@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { EngineStatus, Problem } from "../lib/engine";
-import { engine, isProblem } from "../lib/engine";
+import { engine, isProblem, projects } from "../lib/engine";
 import type { Part } from "../lib/health";
 import { lightFor, overallHealth } from "../lib/health";
 
@@ -15,6 +15,7 @@ export function Dashboard() {
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [projectCount, setProjectCount] = useState<number | null>(null);
 
   const report = useCallback((error: unknown) => {
     setProblem(
@@ -41,6 +42,21 @@ export function Dashboard() {
       unlisten?.();
     };
   }, [refresh]);
+
+  useEffect(() => {
+    let cancelled = false;
+    projects
+      .snapshot()
+      .then((snap) => {
+        if (!cancelled) setProjectCount(snap.projects.length);
+      })
+      .catch(() => {
+        /* the daemon may not be running yet; the count is a nicety */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function run(name: string, action: () => Promise<unknown>) {
     setBusy(name);
@@ -73,6 +89,12 @@ export function Dashboard() {
         />
         <span className="muted">engine v{status.engine_version}</span>
       </header>
+
+      {projectCount !== null && (
+        <p className="muted">
+          {projectCount} project{projectCount === 1 ? "" : "s"}
+        </p>
+      )}
 
       <section className="lights">
         {PARTS.map(({ key, label }) => (
