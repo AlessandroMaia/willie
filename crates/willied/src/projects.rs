@@ -620,8 +620,12 @@ impl Ops {
             return Err(OpError::new(
                 "workspace_exists",
                 format!("workspace `{}` already exists", workspace.display()),
-                "remove the existing workspace directory or rename the \
-                 project",
+                format!(
+                    "delete that directory inside the distribution \
+                     (`rm -rf {}`), moving it aside first if it still \
+                     holds work you want, then add the checkout again",
+                    workspace.display()
+                ),
             ));
         }
         let id = ProjectId::new();
@@ -1006,6 +1010,68 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(err.code, "project_exists");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn re_adding_a_kept_workspace_names_it_and_succeeds_once_deleted() {
+        let root = scratch("add-workspace-exists");
+        let src = root.join("src");
+        init_repo(&src);
+        let (ops, state) = ops(&root);
+        let p = src.to_string_lossy().into_owned();
+        let res = ops
+            .add(AddParams {
+                windows_path: p.clone(),
+                name: None,
+            })
+            .unwrap();
+        wait_job_done(&state);
+        let workspace = PathBuf::from(
+            state.lock().unwrap().projects[&res.project_id]
+                .workspace
+                .clone(),
+        );
+        state.lock().unwrap().jobs.clear();
+        // Remove keeping the workspace: the clone stays on disk, owned
+        // by no registered project.
+        ops.remove(res.project_id, false, false).unwrap();
+        wait_job_done(&state);
+        assert!(workspace.exists());
+
+        let err = ops
+            .add(AddParams {
+                windows_path: p.clone(),
+                name: None,
+            })
+            .unwrap_err();
+        assert_eq!(err.code, "workspace_exists");
+        assert!(
+            err.message.contains(&workspace.display().to_string()),
+            "{}",
+            err.message
+        );
+        assert_eq!(
+            err.remediation,
+            format!(
+                "delete that directory inside the distribution \
+                 (`rm -rf {}`), moving it aside first if it still holds \
+                 work you want, then add the checkout again",
+                workspace.display()
+            )
+        );
+
+        // Follow the remediation: delete the kept directory, then the
+        // same checkout can be added again.
+        fs::remove_dir_all(&workspace).unwrap();
+        state.lock().unwrap().jobs.clear();
+        ops.add(AddParams {
+            windows_path: p,
+            name: None,
+        })
+        .unwrap();
+        let done = wait_job_done(&state);
+        assert!(matches!(done, JobState::Done), "{done:?}");
         let _ = fs::remove_dir_all(&root);
     }
 
