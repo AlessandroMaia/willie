@@ -107,6 +107,12 @@ holds a snapshot at `seq = N` applies every event with `seq > N` in order.
 A single writer owns stdout, so events never interleave and their `seq`
 values always arrive strictly increasing.
 
+There is no replay buffer. If an event's `seq` is not exactly one past
+the client's own — a gap, however it happened — or the daemon restarts
+(a fresh process starts its `seq` back at zero), the client discards
+what it has and calls `state.snapshot` again instead of trying to
+reconcile the hole.
+
 ## Error codes (daemon)
 | Code | Meaning |
 | --- | --- |
@@ -140,6 +146,36 @@ project's `state: failed { code }`. Those codes include `git_failed`,
 `workspace_dirty` and `source_unrelated`. A daemon that stops mid-`add`
 turns the stuck project `failed { code: "interrupted" }` on its next
 start.
+
+## Project problem codes
+
+These are the codes a project-related refusal or job failure carries,
+whether they come back synchronously as the `error` of a `project.*`
+reply or later as a `code` inside a `job_changed`/project `failed`
+event. `path_not_found` is the one exception: the engine checks the
+Windows path exists before it ever calls the daemon, so that refusal
+never reaches `project.*` at all — it is listed here because it belongs
+to the same add/relocate flow as the codes around it.
+
+| Code | When | When not | Remediation |
+| --- | --- | --- | --- |
+| `path_not_windows` | `project.add`/`project.relocate` was given a path that is not on a Windows drive: relative, a UNC share, or anything else `windows_to_drvfs` cannot map | the path is a drive path that does not exist — that is the engine's own `path_not_found`, refused before the daemon is asked | register a path on a Windows drive |
+| `path_not_found` | the engine's pre-flight, before sending `project.add`/`project.relocate`, finds the given Windows path missing or not a directory | the path exists but has no `.git` — that is `not_a_git_repository`, only checked once the path is confirmed to exist | pick a folder that exists on this machine |
+| `not_a_git_repository` | the source (`add`) or the new source (`relocate`) has no `.git` | the folder is a repository, only on a detached HEAD — that is `source_detached_head` | run `git init` and a first commit in the folder, then add again — Willie never creates history for the user |
+| `source_detached_head` | `project.add`'s fast validation reads the source's current branch and finds `HEAD` itself, no branch checked out | the source is on a branch that later turns out to differ from the workspace's — that is `windows_branch_mismatch`, only seen at sync time | check out a branch in the Windows checkout, then add again |
+| `project_exists` | `project.add`'s source matches an already-registered project's source, compared case-insensitively with a trailing separator ignored | the *workspace directory* for the derived slug already exists but no project references it — that is `workspace_exists` | this checkout is already registered; use its existing row instead of adding it again |
+| `workspace_exists` | `project.add` derives a slug for the workspace and a directory of that name already exists under `/home/willie/projects/` | the same checkout is already a registered project — that is `project_exists`, checked first | remove the existing workspace directory, or rename the project before adding |
+| `project_not_found` | any `project.*` method (`remove`, `sync_to_windows`, `update_from_windows`, `relocate`, `rename`) names an id no longer in the daemon's state | the id is valid but a job is already running for it — that is `project_busy` | check the project id and try again; a stale UI should re-snapshot first |
+| `project_busy` | a `project.*` operation that starts a job is called while that project already has one job running — one job per project at a time | the daemon's 3-job pool is full but this project is idle — that job is queued, not refused; `project_busy` is per project | wait for the current job to finish, or cancel it with `job.cancel` |
+| `source_missing` | `sync_to_windows` or `update_from_windows` runs and the project's Windows source directory no longer exists | the source exists but is dirty or on the wrong branch — that is `windows_tree_dirty`/`windows_branch_mismatch`, only checked once the source is confirmed present | relocate the project to a checkout that still exists |
+| `windows_tree_dirty` | `sync_to_windows` runs `git status --porcelain` on the Windows checkout before pushing and finds it non-empty | the tree is clean but on the wrong branch — that is `windows_branch_mismatch`, checked right after | commit or discard the changes in the Windows checkout, then try again — nothing was touched |
+| `windows_branch_mismatch` | `sync_to_windows`'s Windows checkout is clean but checked out on a branch other than the project's recorded one | the checkout is on the right branch but missing entirely — that is `source_missing`, checked first | check out the project's branch in the Windows checkout, then try again |
+| `workspace_diverged` | `update_from_windows` fetches `windows` and the workspace's `HEAD` is not an ancestor of `windows/<branch>` — the workspace holds commits Windows does not | the workspace is simply behind — that fast-forwards silently and the job ends `done` | send the workspace's commits to Windows first, then update again |
+| `workspace_dirty` | `remove` is called with `delete_workspace: true` and `force: false`, and the workspace has uncommitted changes | the same case with `force: true` — the workspace is deleted regardless | commit or discard the workspace's changes, or remove with force (a one-click "Remove anyway" on the row) |
+| `source_unrelated` | `relocate`'s new source is a git repository whose history does not contain the workspace's current `HEAD` commit | the new source is not a git repository at all — that is `not_a_git_repository`, checked first | point relocate at a checkout that shares history with the workspace |
+| `git_failed` | any `git` invocation inside a job exits non-zero, or `git` itself cannot be spawned — the message carries the last 4 KiB of its stderr | the failure is one of the specific refusals above (dirty tree, diverged, unrelated history) — those are refused before the failing command ever runs, with their own code | check git's output and try again |
+| `interrupted` | two cases: (1) the daemon exits (`daemon.shutdown` or stdin EOF) while a job's `git` child is running — the job's own kind decides whether the UI offers a retry; (2) a project is still `preparing` when the daemon starts — always an `add` that never finished | the job was cancelled on purpose through `job.cancel` — that is `cancelled` | case (2), and any `add`: there is no retry — remove the project and add it again; `sync_to_windows`/`update_from_windows` interrupted mid-job can be retried |
+| `cancelled` | `job.cancel` trips a job's cancel flag before or while it runs; the job ends `failed { code: "cancelled" }` | the job had already finished when cancel was called — a no-op, the job keeps its real outcome | start the operation again if it is still needed |
 
 ## Engine problem codes
 

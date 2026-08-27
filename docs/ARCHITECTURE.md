@@ -331,8 +331,7 @@ vector, the seccomp summary and the Landlock rules.
    anything because the agent can write it. Masked inside the sandbox.
 
 Invalid configuration (unknown key, wrong type, an attempt to open at
-layer 3) ⇒ the session does not start, with an actionable error. A project
-under `/mnt/*` gets `slow_fs = true` (badge in the UI).
+layer 3) ⇒ the session does not start, with an actionable error.
 
 ### 3.5 Harness trait and capability matrix
 
@@ -465,7 +464,7 @@ window's percentage.
 | Screen        | Contents                                                                                                   |
 | ------------- | ---------------------------------------------------------------------------------------------------------- |
 | Dashboard     | engine/distro/daemon traffic light with expandable `doctor`; active sessions; usage summary                |
-| Projects      | list with `slow_fs` badge; add via Windows folder picker (→ `/mnt/c/...`); project page: capabilities (with consequences), enabled plugins, applied profile |
+| Projects      | add from a root (discover) or a path; ext4 workspace; send/update to the Windows checkout; relocate a moved source |
 | Sessions      | active/history (state, project, duration); *stop*; *open in Windows Terminal* (re-attach); *explain sandbox* |
 | Tools         | detected in the distribution, version; install/update from the official source with confirmation and log  |
 | Plugins       | enable/disable globally and per project; **Usage** and **Profiles** panels                                 |
@@ -516,7 +515,8 @@ wizard of §2.4. Code signing is out of scope for now.
 | Slice | Delivers                                                        | Components                                                                                           | Spike |
 | ----- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----- |
 | F0    | distribution registered; UI shows health; `doctor` — **delivered 2026-08-26** | `distro/`, engine (import, supervision), `willied` (hello/health/doctor), `willie doctor`, Dashboard, NSIS | S1 |
-| F1    | project in an ext4 workspace (`C:\` warned, 0011) + Claude Code session in WT, no sandbox | `project.*`, `session.*`, `willie-sess` (PTY, socket, events — sandbox off), `willie attach`, WT profile, Projects/Sessions screens | S2, S5 |
+| F1    | projects: register a Windows checkout, ext4 workspace synced through git (0011, 0013) | `project.*`, `job.*`, `state.*`, engine project methods and `engine.toml` roots, Projects screen, `just test-linux` | S5 |
+| F1    | sessions: Claude Code session in WT, no sandbox                | `session.*`, `willie-sess` (PTY, socket, events — sandbox off), `willie attach`, WT profile, Sessions screen | S2 |
 | F2    | proxy/CA propagated                                             | engine (WinHTTP, cert stores), `machine.env`, network `doctor`                                      | S4    |
 | F3    | sandbox with capabilities and layers                            | `willie-sess` (bwrap/seccomp/Landlock, `--inner`), `willie-core` (CapabilitySet, layers), `sandbox explain`, capability UI | S3 |
 | F4    | managed tools                                                   | `tool.*`, manifest, `Harness::detect`, Tools screen                                                  | —     |
