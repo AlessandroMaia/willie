@@ -41,7 +41,7 @@ impl Cancel {
         self.0.load(Ordering::Relaxed)
     }
 
-    fn trip(&self) {
+    pub(crate) fn trip(&self) {
         self.0.store(true, Ordering::Relaxed);
     }
 }

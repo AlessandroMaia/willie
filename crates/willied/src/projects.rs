@@ -179,8 +179,13 @@ fn add_fail(
 /// (the job runner only trips the flag and ends the *job* `cancelled`
 /// before work starts; once work is under way, the project's own state
 /// is this module's responsibility) and returns the matching outcome.
+/// `kind` picks the remediation: an interrupted `add` leaves no
+/// workspace worth resuming and the UI offers no Retry for it, so the
+/// only way forward is to remove the project and add it again; every
+/// other kind is safely re-runnable in place.
 fn check_cancelled(
     cancel: &Cancel,
+    kind: JobKind,
     ctx: &JobCtx<'_>,
     project: &Project,
 ) -> Option<(String, String, String)> {
@@ -188,7 +193,12 @@ fn check_cancelled(
         return None;
     }
     let message = "the job was interrupted before it finished".to_owned();
-    let remediation = "retry the operation".to_owned();
+    let remediation = if kind == JobKind::Add {
+        "remove the project and add it again"
+    } else {
+        "retry the operation"
+    }
+    .to_owned();
     update_project(ctx, project.clone(), |p| {
         p.state = ProjectState::Failed {
             code: "interrupted".to_owned(),
@@ -287,13 +297,13 @@ fn run_add(
     workspace: &Path,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Add, ctx, &project) {
         return Err(err);
     }
     let src = Path::new(src_linux);
     let clone_out =
         git::clone(src, workspace).map_err(|e| add_fail(ctx, &project, e))?;
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Add, ctx, &project) {
         return Err(err);
     }
     git::run(workspace, &["remote", "rename", "origin", "windows"])
@@ -310,7 +320,7 @@ fn run_add(
         git::run(workspace, &["remote", "add", name, url.trim()])
             .map_err(|e| add_fail(ctx, &project, e))?;
     }
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Add, ctx, &project) {
         return Err(err);
     }
     copy_source_identity(src, workspace);
@@ -321,7 +331,7 @@ fn run_add(
         &["config", "receive.denyCurrentBranch", "updateInstead"],
     )
     .map_err(|e| add_fail(ctx, &project, e))?;
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Add, ctx, &project) {
         return Err(err);
     }
     mark_ready(ctx, project);
@@ -340,7 +350,9 @@ fn run_sync(
     branch: &str,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) =
+        check_cancelled(cancel, JobKind::SyncToWindows, ctx, &project)
+    {
         return Err(err);
     }
     let src = Path::new(src_linux);
@@ -374,7 +386,9 @@ fn run_sync(
              then try again",
         ));
     }
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) =
+        check_cancelled(cancel, JobKind::SyncToWindows, ctx, &project)
+    {
         return Err(err);
     }
     git::run(workspace, &["fetch", "windows"]).map_err(git_err_outcome)?;
@@ -393,7 +407,9 @@ fn run_sync(
              again",
         ));
     }
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) =
+        check_cancelled(cancel, JobKind::SyncToWindows, ctx, &project)
+    {
         return Err(err);
     }
     let refspec = format!("HEAD:{branch}");
@@ -410,7 +426,9 @@ fn run_update(
     branch: &str,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) =
+        check_cancelled(cancel, JobKind::UpdateFromWindows, ctx, &project)
+    {
         return Err(err);
     }
     if !Path::new(src_linux).exists() {
@@ -421,7 +439,9 @@ fn run_update(
         ));
     }
     git::run(workspace, &["fetch", "windows"]).map_err(git_err_outcome)?;
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) =
+        check_cancelled(cancel, JobKind::UpdateFromWindows, ctx, &project)
+    {
         return Err(err);
     }
     let ff_ref = format!("windows/{branch}");
@@ -450,7 +470,7 @@ fn run_remove(
     force: bool,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Remove, ctx, &project) {
         return Err(err);
     }
     if delete_workspace && !force {
@@ -464,7 +484,7 @@ fn run_remove(
             ));
         }
     }
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Remove, ctx, &project) {
         return Err(err);
     }
     if delete_workspace {
@@ -493,7 +513,8 @@ fn run_relocate(
     new_windows_path: &str,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Relocate, ctx, &project)
+    {
         return Err(err);
     }
     let new_src = Path::new(new_src_linux);
@@ -508,7 +529,8 @@ fn run_relocate(
              workspace",
         ));
     }
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Relocate, ctx, &project)
+    {
         return Err(err);
     }
     git::run(workspace, &["remote", "set-url", "windows", new_src_linux])
@@ -854,6 +876,23 @@ mod tests {
     fn configure_identity(dir: &Path) {
         git::run(dir, &["config", "user.email", "t@t"]).unwrap();
         git::run(dir, &["config", "user.name", "t"]).unwrap();
+    }
+
+    /// A project fixture for tests that exercise `check_cancelled`
+    /// directly: no job ever runs, so only a valid id and workspace path
+    /// matter.
+    fn stub_project(root: &Path) -> Project {
+        Project {
+            id: ProjectId::new(),
+            name: "p".into(),
+            slug: "p".into(),
+            source: "irrelevant".into(),
+            workspace: root.join("ws").to_string_lossy().into_owned(),
+            branch: "main".into(),
+            state: ProjectState::Preparing,
+            source_present: true,
+            created_at: clock(),
+        }
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -1366,6 +1405,55 @@ mod tests {
         let err = ops.sync_to_windows(res.project_id).unwrap_err();
         assert_eq!(err.code, "project_busy");
         drop(tx);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_interrupted_add_is_told_to_remove_and_add_again() {
+        let root = scratch("cancel-add");
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let state_dir = root.join("state");
+        let ctx = JobCtx {
+            state: &state,
+            state_dir: &state_dir,
+            out: &out,
+        };
+        let project = stub_project(&root);
+        let cancel = Cancel::default();
+        cancel.trip();
+        let (code, message, remediation) =
+            check_cancelled(&cancel, JobKind::Add, &ctx, &project).unwrap();
+        assert_eq!(code, "interrupted");
+        assert_eq!(message, "the job was interrupted before it finished");
+        assert_eq!(remediation, "remove the project and add it again");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_interrupted_re_runnable_job_is_told_to_retry() {
+        let root = scratch("cancel-retry");
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let state_dir = root.join("state");
+        let ctx = JobCtx {
+            state: &state,
+            state_dir: &state_dir,
+            out: &out,
+        };
+        let project = stub_project(&root);
+        let cancel = Cancel::default();
+        cancel.trip();
+        for kind in [
+            JobKind::Remove,
+            JobKind::SyncToWindows,
+            JobKind::UpdateFromWindows,
+            JobKind::Relocate,
+        ] {
+            let (_, _, remediation) =
+                check_cancelled(&cancel, kind, &ctx, &project).unwrap();
+            assert_eq!(remediation, "retry the operation", "{kind:?}");
+        }
         let _ = fs::remove_dir_all(&root);
     }
 }
