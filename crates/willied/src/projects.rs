@@ -418,7 +418,8 @@ fn run_sync(
 }
 
 /// `update_from_windows`'s job: fetch the source and fast-forward only;
-/// a workspace with commits the source lacks is refused, not merged.
+/// a workspace that has genuinely diverged from the source — commits on
+/// both sides — is refused, never merged.
 fn run_update(
     cancel: &Cancel,
     ctx: &JobCtx<'_>,
@@ -446,9 +447,13 @@ fn run_update(
         return Err(err);
     }
     let ff_ref = format!("windows/{branch}");
-    if git::run(workspace, &["merge-base", "--is-ancestor", "HEAD", &ff_ref])
-        .is_err()
-    {
+    // A one-sided history is never a divergence: behind fast-forwards,
+    // ahead or equal is git's own no-op. Both sides have moved only
+    // when neither tip is an ancestor of the other.
+    let is_ancestor = |old: &str, new: &str| {
+        git::run(workspace, &["merge-base", "--is-ancestor", old, new]).is_ok()
+    };
+    if !is_ancestor("HEAD", &ff_ref) && !is_ancestor(&ff_ref, "HEAD") {
         return Err(refuse(
             "workspace_diverged",
             "the workspace has commits the Windows checkout does not",
@@ -1270,6 +1275,38 @@ mod tests {
         assert_eq!(
             fs::read_to_string(Path::new(&ws).join("f.txt")).unwrap(),
             "from windows"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_leaves_a_workspace_that_is_ahead_alone() {
+        let root = scratch("update-ahead");
+        let src = root.join("src");
+        init_repo(&src);
+        let (ops, state) = ops(&root);
+        let res = ops
+            .add(AddParams {
+                windows_path: src.to_string_lossy().into_owned(),
+                name: None,
+            })
+            .unwrap();
+        wait_job_done(&state);
+        let ws = state.lock().unwrap().projects[&res.project_id]
+            .workspace
+            .clone();
+        // Only the workspace moves: a one-sided history, with nothing
+        // for a person to reconcile.
+        configure_identity(Path::new(&ws));
+        fs::write(Path::new(&ws).join("f.txt"), "agent").unwrap();
+        git::run(Path::new(&ws), &["commit", "-am", "agent"]).unwrap();
+        state.lock().unwrap().jobs.clear();
+        ops.update_from_windows(res.project_id).unwrap();
+        let done = wait_job_done(&state);
+        assert!(matches!(done, JobState::Done), "{done:?}");
+        assert_eq!(
+            fs::read_to_string(Path::new(&ws).join("f.txt")).unwrap(),
+            "agent"
         );
         let _ = fs::remove_dir_all(&root);
     }
