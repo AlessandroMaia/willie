@@ -819,27 +819,31 @@ impl Ops {
     /// happen while the state mutex is held, or every other request
     /// thread stalls behind it. The lock is re-acquired only to apply
     /// the computed flags; a project removed in between is simply not
-    /// updated.
+    /// updated, and a project whose source changed in between (a
+    /// concurrent relocate) is skipped the same way, since the flag
+    /// was computed for a path it no longer has.
     pub fn refresh_source_present(&self) {
-        let sources: Vec<(ProjectId, Option<String>)> = {
+        let sources: Vec<(ProjectId, String)> = {
             let state = lock(&self.state);
             state
                 .projects
                 .iter()
-                .map(|(id, p)| (*id, source_to_linux(&p.source)))
+                .map(|(id, p)| (*id, p.source.clone()))
                 .collect()
         };
-        let presence: Vec<(ProjectId, bool)> = sources
+        let presence: Vec<(ProjectId, String, bool)> = sources
             .into_iter()
-            .map(|(id, linux)| {
-                let present =
-                    linux.is_some_and(|linux| git::is_repo(Path::new(&linux)));
-                (id, present)
+            .map(|(id, source)| {
+                let present = source_to_linux(&source)
+                    .is_some_and(|linux| git::is_repo(Path::new(&linux)));
+                (id, source, present)
             })
             .collect();
         let mut state = lock(&self.state);
-        for (id, present) in presence {
-            if let Some(project) = state.projects.get_mut(&id) {
+        for (id, source, present) in presence {
+            if let Some(project) = state.projects.get_mut(&id)
+                && project.source == source
+            {
                 project.source_present = present;
             }
         }
