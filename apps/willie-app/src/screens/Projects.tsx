@@ -65,7 +65,15 @@ function StateChip({ project, job, onRetry }: StateChipProps) {
     );
   }
   if (job && job.state.state === "failed") {
-    const canRetry = RETRYABLE_KINDS.includes(job.kind);
+    /* `workspace_dirty` only ever arrives this way: `project_remove`
+     * resolves the instant the job is queued, so the dirty-workspace
+     * refusal is never a promise rejection the confirm dialog can
+     * catch — it is a `job_changed` event, exactly like any other job
+     * outcome. The one-click "Remove anyway" re-submits with `force`,
+     * the same safe-resubmit shape as a plain retry. */
+    const forceRemove =
+      job.kind === "remove" && job.state.code === "workspace_dirty";
+    const canRetry = forceRemove || RETRYABLE_KINDS.includes(job.kind);
     return (
       <div className="chip chip-failed">
         <code>{job.state.code}</code>
@@ -75,7 +83,7 @@ function StateChip({ project, job, onRetry }: StateChipProps) {
         )}
         {canRetry && (
           <button type="button" onClick={() => onRetry(job)}>
-            Retry
+            {forceRemove ? "Remove anyway" : "Retry"}
           </button>
         )}
       </div>
@@ -108,11 +116,25 @@ export function Projects() {
   const [editingName, setEditingName] = useState("");
   const [removing, setRemoving] = useState<Project | null>(null);
   const [deleteWorkspace, setDeleteWorkspace] = useState(true);
-  const [forceRemove, setForceRemove] = useState(false);
   const [removeProblem, setRemoveProblem] = useState<Problem | null>(null);
+  /* The `deleteWorkspace` choice a remove submission used, remembered
+   * per project so a later one-click "force" retry (from a
+   * `workspace_dirty` job failure, surfaced only through
+   * `daemon://event` — see `StateChip`) resubmits with the same
+   * choice instead of asking the user again. */
+  const [removeAttempts, setRemoveAttempts] = useState<Map<string, boolean>>(
+    new Map(),
+  );
   const [relocating, setRelocating] = useState<Project | null>(null);
   const [relocatePath, setRelocatePath] = useState("");
   const [relocateProblem, setRelocateProblem] = useState<Problem | null>(null);
+  /* Synchronous RPC-level rejects that belong to one project (a job
+   * already running, a cancel or retry that failed) — shown on that
+   * project's row, never in the page-level banner below, which is
+   * reserved for genuinely global actions (roots, discover, add). */
+  const [rowProblems, setRowProblems] = useState<Map<string, Problem>>(
+    new Map(),
+  );
 
   const loadSnapshot = useCallback(() => {
     projectsApi
@@ -173,6 +195,36 @@ export function Projects() {
       return true;
     } catch (error) {
       setProblem(asProblem(error));
+      return false;
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function setRowProblem(projectId: string, problem: Problem | null) {
+    setRowProblems((prev) => {
+      const next = new Map(prev);
+      if (problem) next.set(projectId, problem);
+      else next.delete(projectId);
+      return next;
+    });
+  }
+
+  /* Same shape as `run`, but a synchronous reject lands on the project's
+   * own row instead of the page banner — the failure belongs to one
+   * project, so a toast with no project name is the wrong place for it. */
+  async function runRow(
+    projectId: string,
+    busyKey: string,
+    action: () => Promise<unknown>,
+  ): Promise<boolean> {
+    setBusyId(busyKey);
+    setRowProblem(projectId, null);
+    try {
+      await action();
+      return true;
+    } catch (error) {
+      setRowProblem(projectId, asProblem(error));
       return false;
     } finally {
       setBusyId(null);
@@ -279,27 +331,48 @@ export function Projects() {
       setEditingId(null);
       return;
     }
-    const ok = await run(project.id, () =>
+    const ok = await runRow(project.id, project.id, () =>
       projectsApi.rename(project.id, name),
     );
     if (ok) setEditingId(null);
   }
 
   function syncToWindows(project: Project) {
-    run(project.id, () => projectsApi.syncToWindows(project.id));
+    runRow(project.id, project.id, () => projectsApi.syncToWindows(project.id));
   }
 
   function updateFromWindows(project: Project) {
-    run(project.id, () => projectsApi.updateFromWindows(project.id));
+    runRow(project.id, project.id, () =>
+      projectsApi.updateFromWindows(project.id),
+    );
   }
 
   function cancelJobFor(job: Job) {
-    run(job.id, () => projectsApi.cancelJob(job.id));
+    runRow(job.project_id, job.id, () => projectsApi.cancelJob(job.id));
+  }
+
+  /* A job outcome the daemon reports asynchronously (`workspace_dirty`
+   * on `remove`) resubmits with `force`, using the `deleteWorkspace`
+   * choice remembered from the submission that failed. Everything else
+   * retryable just re-runs the same call with the project id. */
+  function forceRemoveJob(job: Job) {
+    const keepWorkspace = removeAttempts.get(job.project_id) ?? true;
+    runRow(job.project_id, job.project_id, () =>
+      projectsApi.remove(job.project_id, keepWorkspace, true),
+    );
   }
 
   function retry(job: Job) {
+    if (
+      job.kind === "remove" &&
+      job.state.state === "failed" &&
+      job.state.code === "workspace_dirty"
+    ) {
+      forceRemoveJob(job);
+      return;
+    }
     const fn = retryFn(job);
-    if (fn) run(job.project_id, fn);
+    if (fn) runRow(job.project_id, job.project_id, fn);
   }
 
   function copyPath(path: string) {
@@ -308,32 +381,42 @@ export function Projects() {
     });
   }
 
-  function openInExplorer(path: string) {
+  function openInExplorer(project: Project, path: string) {
     projectsApi
       .openInExplorer(path)
-      .catch((error: unknown) => setProblem(asProblem(error)));
+      .catch((error: unknown) => setRowProblem(project.id, asProblem(error)));
   }
 
   function openRemoveDialog(project: Project) {
     setRemoving(project);
     setDeleteWorkspace(true);
-    setForceRemove(false);
     setRemoveProblem(null);
   }
 
   function closeRemoveDialog() {
     setRemoving(null);
     setRemoveProblem(null);
-    setForceRemove(false);
   }
 
+  /* Submits the job and, on synchronous acceptance, closes the dialog
+   * immediately — `project_remove` resolves as soon as the job is
+   * queued, well before the daemon has actually looked at the
+   * workspace. A `workspace_dirty` refusal is not a rejection this
+   * `catch` will ever see: it lands later as a `job_changed` event and
+   * is surfaced on the project's row (see `StateChip` and
+   * `forceRemoveJob`), not here. Only a fast validation — the project
+   * not existing, or a job already running for it — rejects
+   * synchronously and keeps the dialog open to show it. */
   async function confirmRemove() {
     if (!removing) return;
+    const project = removing;
     setRemoveProblem(null);
     try {
-      await projectsApi.remove(removing.id, deleteWorkspace, forceRemove);
+      await projectsApi.remove(project.id, deleteWorkspace, false);
+      setRemoveAttempts((prev) =>
+        new Map(prev).set(project.id, deleteWorkspace),
+      );
       setRemoving(null);
-      setForceRemove(false);
     } catch (error) {
       setRemoveProblem(asProblem(error));
     }
@@ -355,6 +438,18 @@ export function Projects() {
     if (typeof picked === "string") setRelocatePath(picked);
   }
 
+  /* Same synchronous/asynchronous split as `confirmRemove`:
+   * `path_not_windows` and `not_a_git_repository` are fast validations
+   * `project_relocate` rejects with before a job ever starts, so they
+   * belong here, in the still-open dialog. `source_unrelated` is only
+   * decided once the job diffs histories, so it is never a rejection
+   * this `catch` sees — closing the dialog on synchronous acceptance
+   * does not mean the relocate succeeded. That later `job_changed`
+   * failure is picked up by `latestJobFor`/`StateChip` on the row like
+   * any other job outcome; `source_present` stays false (relocate only
+   * updates it on success), so the row's "Relocate" badge is still
+   * there for the user to try again — no separate one-click retry is
+   * safe here since the job carries no memory of the path it tried. */
   async function confirmRelocate() {
     if (!relocating) return;
     const path = relocatePath.trim();
@@ -490,6 +585,7 @@ export function Projects() {
             const isBusy = busyId === project.id || busyId === job?.id;
             const jobRunning = job?.state.state === "running";
             const path = wslPathFor(project.slug);
+            const rowProblem = rowProblems.get(project.id) ?? null;
             return (
               <div key={project.id} className="project-row">
                 <div className="project-row-main">
@@ -528,7 +624,10 @@ export function Projects() {
                     <button type="button" onClick={() => copyPath(path)}>
                       Copy
                     </button>
-                    <button type="button" onClick={() => openInExplorer(path)}>
+                    <button
+                      type="button"
+                      onClick={() => openInExplorer(project, path)}
+                    >
                       Open in Explorer
                     </button>
                   </div>
@@ -545,6 +644,15 @@ export function Projects() {
                     </div>
                   )}
                 </div>
+
+                {rowProblem && (
+                  <div className="problem" role="alert">
+                    <strong>{rowProblem.code}</strong> — {rowProblem.message}
+                    {rowProblem.remediation && (
+                      <div className="muted">→ {rowProblem.remediation}</div>
+                    )}
+                  </div>
+                )}
 
                 <div className="actions">
                   <button
@@ -604,21 +712,14 @@ export function Projects() {
                 )}
               </div>
             )}
-            {removeProblem?.code === "workspace_dirty" && (
-              <label>
-                <input
-                  type="checkbox"
-                  checked={forceRemove}
-                  onChange={(e) => setForceRemove(e.target.checked)}
-                />
-                Force (discard uncommitted changes)
-              </label>
-            )}
+            <p className="muted">
+              A workspace with uncommitted changes is refused; if that happens
+              the project's row will offer a one-click "Remove anyway" once the
+              daemon reports it.
+            </p>
             <div className="actions">
               <button type="button" onClick={confirmRemove}>
-                {removeProblem?.code === "workspace_dirty"
-                  ? "Remove anyway"
-                  : "Remove"}
+                Remove
               </button>
               <button type="button" onClick={closeRemoveDialog}>
                 Cancel
