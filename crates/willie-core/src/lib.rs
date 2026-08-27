@@ -7,6 +7,7 @@
 pub mod id;
 pub mod paths;
 pub mod project;
+pub mod session;
 
 /// Version of the Willie workspace this crate was built from.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
