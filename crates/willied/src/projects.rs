@@ -503,7 +503,7 @@ fn run_remove(
             )
         })?;
     }
-    let _ = store::delete(ctx.state_dir, &project.id);
+    store::delete_or_log(ctx.state_dir, &project);
     state::emit(ctx.state, ctx.out, |s| s.remove_project(&project.id));
     Ok(String::new())
 }

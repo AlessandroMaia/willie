@@ -72,6 +72,19 @@ pub fn delete(state_dir: &Path, id: &ProjectId) -> io::Result<()> {
     }
 }
 
+/// Forgets `p`'s file, logging an unlink failure to stderr instead of
+/// discarding it. The removal stands in memory either way, but a file
+/// left behind resurrects the project on the next daemon start, so the
+/// failure has to be visible somewhere.
+pub(crate) fn delete_or_log(state_dir: &Path, p: &Project) {
+    if let Err(e) = delete(state_dir, &p.id) {
+        eprintln!(
+            "willied: could not forget project {} ({}): {}",
+            p.id, p.slug, e
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
