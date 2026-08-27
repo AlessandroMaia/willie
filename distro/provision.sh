@@ -11,6 +11,10 @@ apt-get install -y -qq --no-install-recommends \
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 
+# The image ships only the C.UTF-8 locale; make it the default so tools
+# that emit UTF-8 (the harness, git) do not fall back to ASCII.
+printf 'LANG=C.UTF-8\n' > /etc/default/locale
+
 if ! id -u willie >/dev/null 2>&1; then
     useradd --uid 1000 --user-group --create-home --shell /bin/bash willie
 fi
@@ -19,6 +23,7 @@ chmod 0440 /etc/sudoers.d/willie
 
 install -d -m 0755 /opt/willie/bin /opt/willie/libexec /etc/willie
 install -d -o willie -g willie -m 0750 /var/lib/willie
+install -d -o willie -g willie -m 0700 /home/willie/projects
 install -m 0644 "$CONF_DIR/wsl.conf" /etc/wsl.conf
 install -m 0644 "$CONF_DIR/wsl-distribution.conf" /etc/wsl-distribution.conf
 install -m 0755 "$CONF_DIR/oobe.sh" /opt/willie/libexec/oobe.sh
@@ -35,7 +40,7 @@ install -d -o willie -g willie -m 0700 \
     "$STATE" \
     "$STATE/dot-claude"
 if [ ! -f "$STATE/claude.json" ]; then
-    : > "$STATE/claude.json"
+    printf '{}\n' > "$STATE/claude.json"
     chown willie:willie "$STATE/claude.json"
 fi
 chmod 0600 "$STATE/claude.json"

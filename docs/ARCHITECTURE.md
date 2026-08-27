@@ -73,7 +73,7 @@ State in ext4 (never under `/mnt/*`):
 | ------------ | ---------------------------------------------------------------------------------------------- | --------------------------- | ---------------------------- |
 | System       | base packages · `/opt/willie/bin/{willied,willie,willie-sess}` · `/etc/wsl.conf` · `/etc/wsl-distribution.conf` · `/etc/willie/` | Willie only (via engine) | nothing — replaced on update |
 | Willie data  | `/var/lib/willie/` → `willie.db`, `sessions/<id>/{spec.json,events.jsonl}`, `projects/<id>.toml`, `profiles/<name>/` (git), `plugins/<id>/` | `willied`, `willie-sess` | binary and image updates |
-| User data    | `/home/willie/` → `.willie/agent-state/<harness>/`, managed tools (`~/.local`, `~/.dotnet`, …), caches | user, tools, harness (via sandbox) | idem              |
+| User data    | `/home/willie/` → `.willie/agent-state/<harness>/`, `projects/<slug>/`, managed tools (`~/.local`, `~/.dotnet`, …), caches | user, tools, harness (via sandbox) | idem              |
 | Ephemeral    | `/run/willie/` (sockets), `/tmp`                                                               | processes                   | distribution restart         |
 
 **Agent-state path convention.** On the host the harness's persistent
