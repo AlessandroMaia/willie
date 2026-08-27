@@ -85,6 +85,8 @@ pub enum EngineError {
     DaemonNotRunning,
     #[error("the `willie` distribution is not registered")]
     DistroNotRegistered,
+    #[error("path `{path}` does not exist")]
+    PathNotFound { path: String },
 }
 
 impl EngineError {
@@ -104,6 +106,7 @@ impl EngineError {
             Self::ImageNotFound => "image_not_found",
             Self::DaemonNotRunning => "daemon_not_running",
             Self::DistroNotRegistered => "distro_not_registered",
+            Self::PathNotFound { .. } => "path_not_found",
         }
     }
 
@@ -159,6 +162,9 @@ impl EngineError {
                 "click Run doctor (it starts the daemon)".into()
             }
             Self::DistroNotRegistered => "click Install distribution".into(),
+            Self::PathNotFound { .. } => {
+                "pick a folder that exists on this machine".into()
+            }
         }
     }
 }
@@ -316,6 +322,9 @@ mod tests {
             EngineError::ImageNotFound,
             EngineError::DaemonNotRunning,
             EngineError::DistroNotRegistered,
+            EngineError::PathNotFound {
+                path: r"C:\does\not\exist".into(),
+            },
         ]
     }
 

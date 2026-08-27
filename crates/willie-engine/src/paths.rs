@@ -13,6 +13,14 @@ pub fn data_dir() -> Option<PathBuf> {
         .map(|base| PathBuf::from(base).join("Willie").join("data"))
 }
 
+/// `engine.toml`, the machine profile and UI preferences file. It sits
+/// next to the distro install directory under [`data_dir`], so removing
+/// the data directory removes both together.
+#[must_use]
+pub fn engine_toml_path() -> Option<PathBuf> {
+    data_dir().map(|d| d.join("engine.toml"))
+}
+
 /// Maps an absolute Windows path with a drive letter to the DrvFs mount
 /// WSL exposes it at (`C:\x\y` → `/mnt/c/x/y`). Returns `None` for
 /// relative paths, UNC paths and `\\wsl.localhost` paths.
