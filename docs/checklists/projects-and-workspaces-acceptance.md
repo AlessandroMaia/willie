@@ -23,7 +23,7 @@ result throughout this walk.
 | # | Step | Expected |
 | - | ---- | -------- |
 | 1 | Open Projects, add a root (a folder holding a couple of repos), click **Discover** → then add one repository | Discover lists the repositories under the root; adding one shows its row `preparing` with a spinner and the clone's log tail, then — a moment later, via the live event — `ready`; `wsl -d willie --user willie -- ls ~/projects/<slug>` shows the clone |
-| 2 | In the workspace, inspect its remotes from a shell | `git -C ~willie/projects/<slug> remote` lists `windows` alongside the checkout's original remotes |
+| 2 | In the workspace, inspect its remotes from a shell | `git -C ~willie/projects/<slug> remote` lists `windows` (plus any non-`origin` remotes the checkout had) |
 | 3 | Make a commit in the workspace (from a shell), click **Send to Windows** | a moment later the row settles back to `ready`; the Windows checkout's working tree shows the change (clean-tree case) |
 | 4 | Dirty the Windows tree, click **Send to Windows** | a moment later the row shows a red `windows_tree_dirty` failure with its remediation; the Windows tree is untouched |
 | 5 | Commit on the Windows side, click **Update from Windows**; then diverge both sides and **Update from Windows** again | the first click fast-forwards the workspace (row settles to `ready`); the second shows `workspace_diverged` on the row |
