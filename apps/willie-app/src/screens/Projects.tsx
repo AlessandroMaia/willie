@@ -6,19 +6,9 @@ import {
   onDaemonEvent,
   projects as projectsApi,
 } from "../lib/engine";
+import { latestJobFor } from "../lib/jobs";
 import type { Candidate, Job, JobKind, Project, Snapshot } from "../lib/proto";
 import { applyEvent, needsResnapshot } from "../lib/state";
-
-/* The UI never computes project or job truth: every value below is
- * derived, read-only, from the snapshot the store hands us. */
-function latestJobFor(jobs: Job[], projectId: string): Job | undefined {
-  let latest: Job | undefined;
-  for (const job of jobs) {
-    if (job.project_id !== projectId) continue;
-    if (!latest || job.started_at > latest.started_at) latest = job;
-  }
-  return latest;
-}
 
 function wslPathFor(slug: string): string {
   return `\\\\wsl.localhost\\willie\\home\\willie\\projects\\${slug}`;
@@ -142,6 +132,18 @@ export function Projects() {
       .then((next) => {
         snapRef.current = next;
         setSnap(next);
+        /* A resnapshot can be the only place a removal is ever
+         * observed (a missed `project_removed` event forces a full
+         * refetch instead of an incremental apply), so prune
+         * `removeAttempts` here too, against the fresh project list. */
+        const liveIds = new Set(next.projects.map((p) => p.id));
+        setRemoveAttempts((prev) => {
+          const stale = [...prev.keys()].filter((id) => !liveIds.has(id));
+          if (stale.length === 0) return prev;
+          const pruned = new Map(prev);
+          for (const id of stale) pruned.delete(id);
+          return pruned;
+        });
       })
       .catch((error: unknown) => setProblem(asProblem(error)));
   }, []);
@@ -174,6 +176,18 @@ export function Projects() {
       const next = applyEvent(current, ev);
       snapRef.current = next;
       setSnap(next);
+      /* `removeAttempts` remembers a choice per project id only for as
+       * long as `forceRemoveJob` might need it; once the project is
+       * gone there is nothing left to force-remove, so drop the entry
+       * here rather than let the map grow for the rest of the session. */
+      if (ev.kind === "project_removed") {
+        setRemoveAttempts((prev) => {
+          if (!prev.has(ev.id)) return prev;
+          const next = new Map(prev);
+          next.delete(ev.id);
+          return next;
+        });
+      }
     }).then((fn) => {
       if (cancelled) fn();
       else unlisten = fn;

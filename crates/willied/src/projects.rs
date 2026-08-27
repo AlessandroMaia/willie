@@ -135,15 +135,16 @@ struct JobCtx<'a> {
 
 /// Persists an edited copy of `project`, records the change in state and
 /// broadcasts the resulting event. Best-effort on disk: a write failure
-/// here is surfaced the next time the project is read, not by panicking a
-/// job thread.
+/// is logged to stderr, not propagated — in-memory state stays
+/// authoritative while the daemon runs, but the failure leaves a stale
+/// copy on disk that a restart will re-read.
 fn update_project(
     ctx: &JobCtx<'_>,
     mut project: Project,
     edit: impl FnOnce(&mut Project),
 ) {
     edit(&mut project);
-    let _ = store::save(ctx.state_dir, &project);
+    store::save_or_log(ctx.state_dir, &project);
     state::emit(ctx.state, ctx.out, |s| s.upsert_project(project));
 }
 
@@ -179,8 +180,13 @@ fn add_fail(
 /// (the job runner only trips the flag and ends the *job* `cancelled`
 /// before work starts; once work is under way, the project's own state
 /// is this module's responsibility) and returns the matching outcome.
+/// `kind` picks the remediation: an interrupted `add` leaves no
+/// workspace worth resuming and the UI offers no Retry for it, so the
+/// only way forward is to remove the project and add it again; every
+/// other kind is safely re-runnable in place.
 fn check_cancelled(
     cancel: &Cancel,
+    kind: JobKind,
     ctx: &JobCtx<'_>,
     project: &Project,
 ) -> Option<(String, String, String)> {
@@ -188,7 +194,12 @@ fn check_cancelled(
         return None;
     }
     let message = "the job was interrupted before it finished".to_owned();
-    let remediation = "retry the operation".to_owned();
+    let remediation = if kind == JobKind::Add {
+        "remove the project and add it again"
+    } else {
+        "retry the operation"
+    }
+    .to_owned();
     update_project(ctx, project.clone(), |p| {
         p.state = ProjectState::Failed {
             code: "interrupted".to_owned(),
@@ -287,13 +298,13 @@ fn run_add(
     workspace: &Path,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Add, ctx, &project) {
         return Err(err);
     }
     let src = Path::new(src_linux);
     let clone_out =
         git::clone(src, workspace).map_err(|e| add_fail(ctx, &project, e))?;
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Add, ctx, &project) {
         return Err(err);
     }
     git::run(workspace, &["remote", "rename", "origin", "windows"])
@@ -310,7 +321,7 @@ fn run_add(
         git::run(workspace, &["remote", "add", name, url.trim()])
             .map_err(|e| add_fail(ctx, &project, e))?;
     }
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Add, ctx, &project) {
         return Err(err);
     }
     copy_source_identity(src, workspace);
@@ -321,7 +332,7 @@ fn run_add(
         &["config", "receive.denyCurrentBranch", "updateInstead"],
     )
     .map_err(|e| add_fail(ctx, &project, e))?;
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Add, ctx, &project) {
         return Err(err);
     }
     mark_ready(ctx, project);
@@ -340,11 +351,13 @@ fn run_sync(
     branch: &str,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) =
+        check_cancelled(cancel, JobKind::SyncToWindows, ctx, &project)
+    {
         return Err(err);
     }
     let src = Path::new(src_linux);
-    if !src.exists() {
+    if !git::is_repo(src) {
         return Err(refuse(
             "source_missing",
             "the Windows checkout is missing",
@@ -374,7 +387,9 @@ fn run_sync(
              then try again",
         ));
     }
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) =
+        check_cancelled(cancel, JobKind::SyncToWindows, ctx, &project)
+    {
         return Err(err);
     }
     git::run(workspace, &["fetch", "windows"]).map_err(git_err_outcome)?;
@@ -393,7 +408,9 @@ fn run_sync(
              again",
         ));
     }
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) =
+        check_cancelled(cancel, JobKind::SyncToWindows, ctx, &project)
+    {
         return Err(err);
     }
     let refspec = format!("HEAD:{branch}");
@@ -401,7 +418,8 @@ fn run_sync(
 }
 
 /// `update_from_windows`'s job: fetch the source and fast-forward only;
-/// a workspace with commits the source lacks is refused, not merged.
+/// a workspace that has genuinely diverged from the source — commits on
+/// both sides — is refused, never merged.
 fn run_update(
     cancel: &Cancel,
     ctx: &JobCtx<'_>,
@@ -410,10 +428,12 @@ fn run_update(
     branch: &str,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) =
+        check_cancelled(cancel, JobKind::UpdateFromWindows, ctx, &project)
+    {
         return Err(err);
     }
-    if !Path::new(src_linux).exists() {
+    if !git::is_repo(Path::new(src_linux)) {
         return Err(refuse(
             "source_missing",
             "the Windows checkout is missing",
@@ -421,18 +441,24 @@ fn run_update(
         ));
     }
     git::run(workspace, &["fetch", "windows"]).map_err(git_err_outcome)?;
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) =
+        check_cancelled(cancel, JobKind::UpdateFromWindows, ctx, &project)
+    {
         return Err(err);
     }
     let ff_ref = format!("windows/{branch}");
-    if git::run(workspace, &["merge-base", "--is-ancestor", "HEAD", &ff_ref])
-        .is_err()
-    {
+    // A one-sided history is never a divergence: behind fast-forwards,
+    // ahead or equal is git's own no-op. Both sides have moved only
+    // when neither tip is an ancestor of the other.
+    let is_ancestor = |old: &str, new: &str| {
+        git::run(workspace, &["merge-base", "--is-ancestor", old, new]).is_ok()
+    };
+    if !is_ancestor("HEAD", &ff_ref) && !is_ancestor(&ff_ref, "HEAD") {
         return Err(refuse(
             "workspace_diverged",
             "the workspace has commits the Windows checkout does not",
-            "the workspace has commits Windows does not; send them to \
-             Windows first",
+            "the workspace and the Windows checkout have both moved; \
+             reconcile them (rebase or merge in a terminal), then sync",
         ));
     }
     git::run(workspace, &["merge", "--ff-only", &ff_ref])
@@ -450,7 +476,7 @@ fn run_remove(
     force: bool,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Remove, ctx, &project) {
         return Err(err);
     }
     if delete_workspace && !force {
@@ -464,7 +490,7 @@ fn run_remove(
             ));
         }
     }
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Remove, ctx, &project) {
         return Err(err);
     }
     if delete_workspace {
@@ -477,7 +503,7 @@ fn run_remove(
             )
         })?;
     }
-    let _ = store::delete(ctx.state_dir, &project.id);
+    store::delete_or_log(ctx.state_dir, &project);
     state::emit(ctx.state, ctx.out, |s| s.remove_project(&project.id));
     Ok(String::new())
 }
@@ -493,7 +519,8 @@ fn run_relocate(
     new_windows_path: &str,
     project: Project,
 ) -> JobOutcome {
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Relocate, ctx, &project)
+    {
         return Err(err);
     }
     let new_src = Path::new(new_src_linux);
@@ -508,7 +535,8 @@ fn run_relocate(
              workspace",
         ));
     }
-    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+    if let Some(err) = check_cancelled(cancel, JobKind::Relocate, ctx, &project)
+    {
         return Err(err);
     }
     git::run(workspace, &["remote", "set-url", "windows", new_src_linux])
@@ -597,8 +625,12 @@ impl Ops {
             return Err(OpError::new(
                 "workspace_exists",
                 format!("workspace `{}` already exists", workspace.display()),
-                "remove the existing workspace directory or rename the \
-                 project",
+                format!(
+                    "delete that directory inside the distribution \
+                     (`rm -rf {}`), moving it aside first if it still \
+                     holds work you want, then add the checkout again",
+                    workspace.display()
+                ),
             ));
         }
         let id = ProjectId::new();
@@ -613,7 +645,7 @@ impl Ops {
             source_present: true,
             created_at: (self.clock)(),
         };
-        let _ = store::save(&self.state_dir, &project);
+        store::save_or_log(&self.state_dir, &project);
         state::emit(&self.state, &self.out, |s| {
             s.upsert_project(project.clone())
         });
@@ -790,11 +822,56 @@ impl Ops {
     /// Recomputes `source_present` for every project from the
     /// filesystem. Called before a snapshot so the flag is always
     /// fresh, never trusted from disk or from a job that ran earlier.
+    /// The three steps stay separate so the invariant is plain to see:
+    /// only the first and the last touch the state lock, and the
+    /// filesystem work between them runs with no lock held.
     pub fn refresh_source_present(&self) {
+        let sources = self.snapshot_sources();
+        let presence = Self::compute_presence(sources);
+        self.apply_presence(presence);
+    }
+
+    /// Every project's id and source path, copied out under the lock
+    /// and nothing more: no `git` or filesystem call may run while the
+    /// state mutex is held.
+    fn snapshot_sources(&self) -> Vec<(ProjectId, String)> {
+        let state = lock(&self.state);
+        state
+            .projects
+            .iter()
+            .map(|(id, p)| (*id, p.source.clone()))
+            .collect()
+    }
+
+    /// Stats each snapshotted source with no lock held: a cold stat on
+    /// a `/mnt/c` source pays a 9p round trip, and every other request
+    /// thread would stall behind it. The path travels alongside the
+    /// flag so the applying step can see which source it describes.
+    fn compute_presence(
+        sources: Vec<(ProjectId, String)>,
+    ) -> Vec<(ProjectId, String, bool)> {
+        sources
+            .into_iter()
+            .map(|(id, source)| {
+                let present = source_to_linux(&source)
+                    .is_some_and(|linux| git::is_repo(Path::new(&linux)));
+                (id, source, present)
+            })
+            .collect()
+    }
+
+    /// Re-acquires the lock to store the computed flags. A project
+    /// removed while they were being computed is simply not updated,
+    /// and one whose source changed (a concurrent relocate) is skipped
+    /// the same way: the flag describes a path it no longer has.
+    fn apply_presence(&self, presence: Vec<(ProjectId, String, bool)>) {
         let mut state = lock(&self.state);
-        for project in state.projects.values_mut() {
-            project.source_present = source_to_linux(&project.source)
-                .is_some_and(|linux| git::is_repo(Path::new(&linux)));
+        for (id, source, present) in presence {
+            if let Some(project) = state.projects.get_mut(&id)
+                && project.source == source
+            {
+                project.source_present = present;
+            }
         }
     }
 }
@@ -854,6 +931,23 @@ mod tests {
     fn configure_identity(dir: &Path) {
         git::run(dir, &["config", "user.email", "t@t"]).unwrap();
         git::run(dir, &["config", "user.name", "t"]).unwrap();
+    }
+
+    /// A project fixture for tests that exercise `check_cancelled`
+    /// directly: no job ever runs, so only a valid id and workspace path
+    /// matter.
+    fn stub_project(root: &Path) -> Project {
+        Project {
+            id: ProjectId::new(),
+            name: "p".into(),
+            slug: "p".into(),
+            source: "irrelevant".into(),
+            workspace: root.join("ws").to_string_lossy().into_owned(),
+            branch: "main".into(),
+            state: ProjectState::Preparing,
+            source_present: true,
+            created_at: clock(),
+        }
     }
 
     fn scratch(name: &str) -> PathBuf {
@@ -938,6 +1032,68 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(err.code, "project_exists");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn re_adding_a_kept_workspace_names_it_and_succeeds_once_deleted() {
+        let root = scratch("add-workspace-exists");
+        let src = root.join("src");
+        init_repo(&src);
+        let (ops, state) = ops(&root);
+        let p = src.to_string_lossy().into_owned();
+        let res = ops
+            .add(AddParams {
+                windows_path: p.clone(),
+                name: None,
+            })
+            .unwrap();
+        wait_job_done(&state);
+        let workspace = PathBuf::from(
+            state.lock().unwrap().projects[&res.project_id]
+                .workspace
+                .clone(),
+        );
+        state.lock().unwrap().jobs.clear();
+        // Remove keeping the workspace: the clone stays on disk, owned
+        // by no registered project.
+        ops.remove(res.project_id, false, false).unwrap();
+        wait_job_done(&state);
+        assert!(workspace.exists());
+
+        let err = ops
+            .add(AddParams {
+                windows_path: p.clone(),
+                name: None,
+            })
+            .unwrap_err();
+        assert_eq!(err.code, "workspace_exists");
+        assert!(
+            err.message.contains(&workspace.display().to_string()),
+            "{}",
+            err.message
+        );
+        assert_eq!(
+            err.remediation,
+            format!(
+                "delete that directory inside the distribution \
+                 (`rm -rf {}`), moving it aside first if it still holds \
+                 work you want, then add the checkout again",
+                workspace.display()
+            )
+        );
+
+        // Follow the remediation: delete the kept directory, then the
+        // same checkout can be added again.
+        fs::remove_dir_all(&workspace).unwrap();
+        state.lock().unwrap().jobs.clear();
+        ops.add(AddParams {
+            windows_path: p,
+            name: None,
+        })
+        .unwrap();
+        let done = wait_job_done(&state);
+        assert!(matches!(done, JobState::Done), "{done:?}");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1083,6 +1239,35 @@ mod tests {
     }
 
     #[test]
+    fn sync_refuses_a_source_that_lost_its_git_directory() {
+        let root = scratch("sync-no-git");
+        let src = root.join("src");
+        init_repo(&src);
+        let (ops, state) = ops(&root);
+        let res = ops
+            .add(AddParams {
+                windows_path: src.to_string_lossy().into_owned(),
+                name: None,
+            })
+            .unwrap();
+        wait_job_done(&state);
+        // The source directory itself survives, but its `.git` is gone:
+        // no longer a repository, though `Path::exists()` still reports
+        // it present.
+        fs::remove_dir_all(src.join(".git")).unwrap();
+        state.lock().unwrap().jobs.clear();
+        ops.sync_to_windows(res.project_id).unwrap();
+        let done = wait_job_done(&state);
+        match done {
+            JobState::Failed { code, .. } => {
+                assert_eq!(code, "source_missing")
+            }
+            other => panic!("{other:?}"),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn update_fast_forwards_the_workspace_from_windows() {
         let root = scratch("update-ok");
         let src = root.join("src");
@@ -1107,6 +1292,38 @@ mod tests {
         assert_eq!(
             fs::read_to_string(Path::new(&ws).join("f.txt")).unwrap(),
             "from windows"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn update_leaves_a_workspace_that_is_ahead_alone() {
+        let root = scratch("update-ahead");
+        let src = root.join("src");
+        init_repo(&src);
+        let (ops, state) = ops(&root);
+        let res = ops
+            .add(AddParams {
+                windows_path: src.to_string_lossy().into_owned(),
+                name: None,
+            })
+            .unwrap();
+        wait_job_done(&state);
+        let ws = state.lock().unwrap().projects[&res.project_id]
+            .workspace
+            .clone();
+        // Only the workspace moves: a one-sided history, with nothing
+        // for a person to reconcile.
+        configure_identity(Path::new(&ws));
+        fs::write(Path::new(&ws).join("f.txt"), "agent").unwrap();
+        git::run(Path::new(&ws), &["commit", "-am", "agent"]).unwrap();
+        state.lock().unwrap().jobs.clear();
+        ops.update_from_windows(res.project_id).unwrap();
+        let done = wait_job_done(&state);
+        assert!(matches!(done, JobState::Done), "{done:?}");
+        assert_eq!(
+            fs::read_to_string(Path::new(&ws).join("f.txt")).unwrap(),
+            "agent"
         );
         let _ = fs::remove_dir_all(&root);
     }
@@ -1338,6 +1555,45 @@ mod tests {
     }
 
     #[test]
+    fn a_project_relocated_mid_refresh_keeps_its_fresh_source_flag() {
+        let root = scratch("refresh-relocate");
+        let src = root.join("src");
+        init_repo(&src);
+        let (ops, state) = ops(&root);
+        let res = ops
+            .add(AddParams {
+                windows_path: src.to_string_lossy().into_owned(),
+                name: None,
+            })
+            .unwrap();
+        wait_job_done(&state);
+        // The relocate target shares history with the workspace, so it
+        // has to be cloned while the original source is still whole.
+        let moved = root.join("moved");
+        git::clone(&src, &moved).unwrap();
+        // A refresh reads the old source and finds it gone.
+        fs::remove_dir_all(src.join(".git")).unwrap();
+        let stale = Ops::compute_presence(ops.snapshot_sources());
+        assert_eq!(stale.len(), 1);
+        assert!(!stale[0].2, "the source lost its .git, so it is absent");
+        // A relocate lands before those flags are applied, pointing the
+        // project at a source that does exist.
+        state.lock().unwrap().jobs.clear();
+        ops.relocate(RelocateParams {
+            id: res.project_id,
+            windows_path: moved.to_string_lossy().into_owned(),
+        })
+        .unwrap();
+        let done = wait_job_done(&state);
+        assert!(matches!(done, JobState::Done), "{done:?}");
+        // The stale `false` describes the path the project no longer
+        // has and must not overwrite the relocate's fresh flag.
+        ops.apply_presence(stale);
+        assert!(state.lock().unwrap().projects[&res.project_id].source_present);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn a_busy_project_refuses_a_second_job() {
         let root = scratch("busy");
         let src = root.join("src");
@@ -1366,6 +1622,55 @@ mod tests {
         let err = ops.sync_to_windows(res.project_id).unwrap_err();
         assert_eq!(err.code, "project_busy");
         drop(tx);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_interrupted_add_is_told_to_remove_and_add_again() {
+        let root = scratch("cancel-add");
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let state_dir = root.join("state");
+        let ctx = JobCtx {
+            state: &state,
+            state_dir: &state_dir,
+            out: &out,
+        };
+        let project = stub_project(&root);
+        let cancel = Cancel::default();
+        cancel.trip();
+        let (code, message, remediation) =
+            check_cancelled(&cancel, JobKind::Add, &ctx, &project).unwrap();
+        assert_eq!(code, "interrupted");
+        assert_eq!(message, "the job was interrupted before it finished");
+        assert_eq!(remediation, "remove the project and add it again");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn an_interrupted_re_runnable_job_is_told_to_retry() {
+        let root = scratch("cancel-retry");
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let state_dir = root.join("state");
+        let ctx = JobCtx {
+            state: &state,
+            state_dir: &state_dir,
+            out: &out,
+        };
+        let project = stub_project(&root);
+        let cancel = Cancel::default();
+        cancel.trip();
+        for kind in [
+            JobKind::Remove,
+            JobKind::SyncToWindows,
+            JobKind::UpdateFromWindows,
+            JobKind::Relocate,
+        ] {
+            let (_, _, remediation) =
+                check_cancelled(&cancel, kind, &ctx, &project).unwrap();
+            assert_eq!(remediation, "retry the operation", "{kind:?}");
+        }
         let _ = fs::remove_dir_all(&root);
     }
 }

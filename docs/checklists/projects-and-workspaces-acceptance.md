@@ -47,9 +47,11 @@ later. Expect a short, visible delay between an action and its result.
 | 6 | Click the project name on its row and rename it | the name changes immediately, with no spinner (Rename is synchronous); the slug and `~/projects/<slug>` are unchanged |
 | 7a | Move `<win>` to a new path `<win2>` in Explorer | the row shows a `source missing` badge (the daemon can no longer find the checkout) |
 | 7b | Click **Relocate** and choose `<win2>`; then, on a *different* project, click **Relocate** and choose an unrelated repository | relocating to `<win2>` clears the badge and step 3 works again; relocating to an unrelated repository shows `source_unrelated` and changes nothing |
-| 8a | Remove a project **without** delete-workspace | the row disappears; `wsl -d willie --user willie -- ls ~/projects/` still lists `<slug>` (the ext4 clone is kept). To re-add the same checkout, delete the kept clone first (`wsl -d willie --user willie -- rm -rf ~/projects/<slug>`) — otherwise **Add** refuses it with `workspace_exists` |
-| 8b | Remove another project **with** delete-workspace, its workspace clean | the row disappears and `~/projects/<slug>` is gone |
-| 8c | Remove a third **with** delete-workspace after leaving an uncommitted change (`wsl -d willie --user willie -- sh -c "echo x >> ~/projects/<slug>/a.txt"`) | the row shows a `workspace_dirty` failure with a one-click **Remove anyway** button; clicking it force-removes and the row disappears |
+| 8a | Remove a project **without** delete-workspace | the row disappears; `wsl -d willie --user willie -- ls ~/projects/` still lists `<slug>` (the ext4 clone is kept) |
+| 8b | Click **Add** for the same checkout again | the page-level banner shows `workspace_exists`, its message naming `/home/willie/projects/<slug>` and its remediation saying to delete that directory (`rm -rf` inside the distribution) and add the checkout again |
+| 8c | Delete the kept clone (`wsl -d willie --user willie -- rm -rf ~/projects/<slug>`), then click **Add** for the same checkout once more | the row shows `preparing`, then `ready` |
+| 8d | Remove another project **with** delete-workspace, its workspace clean | the row disappears and `~/projects/<slug>` is gone |
+| 8e | Remove a third **with** delete-workspace after leaving an uncommitted change (`wsl -d willie --user willie -- sh -c "echo x >> ~/projects/<slug>/a.txt"`) | the row shows a `workspace_dirty` failure with a one-click **Remove anyway** button; clicking it force-removes and the row disappears |
 | 9 | Close and reopen Willie | the project list is restored from the daemon snapshot; no console window appeared at any point |
 | 10 | Add a large repository and close Willie while its clone is still running; reopen Willie | the project shows `failed` with code `interrupted` and the remediation "remove the project and add it again" inline on the row; there is no retry button — recover by clicking **Remove**, then adding it again |
 
