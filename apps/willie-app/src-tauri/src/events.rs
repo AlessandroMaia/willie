@@ -13,11 +13,14 @@
 //! decision — is a pump already looping, and if not, does subscribing
 //! now actually get us one — is [`establish`], a small Tauri-free
 //! function so the race it resolves can be unit-tested without a live
-//! app, engine or daemon. `ensure` only supplies the Tauri-specific
+//! app, engine or daemon. Likewise, the drain-until-the-subscription-ends
+//! loop that resets the flag is [`pump_loop`], also Tauri-free, so tests
+//! exercise the exact reset path production runs rather than a
+//! hand-rolled stand-in. `ensure` only supplies the Tauri-specific
 //! parts: a `subscribe` closure that takes the engine lock just long
 //! enough to ask for a fresh receiver, and a `run` closure
-//! ([`spawn_pump`]) that hands the receiver to a named thread looping on
-//! `recv()` without holding that lock.
+//! ([`spawn_pump`]) that hands the receiver to a named thread running
+//! `pump_loop` without holding that lock.
 
 use std::sync::mpsc::Receiver;
 use std::sync::{
@@ -95,12 +98,31 @@ fn establish<T>(
     }
 }
 
-/// Spawns the named thread that loops on `recv()` without holding the
+/// Drains `rx`, calling `emit` for each item as it arrives, until its
+/// `Sender` is dropped — `recv()` returning `Err`, meaning the
+/// subscription (and with it, almost certainly the daemon) is gone —
+/// then clears `alive` exactly once.
+///
+/// Kept separate from [`spawn_pump`] so this exact reset path, not a
+/// hand-rolled stand-in, is what the tests exercise: a test can call
+/// `pump_loop` directly on a plain `mpsc` channel and assert `alive`
+/// really does flip back to `false` when the sender goes away.
+fn pump_loop<T>(
+    rx: Receiver<T>,
+    alive: Arc<AtomicBool>,
+    mut emit: impl FnMut(T),
+) {
+    for item in rx {
+        emit(item);
+    }
+    alive.store(false, Ordering::SeqCst);
+}
+
+/// Spawns the named thread that runs [`pump_loop`] without holding the
 /// engine lock, forwarding every notification's `params` (the
-/// `willie_proto::state::Event` JSON) as `daemon://event`. When `recv()`
-/// returns `Err` — the subscription, and with it almost certainly the
-/// daemon, is gone — the thread clears `alive` and exits, so the next
-/// `ensure` call re-establishes it.
+/// `willie_proto::state::Event` JSON) as `daemon://event`. When the
+/// subscription ends, `pump_loop` clears `alive` and the thread exits,
+/// so the next `ensure` call re-establishes it.
 ///
 /// A spawn failure is vanishingly unlikely (the host would need to be
 /// out of threads) but is not swallowed silently: it clears `alive`
@@ -117,13 +139,12 @@ fn spawn_pump(
     let spawned = std::thread::Builder::new()
         .name("willie-event-pump".into())
         .spawn(move || {
-            // A closed webview or a serialization hiccup is not the
-            // pump's problem to solve: drop the event and keep looping,
-            // the next one may go through.
-            for notification in rx {
+            pump_loop(rx, for_thread, |notification| {
+                // A closed webview or a serialization hiccup is not the
+                // pump's problem to solve: drop the event and keep
+                // looping, the next one may go through.
                 let _ = app.emit(EVENT, notification.params);
-            }
-            for_thread.store(false, Ordering::SeqCst);
+            });
         });
     if let Err(e) = spawned {
         eprintln!("willie-app: cannot spawn event pump: {e}");
@@ -208,23 +229,23 @@ mod tests {
         assert!(ran.load(Ordering::SeqCst));
     }
 
+    /// Exercises the real reset path, not a stand-in: if the
+    /// `alive.store(false, ..)` line were ever deleted from `pump_loop`,
+    /// `alive` would still read `true` after the sender is dropped and
+    /// the trailing `establish` call below would find the pump "already
+    /// looping" and refuse to re-subscribe, failing the last assertion.
     #[test]
-    fn the_flag_resets_when_the_subscription_ends() {
-        let alive = Arc::new(AtomicBool::new(false));
-        let (tx, rx) = mpsc::channel::<()>();
-        drop(tx); // the subscription is already gone before the pump runs
+    fn pump_loop_resets_alive_when_the_sender_is_dropped() {
+        let alive = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = mpsc::channel::<i32>();
+        tx.send(1).unwrap();
+        tx.send(2).unwrap();
+        drop(tx); // the subscription ends: recv() will return Err next
 
-        establish(
-            &alive,
-            move || Some(rx),
-            |rx, alive| {
-                // Deterministic stand-in for the real pump thread: drain to
-                // `Err` (here, immediately), then clear the flag exactly
-                // like the real loop does when it exits.
-                for _ in rx {}
-                alive.store(false, Ordering::SeqCst);
-            },
-        );
+        let mut collected = Vec::new();
+        pump_loop(rx, alive.clone(), |item| collected.push(item));
+
+        assert_eq!(collected, vec![1, 2]);
         assert!(!alive.load(Ordering::SeqCst));
 
         // A subsequent call must re-establish, not treat the ended
