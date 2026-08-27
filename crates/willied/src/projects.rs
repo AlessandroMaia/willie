@@ -231,6 +231,50 @@ fn not_a_git_repository_err(windows_path: &str) -> OpError {
     )
 }
 
+fn source_no_commits_err() -> OpError {
+    OpError::new(
+        "source_no_commits",
+        "the checkout has no commits yet",
+        "make the first commit in this checkout, then add it again",
+    )
+}
+
+/// Copies the source's `HEAD` commit author into the clone's local git
+/// identity. The `willie` distro user has none of its own, so without
+/// this a commit made in the workspace (by a person or the agent) fails
+/// with "Please tell me who you are"; the source's own author is the
+/// closest thing to a sensible default. Best effort only: the clone and
+/// its remotes are the load-bearing part of `add`, so a failure here is
+/// logged and does not fail the job.
+fn copy_source_identity(src: &Path, workspace: &Path) {
+    let (name, email) = match git::head_author(src) {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!(
+                "willied: could not read the source git identity: {}",
+                e.message
+            );
+            return;
+        }
+    };
+    if !name.is_empty()
+        && let Err(e) = git::run(workspace, &["config", "user.name", &name])
+    {
+        eprintln!(
+            "willied: could not set the workspace user.name: {}",
+            e.message
+        );
+    }
+    if !email.is_empty()
+        && let Err(e) = git::run(workspace, &["config", "user.email", &email])
+    {
+        eprintln!(
+            "willied: could not set the workspace user.email: {}",
+            e.message
+        );
+    }
+}
+
 /// `add`'s job: clone the source into the workspace, rename `origin` to
 /// `windows`, copy the source's other remotes, disable line-ending
 /// translation in the clone and enable `updateInstead` pushes into the
@@ -269,6 +313,7 @@ fn run_add(
     if let Some(err) = check_cancelled(cancel, ctx, &project) {
         return Err(err);
     }
+    copy_source_identity(src, workspace);
     git::run(workspace, &["config", "core.autocrlf", "false"])
         .map_err(|e| add_fail(ctx, &project, e))?;
     git::run(
@@ -283,9 +328,10 @@ fn run_add(
     Ok(clone_out.log)
 }
 
-/// `sync_to_windows`'s job: refuse a missing, dirty or branch-mismatched
-/// Windows checkout without touching it, else push the workspace's
-/// branch into it (accepted by the `updateInstead` config `add` set).
+/// `sync_to_windows`'s job: refuse a missing, dirty, branch-mismatched or
+/// diverged Windows checkout without touching it, else push the
+/// workspace's branch into it (accepted by the `updateInstead` config
+/// `add` set).
 fn run_sync(
     cancel: &Cancel,
     ctx: &JobCtx<'_>,
@@ -326,6 +372,25 @@ fn run_sync(
             ),
             "check out the project's branch in the Windows checkout, \
              then try again",
+        ));
+    }
+    if let Some(err) = check_cancelled(cancel, ctx, &project) {
+        return Err(err);
+    }
+    git::run(workspace, &["fetch", "windows"]).map_err(git_err_outcome)?;
+    // A non-fast-forward push is refused by git either way; checking
+    // first makes the failure a clear `windows_diverged` instead of a
+    // raw rejection, and never leaves a half-attempted push behind.
+    let windows_ref = format!("windows/{branch}");
+    let ahead =
+        git::run(workspace, &["rev-list", "--count", &windows_ref, "^HEAD"])
+            .map_err(git_err_outcome)?;
+    if ahead.trim().parse::<u64>().unwrap_or(0) > 0 {
+        return Err(refuse(
+            "windows_diverged",
+            "the Windows checkout has commits the workspace does not",
+            "click Update from Windows first, then Send to Windows \
+             again",
         ));
     }
     if let Some(err) = check_cancelled(cancel, ctx, &project) {
@@ -500,6 +565,9 @@ impl Ops {
         let src_path = Path::new(&src_linux);
         if !git::is_repo(src_path) {
             return Err(not_a_git_repository_err(&windows_path));
+        }
+        if !git::has_commits(src_path) {
+            return Err(source_no_commits_err());
         }
         let key = source_key(&windows_path);
         {
@@ -779,8 +847,10 @@ mod tests {
         panic!("job never finished");
     }
 
-    /// A fresh clone (e.g. a workspace) carries no `user.*` identity of
-    /// its own; a test that commits into one must set it first.
+    /// Sets a `user.*` identity directly, for a repo `add` never
+    /// touches (e.g. a fresh `git init` used as a relocate source). A
+    /// workspace from `add` already has one, copied from the source's
+    /// `HEAD` author.
     fn configure_identity(dir: &Path) {
         git::run(dir, &["config", "user.email", "t@t"]).unwrap();
         git::run(dir, &["config", "user.name", "t"]).unwrap();
@@ -832,6 +902,23 @@ mod tests {
     }
 
     #[test]
+    fn add_refuses_a_source_with_no_commits() {
+        let root = scratch("add-no-commits");
+        let src = root.join("src");
+        fs::create_dir_all(&src).unwrap();
+        git::run(&src, &["init", "-b", "main"]).unwrap();
+        let (ops, _state) = ops(&root);
+        let err = ops
+            .add(AddParams {
+                windows_path: src.to_string_lossy().into_owned(),
+                name: None,
+            })
+            .unwrap_err();
+        assert_eq!(err.code, "source_no_commits");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn add_refuses_the_same_source_twice() {
         let root = scratch("add-dup");
         let src = root.join("src");
@@ -851,6 +938,33 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(err.code, "project_exists");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn add_copies_the_source_head_authors_identity_into_the_workspace() {
+        let root = scratch("add-identity");
+        let src = root.join("src");
+        init_repo(&src);
+        let (ops, state) = ops(&root);
+        let res = ops
+            .add(AddParams {
+                windows_path: src.to_string_lossy().into_owned(),
+                name: None,
+            })
+            .unwrap();
+        wait_job_done(&state);
+        let ws = state.lock().unwrap().projects[&res.project_id]
+            .workspace
+            .clone();
+        let email =
+            git::run(Path::new(&ws), &["config", "--local", "user.email"])
+                .unwrap();
+        assert_eq!(email.trim(), "t@t");
+        let name =
+            git::run(Path::new(&ws), &["config", "--local", "user.name"])
+                .unwrap();
+        assert_eq!(name.trim(), "t");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -930,6 +1044,40 @@ mod tests {
         assert_eq!(
             fs::read_to_string(src.join("f.txt")).unwrap(),
             "from agent"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sync_refuses_a_diverged_windows_checkout() {
+        let root = scratch("sync-diverged");
+        let src = root.join("src");
+        init_repo(&src);
+        let (ops, state) = ops(&root);
+        let res = ops
+            .add(AddParams {
+                windows_path: src.to_string_lossy().into_owned(),
+                name: None,
+            })
+            .unwrap();
+        wait_job_done(&state);
+        // The Windows checkout gets a commit the workspace never sees.
+        fs::write(src.join("f.txt"), "from windows").unwrap();
+        git::run(&src, &["commit", "-am", "windows"]).unwrap();
+        state.lock().unwrap().jobs.clear();
+        ops.sync_to_windows(res.project_id).unwrap();
+        let done = wait_job_done(&state);
+        match done {
+            JobState::Failed { code, .. } => {
+                assert_eq!(code, "windows_diverged")
+            }
+            other => panic!("{other:?}"),
+        }
+        // The Windows checkout is unchanged: its own commit still there,
+        // no failed/partial push landed on top of it.
+        assert_eq!(
+            fs::read_to_string(src.join("f.txt")).unwrap(),
+            "from windows"
         );
         let _ = fs::remove_dir_all(&root);
     }
