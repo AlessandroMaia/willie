@@ -57,6 +57,7 @@ lint:
 test:
     cargo test --workspace --locked
     pnpm -C {{web}} test
+    cargo xtask test-linux
 
 # Fail if versioned content mentions anything on the local reference denylist.
 [group('quality')]
@@ -82,6 +83,12 @@ dev:
 [group('dev')]
 build-linux:
     cargo xtask build-linux
+
+# Run the Linux crates' tests inside the distribution (opt-in via
+# WILLIE_TEST_DISTRO).
+[group('dev')]
+test-linux:
+    cargo xtask test-linux
 
 # Pin the Debian base root filesystem (writes distro/base.lock).
 [group('dev')]

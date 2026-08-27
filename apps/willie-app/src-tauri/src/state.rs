@@ -3,12 +3,24 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::Mutex,
+    sync::{Mutex, mpsc::Receiver},
 };
 
 use willie_engine::Engine;
+use willie_proto::rpc::Notification;
 
 pub struct EngineState(pub Mutex<Engine>);
+
+impl EngineState {
+    /// Locks the engine only long enough to ask for a fresh receiver on
+    /// its current daemon subscription; `None` when the mutex is
+    /// poisoned or no daemon is currently running. The lock is released
+    /// before the caller ever touches the receiver, so a pump thread
+    /// looping on `recv()` never holds it.
+    pub fn subscribe_events(&self) -> Option<Receiver<Notification>> {
+        self.0.lock().ok()?.subscribe_events()
+    }
+}
 
 pub const IMAGE_FILE: &str = "willie-rootfs.tar.gz";
 

@@ -2,17 +2,38 @@
 //! and the daemon supervisor; every method returns the new status or a
 //! typed error so the UI never has to interpret anything.
 
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::mpsc::Receiver};
 
-use serde::{Deserialize, Serialize};
-use willie_proto::daemon::DoctorReport;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use willie_core::{
+    id::{JobId, ProjectId},
+    project::Project,
+};
+use willie_proto::{
+    daemon::DoctorReport,
+    job::method as job,
+    project::{
+        AddParams, AddResult, IdParams, JobRef, ProjectList, RelocateParams,
+        RemoveParams, RenameParams, method as project,
+    },
+    rpc::Notification,
+    state::{Snapshot, method as state},
+};
 
 use crate::{
+    config::{EngineConfig, Projects},
     daemon::{DaemonState, DaemonSupervisor},
+    discover::{self, Candidate},
     distro::{DistroManager, DistroStatus, locate_image},
-    error::EngineError,
+    error::{EngineError, WslError},
+    paths,
     prereqs::{WslStatus, wsl_status},
 };
+
+/// How deep [`Engine::discover_projects`] walks under each configured
+/// root: enough to find `group/repo` layouts without wandering into
+/// every checkout's own directory tree.
+const DISCOVER_MAX_DEPTH: usize = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Problem {
@@ -127,6 +148,142 @@ impl Engine {
         self.last_doctor = Some(report.clone());
         Ok(report)
     }
+
+    /// Distro pre-flight, then a call the daemon supervisor forwards
+    /// over RPC, starting the daemon on demand. Every project and job
+    /// method is a thin wrapper around this.
+    fn daemon_call<P: Serialize, R: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: P,
+    ) -> Result<R, EngineError> {
+        self.ensure_distro_registered()?;
+        self.daemon.call(method, params)
+    }
+
+    pub fn project_list(&mut self) -> Result<ProjectList, EngineError> {
+        self.daemon_call(project::LIST, serde_json::json!({}))
+    }
+
+    /// Only checks that the Windows path exists and is a directory;
+    /// mapping it into the distro (`/mnt/c/...`) is the daemon's job.
+    pub fn project_add(
+        &mut self,
+        windows_path: &str,
+        name: Option<String>,
+    ) -> Result<AddResult, EngineError> {
+        if !std::path::Path::new(windows_path).is_dir() {
+            return Err(EngineError::PathNotFound {
+                path: windows_path.to_owned(),
+            });
+        }
+        self.daemon_call(
+            project::ADD,
+            AddParams {
+                windows_path: windows_path.to_owned(),
+                name,
+            },
+        )
+    }
+
+    pub fn project_remove(
+        &mut self,
+        id: ProjectId,
+        delete_workspace: bool,
+        force: bool,
+    ) -> Result<JobRef, EngineError> {
+        self.daemon_call(
+            project::REMOVE,
+            RemoveParams {
+                id,
+                delete_workspace,
+                force,
+            },
+        )
+    }
+
+    pub fn project_sync_to_windows(
+        &mut self,
+        id: ProjectId,
+    ) -> Result<JobRef, EngineError> {
+        self.daemon_call(project::SYNC_TO_WINDOWS, IdParams { id })
+    }
+
+    pub fn project_update_from_windows(
+        &mut self,
+        id: ProjectId,
+    ) -> Result<JobRef, EngineError> {
+        self.daemon_call(project::UPDATE_FROM_WINDOWS, IdParams { id })
+    }
+
+    pub fn project_relocate(
+        &mut self,
+        id: ProjectId,
+        windows_path: String,
+    ) -> Result<JobRef, EngineError> {
+        self.daemon_call(project::RELOCATE, RelocateParams { id, windows_path })
+    }
+
+    pub fn project_rename(
+        &mut self,
+        id: ProjectId,
+        name: String,
+    ) -> Result<Project, EngineError> {
+        self.daemon_call(project::RENAME, RenameParams { id, name })
+    }
+
+    pub fn job_cancel(&mut self, id: JobId) -> Result<(), EngineError> {
+        self.daemon_call(job::CANCEL, serde_json::json!({ "id": id }))
+    }
+
+    pub fn state_snapshot(&mut self) -> Result<Snapshot, EngineError> {
+        self.daemon_call(state::SNAPSHOT, serde_json::json!({}))
+    }
+
+    /// Roots configured in `engine.toml`, empty when the file is absent.
+    #[must_use]
+    pub fn projects_roots(&self) -> Vec<String> {
+        paths::engine_toml_path()
+            .map(|p| EngineConfig::load(&p).projects.roots)
+            .unwrap_or_default()
+    }
+
+    /// Persists the discovery roots to `engine.toml`, creating the data
+    /// directory the first time a root is set.
+    pub fn set_projects_roots(
+        &self,
+        roots: Vec<String>,
+    ) -> Result<(), EngineError> {
+        let path =
+            paths::engine_toml_path().ok_or_else(|| WslError::Unparseable {
+                what: "LOCALAPPDATA",
+                text: String::new(),
+            })?;
+        let config = EngineConfig {
+            projects: Projects { roots },
+        };
+        config.save(&path).map_err(|e| EngineError::ConfigWrite {
+            path: path.display().to_string(),
+            message: e.to_string(),
+        })
+    }
+
+    /// Repositories found under the configured roots. Pure filesystem
+    /// work, host-side; the result still needs `project_add` to be
+    /// registered with the daemon.
+    pub fn discover_projects(&self) -> Result<Vec<Candidate>, EngineError> {
+        Ok(discover::discover(
+            &self.projects_roots(),
+            DISCOVER_MAX_DEPTH,
+        ))
+    }
+
+    /// A live subscription to the daemon's notification stream, or
+    /// `None` when no daemon is currently running.
+    #[must_use]
+    pub fn subscribe_events(&self) -> Option<Receiver<Notification>> {
+        self.daemon.subscribe()
+    }
 }
 
 #[cfg(test)]
@@ -162,5 +319,14 @@ mod tests {
         let json = serde_json::to_value(&status).unwrap();
         assert_eq!(json["daemon"]["state"], "stopped");
         assert_eq!(json["wsl"]["minimum"], "2.4.4");
+    }
+
+    #[test]
+    fn project_add_rejects_a_path_that_does_not_exist() {
+        let mut engine = Engine::new(Vec::new());
+        let err = engine
+            .project_add(r"C:\does\not\exist\willie-xyz", None)
+            .unwrap_err();
+        assert_eq!(err.code(), "path_not_found");
     }
 }

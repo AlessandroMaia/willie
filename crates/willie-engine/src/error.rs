@@ -85,6 +85,10 @@ pub enum EngineError {
     DaemonNotRunning,
     #[error("the `willie` distribution is not registered")]
     DistroNotRegistered,
+    #[error("path `{path}` does not exist")]
+    PathNotFound { path: String },
+    #[error("cannot write {path}: {message}")]
+    ConfigWrite { path: String, message: String },
 }
 
 impl EngineError {
@@ -104,6 +108,8 @@ impl EngineError {
             Self::ImageNotFound => "image_not_found",
             Self::DaemonNotRunning => "daemon_not_running",
             Self::DistroNotRegistered => "distro_not_registered",
+            Self::PathNotFound { .. } => "path_not_found",
+            Self::ConfigWrite { .. } => "config_write_failed",
         }
     }
 
@@ -159,6 +165,12 @@ impl EngineError {
                 "click Run doctor (it starts the daemon)".into()
             }
             Self::DistroNotRegistered => "click Install distribution".into(),
+            Self::PathNotFound { .. } => {
+                "pick a folder that exists on this machine".into()
+            }
+            Self::ConfigWrite { .. } => "check that Willie can write to \
+                 %LOCALAPPDATA%\\Willie\\data"
+                .into(),
         }
     }
 }
@@ -316,6 +328,13 @@ mod tests {
             EngineError::ImageNotFound,
             EngineError::DaemonNotRunning,
             EngineError::DistroNotRegistered,
+            EngineError::PathNotFound {
+                path: r"C:\does\not\exist".into(),
+            },
+            EngineError::ConfigWrite {
+                path: r"C:\LOCALAPPDATA\Willie\data\engine.toml".into(),
+                message: "access is denied".into(),
+            },
         ]
     }
 

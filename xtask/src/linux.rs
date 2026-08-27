@@ -53,7 +53,7 @@ pub fn build(root: &Path, args: &[String]) -> TaskResult {
 
 /// The interpreter to hand to `cargo zigbuild`, or `None` when the user
 /// configured one, a `zig` executable is available, or none works.
-fn python_with_ziglang() -> Option<&'static str> {
+pub(crate) fn python_with_ziglang() -> Option<&'static str> {
     if env::var_os("CARGO_ZIGBUILD_PYTHON_PATH").is_some()
         || env::var_os("CARGO_ZIGBUILD_ZIG_PATH").is_some()
         || runs(&["zig", "version"])

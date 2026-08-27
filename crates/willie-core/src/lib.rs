@@ -5,6 +5,8 @@
 //! `willied` / `willie-sess` (Linux side).
 
 pub mod id;
+pub mod paths;
+pub mod project;
 
 /// Version of the Willie workspace this crate was built from.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

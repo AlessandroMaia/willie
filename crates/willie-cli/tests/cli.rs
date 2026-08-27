@@ -11,9 +11,25 @@ use std::process::{Command, Output};
 use willie_proto::daemon::DoctorReport;
 
 fn run(args: &[&str]) -> io::Result<Output> {
-    Command::new(env!("CARGO_BIN_EXE_willie"))
-        .args(args)
-        .output()
+    Command::new(binary_path()).args(args).output()
+}
+
+/// `CARGO_BIN_EXE_willie` is a path Cargo bakes in at compile time. When
+/// the musl test binary is cross-compiled on Windows and then run inside
+/// WSL (`just test-linux`), that compiled-in path is still Windows-style
+/// and does not resolve from the Linux side; translate it to the DrvFs
+/// mount first. The native Windows test never takes this branch, so its
+/// own compiled-in Windows path is used unchanged.
+#[cfg(target_os = "linux")]
+fn binary_path() -> String {
+    let compiled = env!("CARGO_BIN_EXE_willie");
+    willie_core::paths::windows_to_drvfs(compiled)
+        .unwrap_or_else(|| compiled.to_owned())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn binary_path() -> &'static str {
+    env!("CARGO_BIN_EXE_willie")
 }
 
 #[cfg(not(target_os = "linux"))]

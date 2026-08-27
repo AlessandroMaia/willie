@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type { EngineStatus, Problem } from "../lib/engine";
-import { engine, isProblem } from "../lib/engine";
+import { engine, isProblem, projects } from "../lib/engine";
 import type { Part } from "../lib/health";
 import { lightFor, overallHealth } from "../lib/health";
 
@@ -15,6 +15,7 @@ export function Dashboard() {
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [projectCount, setProjectCount] = useState<number | null>(null);
 
   const report = useCallback((error: unknown) => {
     setProblem(
@@ -41,6 +42,32 @@ export function Dashboard() {
       unlisten?.();
     };
   }, [refresh]);
+
+  const daemonState = status?.daemon.state ?? null;
+
+  useEffect(() => {
+    /* `state_snapshot` starts the daemon on demand when it is not
+     * already running (booting the WSL VM, up to a 60s HELLO
+     * timeout) — opening the Dashboard must never be what boots
+     * Willie, so the count is only fetched once the daemon is
+     * already up, and the effect re-runs as `daemonState` changes. */
+    if (daemonState !== "running") {
+      setProjectCount(null);
+      return;
+    }
+    let cancelled = false;
+    projects
+      .snapshot()
+      .then((snap) => {
+        if (!cancelled) setProjectCount(snap.projects.length);
+      })
+      .catch(() => {
+        /* the count is a nicety; a failed snapshot just hides it */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [daemonState]);
 
   async function run(name: string, action: () => Promise<unknown>) {
     setBusy(name);
@@ -73,6 +100,12 @@ export function Dashboard() {
         />
         <span className="muted">engine v{status.engine_version}</span>
       </header>
+
+      {projectCount !== null && (
+        <p className="muted">
+          {projectCount} project{projectCount === 1 ? "" : "s"}
+        </p>
+      )}
 
       <section className="lights">
         {PARTS.map(({ key, label }) => (

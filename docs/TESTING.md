@@ -36,6 +36,9 @@ its checklist has been walked and the results recorded in it.
   claiming a slice done.
 - No test is `#[ignore]`d without a comment naming the reason and the
   condition that removes it.
+- Tests that need the distribution or the musl target run through
+  `just test-linux`, opt-in via `WILLIE_TEST_DISTRO`; `just check` runs
+  them only when it is set.
 - Compatibility: when a serialised format changes, add a regression test
   with the **old** shape before changing the code; never delete one.
 

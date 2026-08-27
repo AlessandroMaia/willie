@@ -1,18 +1,24 @@
 //! The request loop: one JSON-RPC object per line in, one per line out.
 //! Any malformed line produces an error response (id 0) and the loop goes
-//! on; EOF or `daemon.shutdown` ends it.
+//! on; EOF or `daemon.shutdown` ends it. The loop only reads: every reply
+//! leaves through the single-writer [`Outbound`], so responses never
+//! interleave with the job and project events it also carries.
 
 use std::{
-    io::{self, BufRead, Write},
+    io::{self, BufRead},
+    sync::{Arc, Mutex},
     time::Instant,
 };
 
 use willie_proto::{
-    daemon::{DoctorReport, method},
+    daemon::{DoctorReport, method as daemon},
+    job::method as job,
+    project::method as project,
     rpc::{Request, Response, RpcError},
+    state::method as state_method,
 };
 
-use crate::handlers;
+use crate::{handlers, outbound::Outbound, projects::Ops, state::State};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitReason {
@@ -23,6 +29,9 @@ pub enum ExitReason {
 pub struct Server {
     started: Instant,
     doctor: fn() -> DoctorReport,
+    state: Arc<Mutex<State>>,
+    ops: Ops,
+    out: Outbound,
     shutting_down: bool,
 }
 
@@ -36,29 +45,62 @@ impl std::fmt::Debug for Server {
 
 impl Server {
     #[must_use]
-    pub fn new(doctor: fn() -> DoctorReport) -> Self {
+    pub fn new(
+        doctor: fn() -> DoctorReport,
+        state: Arc<Mutex<State>>,
+        ops: Ops,
+        out: Outbound,
+    ) -> Self {
         Self {
             started: Instant::now(),
             doctor,
+            state,
+            ops,
+            out,
             shutting_down: false,
         }
+    }
+
+    /// Trips every in-flight job's cancel flag. Called once the serve loop
+    /// has returned, before the writer thread is joined.
+    pub fn shutdown(&self) {
+        self.ops.shutdown();
     }
 
     pub fn dispatch(&mut self, req: Request) -> Response {
         let id = req.id;
         let result = match req.method.as_str() {
-            method::HELLO => handlers::hello(req.params),
-            method::HEALTH => handlers::health(self.started),
-            method::DOCTOR => handlers::doctor(self.doctor),
-            method::SHUTDOWN => {
+            daemon::HELLO => handlers::hello(req.params),
+            daemon::HEALTH => handlers::health(self.started),
+            daemon::DOCTOR => handlers::doctor(self.doctor),
+            daemon::SHUTDOWN => {
                 self.shutting_down = true;
                 Ok(serde_json::Value::Null)
+            }
+            project::ADD => handlers::project_add(&self.ops, req.params),
+            project::REMOVE => handlers::project_remove(&self.ops, req.params),
+            project::SYNC_TO_WINDOWS => {
+                handlers::project_sync(&self.ops, req.params)
+            }
+            project::UPDATE_FROM_WINDOWS => {
+                handlers::project_update(&self.ops, req.params)
+            }
+            project::RELOCATE => {
+                handlers::project_relocate(&self.ops, req.params)
+            }
+            project::RENAME => handlers::project_rename(&self.ops, req.params),
+            project::LIST => handlers::project_list(&self.state),
+            job::LIST => handlers::job_list(&self.state),
+            job::GET => handlers::job_get(&self.state, req.params),
+            job::CANCEL => handlers::job_cancel(&self.ops, req.params),
+            state_method::SNAPSHOT => {
+                handlers::state_snapshot(&self.ops, &self.state)
             }
             other => Err(RpcError::new(
                 "method_not_found",
                 format!("unknown method `{other}`"),
             )
-            .with_remediation("see docs/PROTOCOL.md for the daemon.* methods")),
+            .with_remediation("see docs/PROTOCOL.md for the served methods")),
         };
         match result {
             Ok(value) => Response {
@@ -71,11 +113,7 @@ impl Server {
         }
     }
 
-    pub fn serve<R: BufRead, W: Write>(
-        &mut self,
-        reader: R,
-        mut writer: W,
-    ) -> io::Result<ExitReason> {
+    pub fn serve<R: BufRead>(&mut self, reader: R) -> io::Result<ExitReason> {
         for line in reader.lines() {
             let line = line?;
             if line.trim().is_empty() {
@@ -91,10 +129,7 @@ impl Server {
                     ),
                 ),
             };
-            let text =
-                serde_json::to_string(&response).map_err(io::Error::other)?;
-            writeln!(writer, "{text}")?;
-            writer.flush()?;
+            self.out.send_response(response);
             if self.shutting_down {
                 return Ok(ExitReason::Shutdown);
             }
@@ -105,10 +140,17 @@ impl Server {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use std::io::Cursor;
+    use std::io::{self, Cursor, Write};
+    use std::sync::{Arc, Mutex};
+
     use willie_proto::daemon::{
         CheckStatus, DoctorCheck, DoctorReport, Hello, HelloReply, method,
+    };
+    use willie_proto::rpc::{Request, Response};
+
+    use super::*;
+    use crate::{
+        jobs::Runner, outbound::Outbound, projects::Ops, state::State,
     };
 
     fn fake_doctor() -> DoctorReport {
@@ -123,18 +165,53 @@ mod tests {
         }
     }
 
+    fn clock() -> String {
+        "t".to_owned()
+    }
+
     fn line(method: &str, params: serde_json::Value) -> String {
         serde_json::to_string(&Request::new(1, method, params).unwrap())
             .unwrap()
     }
 
+    /// A `Write` sink the test can read back after the writer thread drains.
+    #[derive(Clone, Default)]
+    struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+    impl SharedBuf {
+        fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+    impl Write for SharedBuf {
+        fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
     fn roundtrip(input: &str) -> (ExitReason, Vec<Response>) {
-        let mut out = Vec::new();
-        let reason = Server::new(fake_doctor)
-            .serve(Cursor::new(input), &mut out)
-            .unwrap();
-        let responses = String::from_utf8(out)
-            .unwrap()
+        let buf = SharedBuf::default();
+        let (out, handle) = Outbound::spawn(buf.clone());
+        let state = Arc::new(Mutex::new(State::default()));
+        let runner = Runner::new(Arc::clone(&state), out.clone(), clock);
+        let ops = Ops::new(
+            Arc::clone(&state),
+            runner,
+            std::env::temp_dir().join("willie-server-test-state"),
+            std::env::temp_dir().join("willie-server-test-ws"),
+            clock,
+            out.clone(),
+        );
+        let mut server = Server::new(fake_doctor, Arc::clone(&state), ops, out);
+        let reason = server.serve(Cursor::new(input)).unwrap();
+        // Drop every `Outbound` sender so the writer thread drains and ends.
+        drop(server);
+        handle.join().unwrap();
+        let responses = buf
+            .contents()
             .lines()
             .map(|l| serde_json::from_str(l).unwrap())
             .collect();
@@ -216,5 +293,20 @@ mod tests {
         let (reason, resp) = roundtrip("");
         assert_eq!(reason, ExitReason::Eof);
         assert!(resp.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_project_id_is_a_coded_error_not_a_panic() {
+        let (_, resp) = roundtrip(&line(
+            project::RENAME,
+            serde_json::json!({
+                "id": "proj_00000000000000000000000000",
+                "name": "x"
+            }),
+        ));
+        assert_eq!(
+            resp[0].clone().into_result().unwrap_err().code,
+            "project_not_found"
+        );
     }
 }

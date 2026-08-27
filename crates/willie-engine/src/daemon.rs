@@ -1,9 +1,15 @@
 //! Starts, questions and stops `willied` inside the distribution.
 
-use std::time::{Duration, Instant};
+use std::{
+    sync::mpsc::Receiver,
+    time::{Duration, Instant},
+};
 
-use serde::{Deserialize, Serialize};
-use willie_proto::daemon::{DoctorReport, Health, Hello, HelloReply, method};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use willie_proto::{
+    daemon::{DoctorReport, Health, Hello, HelloReply, method},
+    rpc::Notification,
+};
 
 use crate::{
     error::EngineError, process::WslProcess, rpc::RpcClient, wsl::WslExec,
@@ -44,6 +50,14 @@ impl DaemonSupervisor {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A live subscription to the daemon's notification stream, or `None`
+    /// when no daemon is running. The engine forwards these to the app so
+    /// it can watch the `state.event` stream as it arrives.
+    #[must_use]
+    pub fn subscribe(&self) -> Option<Receiver<Notification>> {
+        self.live.as_ref().map(|(_, client)| client.subscribe())
     }
 
     /// Re-checks the child before answering: a daemon that died behind
@@ -196,6 +210,31 @@ impl DaemonSupervisor {
         if let Err(e) = &result {
             // Same rule as `health`: an RPC error reply is not a dead
             // daemon, so it must not trigger a kill and reap.
+            if !matches!(e, EngineError::Rpc(_)) {
+                self.record(e);
+            }
+        }
+        result
+    }
+
+    /// Ensures a daemon is reachable, then forwards one call to it. The
+    /// project and job methods all take this path: reuse the daemon if
+    /// it is already running, start it on demand otherwise, and give the
+    /// same one-restart promise `doctor` and `health` already give — a
+    /// well-formed RPC error reply proves the daemon alive and is
+    /// returned as-is, anything else is recorded as a failure.
+    pub fn call<P: Serialize, R: DeserializeOwned>(
+        &mut self,
+        method: &str,
+        params: P,
+    ) -> Result<R, EngineError> {
+        if !matches!(self.state(), DaemonState::Running { .. }) {
+            self.start()?;
+        }
+        let result = self.client()?.call(method, params);
+        if let Err(e) = &result {
+            // Same rule as `doctor` and `health`: an RPC error reply is
+            // not a dead daemon, so it must not trigger a kill and reap.
             if !matches!(e, EngineError::Rpc(_)) {
                 self.record(e);
             }

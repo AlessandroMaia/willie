@@ -8,7 +8,9 @@
 //! Pure command-building logic is kept platform-independent so it can be
 //! unit-tested on any host; only process spawning is Windows-specific.
 
+pub mod config;
 pub mod daemon;
+pub mod discover;
 pub mod distro;
 pub mod engine;
 pub mod error;
