@@ -159,6 +159,7 @@ pub fn parse_name_list(text: &str) -> Vec<String> {
 
 /// `wsl.exe` prepared for a background engine: no console window.
 pub(crate) fn wsl_command() -> Command {
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut cmd = Command::new("wsl.exe");
     #[cfg(windows)]
     {
