@@ -356,7 +356,7 @@ fn run_sync(
         return Err(err);
     }
     let src = Path::new(src_linux);
-    if !src.exists() {
+    if !git::is_repo(src) {
         return Err(refuse(
             "source_missing",
             "the Windows checkout is missing",
@@ -431,7 +431,7 @@ fn run_update(
     {
         return Err(err);
     }
-    if !Path::new(src_linux).exists() {
+    if !git::is_repo(Path::new(src_linux)) {
         return Err(refuse(
             "source_missing",
             "the Windows checkout is missing",
@@ -1118,6 +1118,35 @@ mod tests {
             fs::read_to_string(src.join("f.txt")).unwrap(),
             "from windows"
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sync_refuses_a_source_that_lost_its_git_directory() {
+        let root = scratch("sync-no-git");
+        let src = root.join("src");
+        init_repo(&src);
+        let (ops, state) = ops(&root);
+        let res = ops
+            .add(AddParams {
+                windows_path: src.to_string_lossy().into_owned(),
+                name: None,
+            })
+            .unwrap();
+        wait_job_done(&state);
+        // The source directory itself survives, but its `.git` is gone:
+        // no longer a repository, though `Path::exists()` still reports
+        // it present.
+        fs::remove_dir_all(src.join(".git")).unwrap();
+        state.lock().unwrap().jobs.clear();
+        ops.sync_to_windows(res.project_id).unwrap();
+        let done = wait_job_done(&state);
+        match done {
+            JobState::Failed { code, .. } => {
+                assert_eq!(code, "source_missing")
+            }
+            other => panic!("{other:?}"),
+        }
         let _ = fs::remove_dir_all(&root);
     }
 
