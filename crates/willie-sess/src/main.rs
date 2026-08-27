@@ -7,6 +7,10 @@
 
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
+mod cli;
+mod events;
+mod spec;
+
 use std::process::ExitCode;
 
 /// Exit code for usage errors and unsupported platforms.

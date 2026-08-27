@@ -4182,8 +4182,12 @@ dependencies = [
 name = "willie-sess"
 version = "0.1.0"
 dependencies = [
+ "libc",
+ "serde_json",
  "willie-core",
  "willie-harness",
+ "willie-linux",
+ "willie-proto",
 ]
 
 [[package]]
