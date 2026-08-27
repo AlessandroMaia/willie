@@ -42,6 +42,39 @@ describe("daemon store", () => {
     expect(two.projects[0]?.name).toBe("renamed");
   });
 
+  it("keeps a changed project's index instead of moving it to the end", () => {
+    const withTwo = applyEvent(
+      applyEvent(empty, {
+        seq: 1,
+        kind: "project_changed",
+        project: proj("proj_1", "a"),
+      }),
+      { seq: 2, kind: "project_changed", project: proj("proj_2", "b") },
+    );
+    const renamed = applyEvent(withTwo, {
+      seq: 3,
+      kind: "project_changed",
+      project: { ...proj("proj_1", "a"), name: "renamed" },
+    });
+    expect(renamed.projects.map((p) => p.id)).toEqual(["proj_1", "proj_2"]);
+    expect(renamed.projects[0]?.name).toBe("renamed");
+  });
+
+  it("does not mutate the snapshot it is given", () => {
+    const withOne = applyEvent(empty, {
+      seq: 1,
+      kind: "project_changed",
+      project: proj("proj_1", "a"),
+    });
+    const before = structuredClone(withOne);
+    applyEvent(withOne, {
+      seq: 2,
+      kind: "project_changed",
+      project: { ...proj("proj_1", "a"), name: "renamed" },
+    });
+    expect(withOne).toEqual(before);
+  });
+
   it("removes a project", () => {
     const one = applyEvent(empty, {
       seq: 1,

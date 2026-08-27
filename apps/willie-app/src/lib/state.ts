@@ -14,15 +14,19 @@ export function needsResnapshot(current: Snapshot, ev: Event): boolean {
 /**
  * Pure reducer: folds one daemon event into a snapshot. The UI never
  * computes project or job truth itself — this is the only place that
- * does, and every list mutation is a filter-then-push so an id never
- * appears twice.
+ * does, and every list mutation replaces an existing id in place (or
+ * appends it if new) so an id never appears twice and its row does
+ * not jump to the end of the list on every update.
  */
 export function applyEvent(current: Snapshot, ev: Event): Snapshot {
   const seq = ev.seq;
   switch (ev.kind) {
     case "project_changed": {
-      const projects = current.projects.filter((p) => p.id !== ev.project.id);
-      projects.push(ev.project);
+      const idx = current.projects.findIndex((p) => p.id === ev.project.id);
+      const projects =
+        idx === -1
+          ? [...current.projects, ev.project]
+          : current.projects.map((p, i) => (i === idx ? ev.project : p));
       return { ...current, seq, projects };
     }
     case "project_removed":
@@ -32,8 +36,11 @@ export function applyEvent(current: Snapshot, ev: Event): Snapshot {
         projects: current.projects.filter((p) => p.id !== ev.id),
       };
     case "job_changed": {
-      const jobs = current.jobs.filter((j) => j.id !== ev.job.id);
-      jobs.push(ev.job);
+      const idx = current.jobs.findIndex((j) => j.id === ev.job.id);
+      const jobs =
+        idx === -1
+          ? [...current.jobs, ev.job]
+          : current.jobs.map((j, i) => (i === idx ? ev.job : j));
       return { ...current, seq, jobs };
     }
   }
