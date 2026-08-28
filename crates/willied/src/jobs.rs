@@ -153,8 +153,8 @@ impl Runner {
 
     /// A job that belongs to no project (a tool install). It shares the
     /// pool but not the per-project exclusion.
-    // Called from the harness install RPC (Task 8d's `tool.install`);
-    // allow until then so the plain (non-test) binary still builds clean.
+    // Called from the harness install RPC once it lands; allow until then
+    // so the plain (non-test) binary still builds clean.
     #[allow(dead_code)]
     pub fn submit_global(
         &self,

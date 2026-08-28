@@ -100,21 +100,22 @@ impl Control {
     }
 
     /// Spawn a reader that folds every event into `on_event` until the
-    /// supervisor closes. The thread ends on a `closed` frame or EOF, so
-    /// the caller learns the connection is over when `on_event` stops
-    /// being called — the session code finalises the session from there.
+    /// supervisor closes. The returned handle joins when the reader loop
+    /// ends — on a `closed` frame, or on EOF/reset when the supervisor
+    /// dies abruptly — so the caller can react to the connection being
+    /// over rather than to a file that lingers. `None` if the reader
+    /// thread could not be spawned.
     pub fn watch(
         &mut self,
         mut on_event: impl FnMut(SessionEvent) + Send + 'static,
-    ) {
-        let Ok(stream) = self.stream.try_clone() else {
-            return;
-        };
+    ) -> Option<thread::JoinHandle<()>> {
+        let stream = self.stream.try_clone().ok()?;
         // Take the frames `status` buffered past the status reply so the
         // reader delivers them before it blocks on the socket again.
         let mut decoder = std::mem::take(&mut self.decoder);
-        let _ = thread::Builder::new().name("control".to_owned()).spawn(
-            move || {
+        thread::Builder::new()
+            .name("control".to_owned())
+            .spawn(move || {
                 let mut stream = stream;
                 let mut buf = [0u8; 8192];
                 loop {
@@ -134,8 +135,8 @@ impl Control {
                         Ok(n) => decoder.push(&buf[..n]),
                     }
                 }
-            },
-        );
+            })
+            .ok()
     }
 }
 
@@ -219,7 +220,7 @@ mod tests {
         let mut control = connect(&path).unwrap();
         assert_eq!(control.status().unwrap().pid, 7);
         let (tx, rx) = mpsc::channel();
-        control.watch(move |ev| {
+        let handle = control.watch(move |ev| {
             let _ = tx.send(ev);
         });
         let first = rx.recv_timeout(Duration::from_secs(5)).unwrap();
@@ -233,6 +234,9 @@ mod tests {
             rx.recv_timeout(Duration::from_secs(5)),
             Err(RecvTimeoutError::Disconnected)
         );
+        // The handle joins once the reader loop returns on `closed`: this
+        // is the signal the session code finalises the session from.
+        handle.expect("a reader thread was spawned").join().unwrap();
         server.join().unwrap();
     }
 

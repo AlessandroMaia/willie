@@ -240,7 +240,7 @@ fn busy_err() -> OpError {
     )
 }
 
-fn not_found_err(id: ProjectId) -> OpError {
+pub(crate) fn not_found_err(id: ProjectId) -> OpError {
     OpError::new(
         "project_not_found",
         format!("no project with id `{id}`"),

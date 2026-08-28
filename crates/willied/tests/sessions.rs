@@ -32,6 +32,20 @@ fn fake_home(root: &Path, body: &str) -> std::path::PathBuf {
     home
 }
 
+/// The supervisor pid for a session: the parent of the harness process the
+/// session reports, since `willie-sess` forks the harness directly under
+/// itself. Parsed from `/proc/<pid>/stat`, whose `comm` field may hold
+/// spaces or parentheses, so the numeric fields are read after the last
+/// `)`.
+fn supervisor_pid_of(harness_pid: u64) -> u64 {
+    let stat =
+        std::fs::read_to_string(format!("/proc/{harness_pid}/stat")).unwrap();
+    let after = stat.rsplit(')').next().unwrap();
+    let fields: Vec<&str> = after.split_whitespace().collect();
+    // After the comm come: state, ppid, pgrp, ...
+    fields[1].parse().unwrap()
+}
+
 #[test]
 fn create_starts_a_session_then_list_and_snapshot_show_it_running() {
     if !common::git_available() {
@@ -175,5 +189,65 @@ fn remove_refuses_a_project_with_a_live_session() {
     let remove_id = d.send("project.remove", json!({ "id": pid }));
     let resp = d.wait_response(remove_id, Duration::from_secs(5), |_| {});
     assert_eq!(resp["error"]["code"], "sessions_running", "{resp}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_killed_supervisor_finalises_the_session_and_frees_removal() {
+    if !common::git_available() {
+        return;
+    }
+    let root = common::scratch("sess-kill");
+    let src = root.join("src");
+    common::init_repo(&src);
+    let home = fake_home(&root, "exec cat");
+    let mut d = common::Daemon::start_with(
+        &root.join("state"),
+        &root.join("workspaces"),
+        &root.join("run"),
+        &home,
+    );
+    let pid = common::add_ready_project(&mut d, &src);
+    let create_id = d.send(
+        "session.create",
+        json!({ "project_id": pid,
+            "git_identity": { "name": "T", "email": "t@x" } }),
+    );
+    let resp = d.wait_response(create_id, Duration::from_secs(30), |_| {});
+    let session = &resp["result"]["session"];
+    assert_eq!(session["state"]["state"], "running", "{resp}");
+    let sid = session["id"].as_str().unwrap().to_owned();
+    let harness_pid = session["pid"].as_u64().unwrap();
+
+    // SIGKILL the supervisor (the harness's parent) so it dies without
+    // running finish(): its named socket file lingers, so the daemon must
+    // finalise off the control reader ending, not off the file existing.
+    let supervisor = supervisor_pid_of(harness_pid);
+    let killed = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("kill -9 {supervisor}"))
+        .status()
+        .unwrap();
+    assert!(killed.success(), "could not kill supervisor {supervisor}");
+
+    // The session must reach a terminal state within a few seconds.
+    assert!(
+        common::wait_until(Duration::from_secs(10), || {
+            let snap = d.snapshot();
+            snap["sessions"].as_array().unwrap().iter().any(|s| {
+                s["id"] == sid
+                    && matches!(
+                        s["state"]["state"].as_str(),
+                        Some("failed" | "exited")
+                    )
+            })
+        }),
+        "session never became terminal after the supervisor was killed"
+    );
+
+    // With no live session left, project.remove is no longer refused.
+    let remove_id = d.send("project.remove", json!({ "id": pid }));
+    let resp = d.wait_response(remove_id, Duration::from_secs(10), |_| {});
+    assert!(resp.get("result").is_some(), "remove was refused: {resp}");
     let _ = std::fs::remove_dir_all(&root);
 }

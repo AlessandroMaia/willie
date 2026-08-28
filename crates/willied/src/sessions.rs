@@ -73,7 +73,7 @@ impl SessionOps {
         let project = {
             let s = crate::lock(&self.state);
             s.projects.get(&params.project_id).cloned().ok_or_else(|| {
-                OpError::coded("session_not_found", "no such project")
+                crate::projects::not_found_err(params.project_id)
             })?
         };
         if !matches!(project.state, ProjectState::Ready) {
@@ -126,7 +126,29 @@ impl SessionOps {
             s.upsert_session(session.clone())
         });
 
-        let ready = self.spawn_supervisor(&dir)?;
+        let ready = match self.spawn_supervisor(&dir) {
+            Ok(ready) => ready,
+            Err(e) => {
+                // The spawn never reported readiness (a timeout, or the
+                // launcher could not even start): fold the failure onto the
+                // session we already emitted so the index shows it Failed,
+                // not stuck Creating forever.
+                apply_event(
+                    &mut session,
+                    &SessionEvent {
+                        at: (self.clock)(),
+                        kind: SessionEventKind::Failed {
+                            code: e.code.clone(),
+                            message: e.message.clone(),
+                        },
+                    },
+                );
+                state::emit(&self.state, &self.out, |s| {
+                    s.upsert_session(session.clone())
+                });
+                return Err(e);
+            }
+        };
         match ready {
             Ready::Ok(pid) => {
                 apply_event(
@@ -180,9 +202,14 @@ impl SessionOps {
             .map_err(|e| {
                 OpError::coded("supervisor_spawn_failed", &e.to_string())
             })?;
-        let stdout = child.stdout.take().ok_or_else(|| {
-            OpError::coded("supervisor_spawn_failed", "no supervisor stdout")
-        })?;
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(OpError::coded(
+                "supervisor_spawn_failed",
+                "no supervisor stdout",
+            ));
+        };
         // The launcher process exits as soon as the grandchild answers, so
         // read the single readiness line on a helper thread and give up
         // after a bounded wait rather than block the request forever.
@@ -192,16 +219,27 @@ impl SessionOps {
             let _ = BufReader::new(stdout).read_line(&mut line);
             let _ = tx.send(line);
         });
-        let line = rx.recv_timeout(Duration::from_secs(10)).map_err(|_| {
-            OpError::coded("supervisor_timeout", "no readiness reply")
-        })?;
+        let line = match rx.recv_timeout(Duration::from_secs(10)) {
+            Ok(line) => line,
+            Err(_) => {
+                // Reap the launcher so it never lingers as a zombie under
+                // the daemon; the helper thread unblocks once the child's
+                // stdout pipe closes.
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(OpError::coded(
+                    "supervisor_timeout",
+                    "no readiness reply",
+                ));
+            }
+        };
         let _ = child.wait();
         Ok(parse_ready(line.trim()))
     }
 
     /// Adopt a running supervisor: connect a control client, fold its
-    /// events into the session, and finalise the session when the socket
-    /// disappears. A no-op off Linux, where there is no supervisor.
+    /// events into the session, and finalise the session when the control
+    /// reader ends. A no-op off Linux, where there is no supervisor.
     fn watch(&self, id: SessionId, socket: &std::path::Path) {
         #[cfg(not(target_os = "linux"))]
         {
@@ -214,8 +252,7 @@ impl SessionOps {
             };
             let state = Arc::clone(&self.state);
             let out = self.out.clone();
-            let state_dir = self.state_dir.clone();
-            control.watch(move |ev| {
+            let handle = control.watch(move |ev| {
                 state::emit(&state, &out, |s| {
                     let mut session = s
                         .sessions
@@ -226,29 +263,38 @@ impl SessionOps {
                     s.upsert_session(session)
                 });
             });
-            // When the supervisor's socket is gone the control reader has
-            // ended and no terminal event may have arrived; finalise the
-            // session so it never lingers `Running` forever. If it already
-            // reached a terminal state, there is nothing left to do.
+            // Finalisation keys off the reader thread ENDING, not off the
+            // socket file: a supervisor that is SIGKILLed or crashes leaves
+            // its named socket behind, so file existence never signals its
+            // death. The reader ends on a `closed` frame (clean, a terminal
+            // event already folded) or on EOF/reset (abrupt). On an abrupt
+            // end the session is still non-terminal; probe the socket once
+            // and, if nothing answers, fail it closed with `supervisor_lost`
+            // so it never lingers `Running` and never blocks `project.remove`.
             let state = Arc::clone(&self.state);
             let out = self.out.clone();
+            let state_dir = self.state_dir.clone();
             let socket = socket.to_path_buf();
-            thread::spawn(move || {
-                loop {
-                    thread::sleep(Duration::from_millis(200));
-                    if !socket.exists() {
-                        finalise_lost(&state, &out, &state_dir, id);
-                        return;
+            let _ = thread::Builder::new()
+                .name("session-finalise".to_owned())
+                .spawn(move || {
+                    if let Some(handle) = handle {
+                        let _ = handle.join();
                     }
-                    let live = crate::lock(&state)
+                    let terminal = crate::lock(&state)
                         .sessions
                         .get(&id)
-                        .is_some_and(|s| s.state.is_live());
-                    if !live {
+                        .is_some_and(|s| s.state.is_terminal());
+                    if terminal {
                         return;
                     }
-                }
-            });
+                    let answers = crate::control::connect(&socket)
+                        .and_then(|mut c| c.status())
+                        .is_ok();
+                    if !answers {
+                        finalise_lost(&state, &out, &state_dir, id);
+                    }
+                });
         }
     }
 
@@ -379,7 +425,7 @@ fn finalise_lost(
         .find(|(spec, _)| spec.id == id);
     let Some((spec, evs)) = found else { return };
     let mut session = from_log(&spec, &evs);
-    if session.state.is_live() {
+    if !session.state.is_terminal() {
         apply_event(
             &mut session,
             &SessionEvent {
