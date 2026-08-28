@@ -131,8 +131,22 @@ impl Daemon {
         run_dir: &Path,
         home: &Path,
     ) -> Daemon {
-        let mut child = Command::new(willied_bin())
-            .arg("--stdio")
+        Daemon::start_with_env(state_dir, workspaces_dir, run_dir, home, &[])
+    }
+
+    /// Same as [`Daemon::start_with`], plus extra environment variables
+    /// set on the daemon process before it starts -- e.g.
+    /// `WILLIE_HARNESS_INSTALLER`, so a tool-install test can point the
+    /// job at a fake installer instead of the real one.
+    pub fn start_with_env(
+        state_dir: &Path,
+        workspaces_dir: &Path,
+        run_dir: &Path,
+        home: &Path,
+        extra_env: &[(&str, &str)],
+    ) -> Daemon {
+        let mut cmd = Command::new(willied_bin());
+        cmd.arg("--stdio")
             .env("WILLIE_STATE_DIR", state_dir)
             .env("WILLIE_PROJECTS_DIR", workspaces_dir)
             .env("WILLIE_RUN_DIR", run_dir)
@@ -142,9 +156,11 @@ impl Daemon {
             .env_remove("TZ")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::inherit());
+        for (key, value) in extra_env {
+            cmd.env(key, value);
+        }
+        let mut child = cmd.spawn().unwrap();
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
         let (tx, rx) = mpsc::channel();

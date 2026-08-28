@@ -33,6 +33,8 @@ mod sessions;
 mod state;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod store;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod tools;
 
 pub(crate) use state::lock;
 

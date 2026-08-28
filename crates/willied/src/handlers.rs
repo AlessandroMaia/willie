@@ -1,5 +1,5 @@
-//! Request handlers. `daemon.*` stay pure; `project.*`, `job.*` and
-//! `state.*` reach into the shared `State` and the project `Ops`. Each
+//! Request handlers. `daemon.*` stay pure; `project.*`, `job.*`, `tool.*`
+//! and `state.*` reach into the shared `State` and the project `Ops`. Each
 //! returns the JSON result or a coded error the server turns into a
 //! `Response`.
 
@@ -20,6 +20,7 @@ use willie_proto::{
     },
     rpc::RpcError,
     state::Snapshot,
+    tool::InstallParams,
 };
 
 use crate::{projects::Ops, sessions::SessionOps, state::State};
@@ -161,6 +162,13 @@ pub fn job_cancel(ops: &Ops, p: Value) -> Result<Value, RpcError> {
     let id = job_id(&p)?;
     ops.cancel_job(&id);
     Ok(Value::Null)
+}
+
+pub fn tool_install(ops: &Ops, p: Value) -> Result<Value, RpcError> {
+    let InstallParams { harness } =
+        serde_json::from_value(p).map_err(invalid_params)?;
+    let res = ops.install_tool(&harness).map_err(op_error)?;
+    serde_json::to_value(res).map_err(internal)
 }
 
 pub fn session_create(ops: &SessionOps, p: Value) -> Result<Value, RpcError> {

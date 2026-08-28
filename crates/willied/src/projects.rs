@@ -600,6 +600,14 @@ impl Ops {
         self.runner.shutdown();
     }
 
+    /// Install `name` (the harness id) as a project-less job, reached only
+    /// through the `tool.install` RPC -- the user's explicit action.
+    pub fn install_tool(&self, name: &str) -> Result<JobRef, OpError> {
+        let job_id =
+            crate::tools::install(&self.runner, crate::harness::home(), name)?;
+        Ok(JobRef { job_id })
+    }
+
     fn get_project(&self, id: ProjectId) -> Result<Project, OpError> {
         lock(&self.state)
             .projects

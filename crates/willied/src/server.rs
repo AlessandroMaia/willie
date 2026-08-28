@@ -17,6 +17,7 @@ use willie_proto::{
     rpc::{Request, Response, RpcError},
     session::method as session,
     state::method as state_method,
+    tool::method as tool,
 };
 
 use crate::{
@@ -100,6 +101,7 @@ impl Server {
             job::LIST => handlers::job_list(&self.state),
             job::GET => handlers::job_get(&self.state, req.params),
             job::CANCEL => handlers::job_cancel(&self.ops, req.params),
+            tool::INSTALL => handlers::tool_install(&self.ops, req.params),
             session::CREATE => {
                 handlers::session_create(&self.sessions, req.params)
             }
