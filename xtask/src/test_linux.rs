@@ -12,7 +12,8 @@ use std::{env, path::Path, process::Command};
 
 use crate::{TaskResult, linux};
 
-const CRATES: &[&str] = &["willied", "willie-linux", "willie-cli"];
+const CRATES: &[&str] =
+    &["willied", "willie-linux", "willie-cli", "willie-sess"];
 
 pub fn run(root: &Path, _args: &[String]) -> TaskResult {
     let Some(distro) = env::var_os("WILLIE_TEST_DISTRO") else {

@@ -28,7 +28,7 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpError {
-    pub code: &'static str,
+    pub code: String,
     pub message: String,
     pub remediation: String,
 }
@@ -40,9 +40,31 @@ impl OpError {
         remediation: impl Into<String>,
     ) -> Self {
         Self {
-            code,
+            code: code.to_owned(),
             message: message.into(),
             remediation: remediation.into(),
+        }
+    }
+
+    /// A session/tool error whose remediation comes from the shared
+    /// `willie_core::session` table; the message is borrowed and copied.
+    pub(crate) fn coded(code: &'static str, message: &str) -> Self {
+        Self {
+            code: code.to_owned(),
+            message: message.to_owned(),
+            remediation: willie_core::session::remediation_for(code).to_owned(),
+        }
+    }
+
+    /// Same, for a code and message the daemon received at runtime (a
+    /// supervisor readiness failure), where the code is not `'static`.
+    pub(crate) fn coded_owned(code: String, message: String) -> Self {
+        let remediation =
+            willie_core::session::remediation_for(&code).to_owned();
+        Self {
+            code,
+            message,
+            remediation,
         }
     }
 }
@@ -50,7 +72,9 @@ impl OpError {
 #[derive(Debug)]
 pub struct Ops {
     state: Arc<Mutex<State>>,
-    runner: Runner,
+    // Shared so the session-create path can consult the same per-project
+    // busy set this owner's job submissions populate.
+    runner: Arc<Runner>,
     state_dir: PathBuf,
     workspaces_dir: PathBuf,
     clock: fn() -> String,
@@ -59,7 +83,7 @@ pub struct Ops {
 
 /// The Linux path git should use for a registered source. A real source
 /// is a Windows path; tests pass a Linux path straight through.
-fn source_to_linux(source: &str) -> Option<String> {
+pub(crate) fn source_to_linux(source: &str) -> Option<String> {
     if source.len() >= 2 && source.as_bytes()[1] == b':' {
         windows_to_drvfs(source)
     } else if source.starts_with('/') {
@@ -210,7 +234,7 @@ fn check_cancelled(
     Some(("interrupted".to_owned(), message, remediation))
 }
 
-fn busy_err() -> OpError {
+pub(crate) fn busy_err() -> OpError {
     OpError::new(
         "project_busy",
         "a job is already running for this project",
@@ -218,7 +242,7 @@ fn busy_err() -> OpError {
     )
 }
 
-fn not_found_err(id: ProjectId) -> OpError {
+pub(crate) fn not_found_err(id: ProjectId) -> OpError {
     OpError::new(
         "project_not_found",
         format!("no project with id `{id}`"),
@@ -248,42 +272,6 @@ fn source_no_commits_err() -> OpError {
         "the checkout has no commits yet",
         "make the first commit in this checkout, then add it again",
     )
-}
-
-/// Copies the source's `HEAD` commit author into the clone's local git
-/// identity. The `willie` distro user has none of its own, so without
-/// this a commit made in the workspace (by a person or the agent) fails
-/// with "Please tell me who you are"; the source's own author is the
-/// closest thing to a sensible default. Best effort only: the clone and
-/// its remotes are the load-bearing part of `add`, so a failure here is
-/// logged and does not fail the job.
-fn copy_source_identity(src: &Path, workspace: &Path) {
-    let (name, email) = match git::head_author(src) {
-        Ok(pair) => pair,
-        Err(e) => {
-            eprintln!(
-                "willied: could not read the source git identity: {}",
-                e.message
-            );
-            return;
-        }
-    };
-    if !name.is_empty()
-        && let Err(e) = git::run(workspace, &["config", "user.name", &name])
-    {
-        eprintln!(
-            "willied: could not set the workspace user.name: {}",
-            e.message
-        );
-    }
-    if !email.is_empty()
-        && let Err(e) = git::run(workspace, &["config", "user.email", &email])
-    {
-        eprintln!(
-            "willied: could not set the workspace user.email: {}",
-            e.message
-        );
-    }
 }
 
 /// `add`'s job: clone the source into the workspace, rename `origin` to
@@ -324,7 +312,6 @@ fn run_add(
     if let Some(err) = check_cancelled(cancel, JobKind::Add, ctx, &project) {
         return Err(err);
     }
-    copy_source_identity(src, workspace);
     git::run(workspace, &["config", "core.autocrlf", "false"])
         .map_err(|e| add_fail(ctx, &project, e))?;
     git::run(
@@ -560,12 +547,19 @@ impl Ops {
     ) -> Self {
         Self {
             state,
-            runner,
+            runner: Arc::new(runner),
             state_dir,
             workspaces_dir,
             clock,
             out,
         }
+    }
+
+    /// A shared handle to the job runner, so the session-create path can
+    /// query the per-project busy set this owner's submissions populate.
+    #[must_use]
+    pub(crate) fn runner_handle(&self) -> Arc<Runner> {
+        Arc::clone(&self.runner)
     }
 
     /// Trips a running job's cancel flag; a no-op once it has finished.
@@ -576,6 +570,14 @@ impl Ops {
     /// Trips every registered job's cancel, run on daemon shutdown.
     pub fn shutdown(&self) {
         self.runner.shutdown();
+    }
+
+    /// Install `name` (the harness id) as a project-less job, reached only
+    /// through the `tool.install` RPC -- the user's explicit action.
+    pub fn install_tool(&self, name: &str) -> Result<JobRef, OpError> {
+        let job_id =
+            crate::tools::install(&self.runner, crate::harness::home(), name)?;
+        Ok(JobRef { job_id })
     }
 
     fn get_project(&self, id: ProjectId) -> Result<Project, OpError> {
@@ -739,6 +741,16 @@ impl Ops {
         force: bool,
     ) -> Result<JobRef, OpError> {
         let project = self.get_project(id)?;
+        // A project with a live session must not be removed: the
+        // supervisor and its workspace are still in use. The guard reads
+        // the shared state directly, so `Ops` needs no session handle.
+        if !lock(&self.state).live_session_ids_for(&id).is_empty() {
+            return Err(OpError::new(
+                "sessions_running",
+                "the project has a running session",
+                willie_core::session::remediation_for("sessions_running"),
+            ));
+        }
         let state = Arc::clone(&self.state);
         let state_dir = self.state_dir.clone();
         let out = self.out.clone();
@@ -924,10 +936,10 @@ mod tests {
         panic!("job never finished");
     }
 
-    /// Sets a `user.*` identity directly, for a repo `add` never
-    /// touches (e.g. a fresh `git init` used as a relocate source). A
-    /// workspace from `add` already has one, copied from the source's
-    /// `HEAD` author.
+    /// Sets a `user.*` identity directly. `add` no longer writes one into
+    /// the workspace — decision 0015 removed that stopgap — so any test
+    /// that makes a real commit, in a workspace or a fresh `git init`
+    /// used as a relocate source, sets one by hand here.
     fn configure_identity(dir: &Path) {
         git::run(dir, &["config", "user.email", "t@t"]).unwrap();
         git::run(dir, &["config", "user.name", "t"]).unwrap();
@@ -1094,33 +1106,6 @@ mod tests {
         .unwrap();
         let done = wait_job_done(&state);
         assert!(matches!(done, JobState::Done), "{done:?}");
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn add_copies_the_source_head_authors_identity_into_the_workspace() {
-        let root = scratch("add-identity");
-        let src = root.join("src");
-        init_repo(&src);
-        let (ops, state) = ops(&root);
-        let res = ops
-            .add(AddParams {
-                windows_path: src.to_string_lossy().into_owned(),
-                name: None,
-            })
-            .unwrap();
-        wait_job_done(&state);
-        let ws = state.lock().unwrap().projects[&res.project_id]
-            .workspace
-            .clone();
-        let email =
-            git::run(Path::new(&ws), &["config", "--local", "user.email"])
-                .unwrap();
-        assert_eq!(email.trim(), "t@t");
-        let name =
-            git::run(Path::new(&ws), &["config", "--local", "user.name"])
-                .unwrap();
-        assert_eq!(name.trim(), "t");
         let _ = fs::remove_dir_all(&root);
     }
 

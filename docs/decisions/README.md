@@ -45,3 +45,5 @@ Things deliberately left open or explicitly rejected for now, and why.
 | 0011 | ext4 workspace over DrvFs findings (S5)                       |
 | 0012 | detached PTY supervisor findings (S2)                         |
 | 0013 | git sync via updateInstead                                    |
+| 0014 | One framed socket per session, the daemon as a control client |
+| 0015 | A session's git identity is resolved and required             |

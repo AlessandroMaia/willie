@@ -1,5 +1,5 @@
-//! Request handlers. `daemon.*` stay pure; `project.*`, `job.*` and
-//! `state.*` reach into the shared `State` and the project `Ops`. Each
+//! Request handlers. `daemon.*` stay pure; `project.*`, `job.*`, `tool.*`
+//! and `state.*` reach into the shared `State` and the project `Ops`. Each
 //! returns the JSON result or a coded error the server turns into a
 //! `Response`.
 
@@ -20,9 +20,10 @@ use willie_proto::{
     },
     rpc::RpcError,
     state::Snapshot,
+    tool::InstallParams,
 };
 
-use crate::{projects::Ops, state::State};
+use crate::{projects::Ops, sessions::SessionOps, state::State};
 
 fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::new("internal_error", e.to_string())
@@ -35,7 +36,7 @@ fn invalid_params(e: impl std::fmt::Display) -> RpcError {
 /// Maps a project `OpError` onto the wire error, preserving its code and
 /// remediation. One place so every project method reports the same shape.
 fn op_error(e: crate::projects::OpError) -> RpcError {
-    RpcError::new(e.code, e.message).with_remediation(e.remediation)
+    RpcError::new(&e.code, e.message).with_remediation(e.remediation)
 }
 
 /// Recovers a poisoned lock instead of panicking: one worker's panic must
@@ -86,7 +87,13 @@ pub fn health(started: Instant) -> Result<Value, RpcError> {
 }
 
 pub fn doctor(run: fn() -> DoctorReport) -> Result<Value, RpcError> {
-    serde_json::to_value(run()).map_err(internal)
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut report = run();
+    #[cfg(target_os = "linux")]
+    report
+        .checks
+        .push(crate::harness::doctor_check(&crate::harness::home()));
+    serde_json::to_value(report).map_err(internal)
 }
 
 pub fn project_add(ops: &Ops, p: Value) -> Result<Value, RpcError> {
@@ -155,6 +162,34 @@ pub fn job_cancel(ops: &Ops, p: Value) -> Result<Value, RpcError> {
     let id = job_id(&p)?;
     ops.cancel_job(&id);
     Ok(Value::Null)
+}
+
+pub fn tool_install(ops: &Ops, p: Value) -> Result<Value, RpcError> {
+    let InstallParams { harness } =
+        serde_json::from_value(p).map_err(invalid_params)?;
+    let res = ops.install_tool(&harness).map_err(op_error)?;
+    serde_json::to_value(res).map_err(internal)
+}
+
+pub fn session_create(ops: &SessionOps, p: Value) -> Result<Value, RpcError> {
+    let params = serde_json::from_value(p).map_err(invalid_params)?;
+    let session = ops.create(params).map_err(op_error)?;
+    serde_json::to_value(willie_proto::session::CreateResult { session })
+        .map_err(internal)
+}
+
+pub fn session_stop(ops: &SessionOps, p: Value) -> Result<Value, RpcError> {
+    let willie_proto::session::IdParams { id } =
+        serde_json::from_value(p).map_err(invalid_params)?;
+    ops.stop(id).map_err(op_error)?;
+    Ok(Value::Null)
+}
+
+pub fn session_list(ops: &SessionOps) -> Result<Value, RpcError> {
+    serde_json::to_value(willie_proto::session::SessionList {
+        sessions: ops.list(),
+    })
+    .map_err(internal)
 }
 
 /// Recomputes each project's `source_present` from the filesystem, then

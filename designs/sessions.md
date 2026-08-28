@@ -195,10 +195,10 @@ connection errors, 2 for usage. `attach` is the only new subcommand.
 The trait grows exactly what this slice calls:
 
 ```rust
-fn parse_version(&self, version_output: &str) -> Option<String>; // pure
-fn detect(&self, binary: &Path) -> Option<Installed>;            // runs `--version`, 5 s timeout
-fn launch(&self, workspace: &Path) -> Launch { argv, env };      // pure: the allowlist above
-fn installer(&self) -> &'static [&'static str];                  // official native installer, run via `sh -c`
+fn parse_version(&self, output: &str) -> Option<String>;                 // pure
+fn detect(&self, binary: &Path) -> Option<Installed>;                    // runs `--version`, 5 s timeout
+fn launch(&self, binary: &Path, workspace: &Path, home: &Path) -> Launch; // pure: the allowlist above
+fn installer(&self) -> &'static str;                                     // one `sh -c` command line, the official installer
 ```
 
 The daemon locates the binary on the session `PATH` (or at
@@ -235,11 +235,12 @@ the thread ends. A read that fails without a terminal event re-scans
 that one session: socket gone → finalised from the log,
 `Failed{supervisor_lost}` when the log has no terminal event either.
 
-**Start-up scan.** For every `sessions/<id>/`: read the spec and the log;
-a socket that answers `status` is adopted as `running` (pid, clients,
-started_at from the reply) and gets a control thread; a socket that does
-not answer is unlinked and the session finalised from the log. Daemon
-shutdown closes the control connections; supervisors do not notice.
+**Start-up scan.** For every `sessions/<id>/`: read the spec and the log
+(`started_at` already folds in from a logged `started` event); a socket
+that answers `status` is adopted as `running` (pid and clients taken from
+the reply) and gets a control thread; a socket that does not answer is
+unlinked and the session finalised from the log. Daemon shutdown closes
+the control connections; supervisors do not notice.
 
 **Git identity** (`identity.rs`), resolved in order and written with
 `git config --global` as the daemon's user: (1) `/home/willie/.gitconfig`
@@ -247,12 +248,13 @@ already holds `user.name` and `user.email` — nothing to do; (2) the
 `git_identity` in the params, read by the engine from the Windows global
 configuration; (3) `git -C <source> config user.name` / `user.email` on
 the Windows checkout; (4) `git_identity_missing`. The stopgap `add`
-applies today — copying the source `HEAD` author into the clone's local
-configuration — is **removed**: a local identity outranks the global one,
-so the copied author (possibly another person) would win over the
-user's. Workspaces created before this slice keep their local identity
-until `git config --unset user.name` / `user.email` is run in them; the
-acceptance checklist says so.
+applied before this slice — copying the source `HEAD` author into the
+clone's *local* configuration — is **removed** (decision 0015): a
+local identity outranks the global one, so the copied author (possibly
+another person) would have won over the user's own. Workspaces added
+before this slice keep their local identity until
+`git config --unset user.name` / `user.email` is run in them by hand;
+the acceptance checklist names the exact commands.
 
 **`project.remove`** is refused with `sessions_running` while a session
 of that project is `running` or `stopping`: unregistering or deleting the
@@ -327,7 +329,7 @@ Tauri commands `session_open`, `session_attach`, `session_stop`,
 | `supervisor_spawn_failed`   | `willie-sess` could not be executed                                     | run `willie doctor`; reinstall the distribution if the binary is missing |
 | `supervisor_timeout`        | no readiness reply within ten seconds                                   | open the session again; run `willie doctor` if it repeats          |
 | `harness_exec_failed`       | the harness child's `execvp` or `chdir` failed (binary gone, workspace deleted by hand) | reinstall Claude Code, or remove the project and add it again |
-| `session_not_found`         | an unknown session id                                                   | refresh the Sessions screen                                        |
+| `session_not_found`         | reserved for an unknown session id; not produced today — `session.stop` reports `session_not_running` for that case too | refresh the Sessions screen                                        |
 | `session_not_running`       | `session.stop` on a session with no control connection                  | nothing to stop; open a new session                                |
 | `sessions_running`          | `project.remove` while the project has a live session                   | stop the project's sessions first                                  |
 | `supervisor_lost` (state)   | a socket that stopped answering with no terminal event in the log       | open a new session                                                 |
@@ -384,7 +386,8 @@ row with the exact command or observation.
 - A line in `releases/v0.1.0.md`.
 - Environment overrides, documented in `docs/TESTING.md`:
   `WILLIE_HARNESS_BIN`, `WILLIE_HARNESS_INSTALLER`,
-  `WILLIE_SESS_STOP_GRACE_MS`.
+  `WILLIE_SESS_STOP_GRACE_MS`, `WILLIE_SESS_BIN`, `WILLIE_HOME` and
+  `WILLIE_RUN_DIR`.
 
 ## Open questions
 

@@ -16,12 +16,15 @@ Before the walk:
 - Have a root folder holding one or two Windows git checkouts to register.
   **Each checkout must have at least one commit** — a folder freshly
   `git init`'d with no commit is refused with `source_no_commits`.
-- The workspace's git identity is set automatically: `add` copies the
-  source checkout's `HEAD` commit author into the workspace's local git
-  config, so the commit steps below work with no setup. (Rare exception:
-  if the checkout's `HEAD` commit itself carries no author — a sanitized
-  or rewritten history — set an identity and amend or add a commit so
-  there is an author to copy.)
+- The workspace has no git identity of its own: `add` no longer copies
+  the source checkout's `HEAD` author into it (decision 0015). Row 3a's
+  commit below uses the distribution's global git identity instead,
+  which Willie writes the first time any Claude Code session is
+  created — from the Windows git identity, else the source checkout's,
+  else it refuses. Before row 3a, either open one session first, or set
+  the identity by hand once per distribution:
+  `wsl -d willie --user willie -- git config --global user.name "<you>"`
+  then the same with `user.email "<you>@example.com"`.
 
 Placeholders below: `<root>` is that folder; `<slug>` is the kebab-case
 name shown on a project's row; `<win>` is a checkout's Windows path;

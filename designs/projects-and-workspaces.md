@@ -278,13 +278,11 @@ tail), `interrupted`, `cancelled`.
 ## Follow-ups for the next slice
 
 - **Git identity for workspace commits.** The distribution's `willie`
-  user has no git identity of its own. As a stopgap, `add` now copies the
-  source checkout's `HEAD` commit author into the clone's local
-  `user.name`/`user.email`, so a commit made in a workspace (by a person
-  in a plain shell, or by the agent) works without a manual step in the
-  common case. It does not cover a checkout whose history has no
-  readable author, or a workspace commit that should carry the *current*
-  user's identity rather than the source's original author — the
-  sessions/sandbox slice still owns that full story: mount the user's
+  user has no git identity of its own, and `add` sets no per-clone one
+  either. Decision 0015 resolves and requires it at `session.create`
+  instead: an existing distro-global identity is kept, else the Windows
+  identity the engine read is written, else the source checkout's, else
+  the session refuses with `git_identity_missing`. What's still open is
+  the sessions/sandbox slice's full story: mounting the user's real
   Windows `~/.gitconfig` (the `git.identity` capability in ARCHITECTURE
-  §3.3), or provision a default one.
+  §3.3), or provisioning a default one.

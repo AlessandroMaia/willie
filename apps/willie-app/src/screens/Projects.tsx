@@ -22,12 +22,21 @@ const RETRYABLE_KINDS: JobKind[] = ["sync_to_windows", "update_from_windows"];
 function retryFn(job: Job): (() => Promise<unknown>) | null {
   switch (job.kind) {
     case "sync_to_windows":
-      return () => projectsApi.syncToWindows(job.project_id);
+      return () => projectsApi.syncToWindows(projectJobId(job));
     case "update_from_windows":
-      return () => projectsApi.updateFromWindows(job.project_id);
+      return () => projectsApi.updateFromWindows(projectJobId(job));
     default:
       return null;
   }
+}
+
+/* Every job reaching the functions below came from `latestJobFor`,
+ * matched to one project's id, so it always carries that id back; a
+ * tool job (no project) never appears in a project row's controls. */
+function projectJobId(job: Job): string {
+  const id = job.project_id;
+  if (id === undefined) throw new Error(`job ${job.id} has no project_id`);
+  return id;
 }
 
 function asProblem(error: unknown): Problem {
@@ -362,7 +371,7 @@ export function Projects() {
   }
 
   function cancelJobFor(job: Job) {
-    runRow(job.project_id, job.id, () => projectsApi.cancelJob(job.id));
+    runRow(projectJobId(job), job.id, () => projectsApi.cancelJob(job.id));
   }
 
   /* A job outcome the daemon reports asynchronously (`workspace_dirty`
@@ -370,9 +379,10 @@ export function Projects() {
    * choice remembered from the submission that failed. Everything else
    * retryable just re-runs the same call with the project id. */
   function forceRemoveJob(job: Job) {
-    const keepWorkspace = removeAttempts.get(job.project_id) ?? true;
-    runRow(job.project_id, job.project_id, () =>
-      projectsApi.remove(job.project_id, keepWorkspace, true),
+    const projectId = projectJobId(job);
+    const keepWorkspace = removeAttempts.get(projectId) ?? true;
+    runRow(projectId, projectId, () =>
+      projectsApi.remove(projectId, keepWorkspace, true),
     );
   }
 
@@ -386,7 +396,10 @@ export function Projects() {
       return;
     }
     const fn = retryFn(job);
-    if (fn) runRow(job.project_id, job.project_id, fn);
+    if (fn) {
+      const projectId = projectJobId(job);
+      runRow(projectId, projectId, fn);
+    }
   }
 
   function copyPath(path: string) {

@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 willie-proto = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

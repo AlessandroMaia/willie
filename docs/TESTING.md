@@ -41,6 +41,13 @@ its checklist has been walked and the results recorded in it.
   them only when it is set.
 - Compatibility: when a serialised format changes, add a regression test
   with the **old** shape before changing the code; never delete one.
+- The session tests use fakes, not a real agent: `WILLIE_HARNESS_BIN`
+  points detection at a chosen binary, `WILLIE_HARNESS_INSTALLER`
+  replaces the install command, `WILLIE_SESS_STOP_GRACE_MS` shortens the
+  stop ladder, `WILLIE_SESS_BIN` points the daemon at a freshly built
+  supervisor instead of the installed one, and `WILLIE_HOME`/
+  `WILLIE_RUN_DIR` isolate a test daemon's home and sockets. All are
+  test-only.
 
 ## Sandbox tests (Linux, inside the distro)
 

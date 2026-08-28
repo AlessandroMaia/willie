@@ -73,19 +73,28 @@ impl Pool {
 /// job when its worker thread ends. Built as an RAII guard so cleanup
 /// still runs if `work` (or anything else in the thread) unwinds past
 /// the point where it is constructed -- a leaked slot would otherwise
-/// jam the pool and a leaked busy entry would wedge its project forever.
+/// jam the pool, a leaked busy entry would wedge its project forever, and
+/// a leaked `tool_busy` flag would wedge every future tool install.
 struct Cleanup {
     pool: Arc<Pool>,
     busy: Arc<Mutex<HashSet<ProjectId>>>,
+    tool_busy: Arc<AtomicBool>,
     cancels: Arc<Mutex<HashMap<JobId, Cancel>>>,
-    project_id: ProjectId,
+    project_id: Option<ProjectId>,
     id: JobId,
 }
 
 impl Drop for Cleanup {
     fn drop(&mut self) {
         self.pool.release();
-        lock(&self.busy).remove(&self.project_id);
+        match self.project_id {
+            Some(project_id) => {
+                lock(&self.busy).remove(&project_id);
+            }
+            // A project-less job is, today, always a tool install: the
+            // only kind [`Runner::submit_global`] hands out.
+            None => self.tool_busy.store(false, Ordering::SeqCst),
+        }
         lock(&self.cancels).remove(&self.id);
     }
 }
@@ -98,6 +107,7 @@ pub struct Runner {
     clock: fn() -> String,
     pool: Arc<Pool>,
     busy: Arc<Mutex<HashSet<ProjectId>>>,
+    tool_busy: Arc<AtomicBool>,
     cancels: Arc<Mutex<HashMap<JobId, Cancel>>>,
 }
 
@@ -126,6 +136,7 @@ impl Runner {
                 limit: 3,
             }),
             busy: Arc::new(Mutex::new(HashSet::new())),
+            tool_busy: Arc::new(AtomicBool::new(false)),
             cancels: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -146,6 +157,35 @@ impl Runner {
                 return Err(());
             }
         }
+        self.spawn_job(kind, Some(project_id), work)
+    }
+
+    /// A job that belongs to no project (a tool install). It shares the
+    /// pool but not the per-project exclusion, so it needs its own guard:
+    /// refuses a second global job while one is already running, without
+    /// touching that running job.
+    pub fn submit_global(
+        &self,
+        kind: JobKind,
+        work: Work,
+    ) -> Result<JobId, ()> {
+        if self.tool_busy.swap(true, Ordering::SeqCst) {
+            return Err(());
+        }
+        self.spawn_job(kind, None, work)
+    }
+
+    /// Shared machinery behind [`Runner::submit`] and
+    /// [`Runner::submit_global`]: registers the job, emits its running
+    /// state, and runs `work` on a pooled thread. The per-project `busy`
+    /// entry is the caller's concern -- the [`Cleanup`] guard here only
+    /// clears it when the job actually has a project.
+    fn spawn_job(
+        &self,
+        kind: JobKind,
+        project_id: Option<ProjectId>,
+        work: Work,
+    ) -> Result<JobId, ()> {
         let id = JobId::new();
         let cancel = Cancel::default();
         lock(&self.cancels).insert(id, cancel.clone());
@@ -165,6 +205,7 @@ impl Runner {
         let out = self.out.clone();
         let pool = Arc::clone(&self.pool);
         let busy = Arc::clone(&self.busy);
+        let tool_busy = Arc::clone(&self.tool_busy);
         let cancels = Arc::clone(&self.cancels);
         let clock = self.clock;
         thread::spawn(move || {
@@ -172,6 +213,7 @@ impl Runner {
             let cleanup = Cleanup {
                 pool,
                 busy,
+                tool_busy,
                 cancels,
                 project_id,
                 id,
@@ -208,6 +250,14 @@ impl Runner {
             crate::state::emit(&state, &out, |s| s.upsert_job(done));
         });
         Ok(id)
+    }
+
+    /// Whether a per-project job is currently in flight for `project_id`.
+    /// The session-create path consults this so it never starts a
+    /// supervisor whose workspace a `remove` job may already be deleting.
+    #[must_use]
+    pub fn is_busy(&self, project_id: &ProjectId) -> bool {
+        lock(&self.busy).contains(project_id)
     }
 
     /// Trips `id`'s cancel flag. A no-op once the job has finished.
@@ -290,6 +340,32 @@ mod tests {
         (Runner::new(Arc::clone(&state), out, clock), state)
     }
 
+    /// A state and outbound writer for tests that build their own
+    /// [`Runner`] directly, e.g. to assert on the state it shares.
+    fn test_runner_state()
+    -> (Arc<Mutex<State>>, Outbound, thread::JoinHandle<()>) {
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, h) = Outbound::spawn(std::io::sink());
+        (state, out, h)
+    }
+
+    /// Polls `state` for up to three seconds until `id`'s job leaves
+    /// `Running`, then returns. Panics if it never does.
+    fn wait_for_job_done(state: &Arc<Mutex<State>>, id: JobId) {
+        for _ in 0..300 {
+            {
+                let s = lock(state);
+                if let Some(job) = s.jobs.get(&id)
+                    && !matches!(job.state, JobState::Running)
+                {
+                    return;
+                }
+            }
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("job should have finished within 3 seconds");
+    }
+
     #[test]
     fn a_second_job_on_a_busy_project_is_refused() {
         let (runner, _state) = runner();
@@ -312,6 +388,43 @@ mod tests {
         );
         assert!(second.is_err(), "same project must be busy");
         tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn a_second_global_job_is_refused_while_one_is_running() {
+        let (runner, _state) = runner();
+        let (tx, rx) = mpsc::channel::<()>();
+        // First tool job blocks until we let it finish.
+        let gate = rx;
+        let _ = runner.submit_global(
+            JobKind::InstallHarness,
+            Box::new(move |_| {
+                let _ = gate.recv();
+                Ok(String::new())
+            }),
+        );
+        let second = runner.submit_global(
+            JobKind::InstallHarness,
+            Box::new(|_| Ok(String::new())),
+        );
+        assert!(second.is_err(), "a tool job is already running");
+        tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn a_global_job_has_no_project_and_still_runs_to_done() {
+        let (state, out, _h) = test_runner_state();
+        let runner = Runner::new(state.clone(), out, clock);
+        let id = runner
+            .submit_global(
+                JobKind::InstallHarness,
+                Box::new(|_| Ok("ok".into())),
+            )
+            .unwrap();
+        wait_for_job_done(&state, id);
+        let job = state.lock().unwrap().jobs[&id].clone();
+        assert_eq!(job.project_id, None);
+        assert!(matches!(job.state, JobState::Done));
     }
 
     #[test]
@@ -454,5 +567,37 @@ mod tests {
             thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("the panicking job should have failed with `job_panicked`");
+    }
+
+    #[test]
+    fn a_panicking_tool_job_frees_tool_busy_even_on_unwind() {
+        let (runner, state) = runner();
+        let target = runner
+            .submit_global(
+                JobKind::InstallHarness,
+                Box::new(|_| panic!("boom")),
+            )
+            .unwrap();
+        for _ in 0..200 {
+            let got = state
+                .lock()
+                .unwrap()
+                .jobs
+                .get(&target)
+                .map(|j| j.state.clone());
+            if let Some(JobState::Failed { code, .. }) = got {
+                assert_eq!(code, "job_panicked");
+                // The Cleanup guard must have cleared tool_busy on the
+                // unwind path too: a fresh global submit must succeed.
+                let retry = runner.submit_global(
+                    JobKind::InstallHarness,
+                    Box::new(|_| Ok(String::new())),
+                );
+                assert!(retry.is_ok(), "tool_busy must not stay stuck");
+                return;
+            }
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the panicking tool job should have failed with `job_panicked`");
     }
 }

@@ -12,7 +12,18 @@ path = "src/main.rs"
 
 [dependencies]
 willie-core = { workspace = true }
+willie-proto = { workspace = true }
 willie-harness = { workspace = true }
+willie-linux = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+# The integration tests signal the harness they launch; dev-dependencies
+# are what the Linux test crate links against.
+libc = { workspace = true }
 
 [lints]
 workspace = true
