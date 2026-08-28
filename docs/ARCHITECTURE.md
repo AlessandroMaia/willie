@@ -242,14 +242,17 @@ a rebuildable index (`willie reindex`).
 ### 3.2 Flows
 
 **Start.**
-1. UI → engine → RPC `session.create { project_id, harness,
-   capabilities_override?, args? }`.
+1. UI → engine → RPC `session.create { project_id, git_identity? }`.
+   The `harness`, `capabilities_override?` and `args?` fields arrive with
+   the sandbox and resume slices; they are not on the wire yet.
 2. `willied` resolves configuration layers (§3.4), validates
    **fail-closed**, writes `spec.json`, spawns `willie-sess <id>`
    **detached** (setsid; stdio to `sessions/<id>/supervisor.log`).
 3. `willie-sess` opens the PTY, builds the sandbox, runs the harness on
-   the PTY slave, listens on `/run/willie/sessions/<id>.sock` (0600),
-   records `started`, notifies the daemon over `willied.sock`.
+   the PTY slave, listens on `/run/willie/sessions/<id>.sock` (0600) and
+   records `started`; the daemon rides the session socket as a control
+   client (decision 0014) — the supervisor never calls the daemon and
+   never depends on it.
 4. `willied` replies `{ session }` once the supervisor reports ready; the
    engine composes and runs `wt.exe … wsl.exe --exec … willie attach
    <id>` itself — there is no `attach_command` on the wire.

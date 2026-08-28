@@ -23,7 +23,8 @@ use willie_harness::Harness;
 use willie_linux::paths::{SUPERVISOR_BIN, session_socket, sessions_run_dir};
 
 use crate::{
-    harness, identity, projects::OpError, session_store, state, state::State,
+    harness, identity, jobs::Runner, projects::OpError, session_store, state,
+    state::State,
 };
 
 /// Shared inputs a session operation needs.
@@ -34,6 +35,9 @@ pub struct SessionOps {
     run_dir: PathBuf,
     home: PathBuf,
     clock: fn() -> String,
+    // The same runner the project ops submit to: `create` reads its
+    // per-project busy set to refuse a session while a job is in flight.
+    runner: Arc<Runner>,
 }
 
 impl std::fmt::Debug for SessionOps {
@@ -51,6 +55,7 @@ impl SessionOps {
         run_dir: PathBuf,
         home: PathBuf,
         clock: fn() -> String,
+        runner: Arc<Runner>,
     ) -> Self {
         Self {
             state,
@@ -59,6 +64,7 @@ impl SessionOps {
             run_dir,
             home,
             clock,
+            runner,
         }
     }
 
@@ -81,6 +87,14 @@ impl SessionOps {
                 "project_not_ready",
                 "the project is not ready",
             ));
+        }
+        // A project with a job in flight may be a `remove` deleting its
+        // workspace: the project stays `Ready` while `remove_dir_all` runs
+        // in the background, so starting a supervisor now would give the
+        // harness a cwd that is being torn out from under it. Refuse until
+        // the job finishes, reusing the project-side `project_busy` error.
+        if self.runner.is_busy(&params.project_id) {
+            return Err(crate::projects::busy_err());
         }
         let installed =
             harness::detect_claude(&self.home).ok_or_else(|| {
@@ -399,7 +413,9 @@ fn parse_ready(line: &str) -> Ready {
 fn placeholder(id: SessionId) -> Session {
     Session {
         id,
-        project_id: willie_core::id::ProjectId::new(),
+        // No real project: a nil id never attributes this stand-in to a
+        // live project until the next scan overwrites it from the log.
+        project_id: willie_core::id::ProjectId::nil(),
         harness: String::new(),
         workspace: String::new(),
         state: willie_core::session::SessionState::Running,
@@ -468,5 +484,87 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_os = "linux")]
+mod create_tests {
+    use std::sync::{Arc, Mutex, mpsc};
+
+    use willie_core::{
+        id::ProjectId,
+        project::{Project, ProjectState},
+    };
+    use willie_proto::{job::JobKind, session::CreateParams};
+
+    use super::SessionOps;
+    use crate::{jobs::Runner, outbound::Outbound, state::State};
+
+    fn clock() -> String {
+        "t".to_owned()
+    }
+
+    fn ready_project() -> Project {
+        Project {
+            id: ProjectId::new(),
+            name: "p".into(),
+            slug: "p".into(),
+            source: "C:\\src".into(),
+            workspace: "/w".into(),
+            branch: "main".into(),
+            state: ProjectState::Ready,
+            source_present: true,
+            created_at: clock(),
+        }
+    }
+
+    /// The workspace-deletion race: `project.remove` runs `remove_dir_all`
+    /// in a background job while the project stays `Ready`. A `session.create`
+    /// in that window would spawn a supervisor whose cwd is being deleted,
+    /// so `create` must refuse `project_busy` once a job is in flight.
+    #[test]
+    fn create_refuses_a_project_with_a_job_in_flight() {
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+        let project = ready_project();
+        let pid = project.id;
+        crate::lock(&state).projects.insert(pid, project);
+
+        // Saturate the project's single job slot with a job that blocks
+        // until the channel is dropped, mirroring the projects.rs busy
+        // test; `submit` inserts `pid` into the busy set synchronously.
+        let (tx, rx) = mpsc::channel::<()>();
+        let held = runner.submit(
+            JobKind::SyncToWindows,
+            pid,
+            Box::new(move |_| {
+                let _ = rx.recv();
+                Ok(String::new())
+            }),
+        );
+        assert!(held.is_ok());
+
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            std::env::temp_dir().join("willie-sess-busy-state"),
+            std::env::temp_dir().join("willie-sess-busy-run"),
+            std::env::temp_dir().join("willie-sess-busy-home"),
+            clock,
+            Arc::clone(&runner),
+        );
+        let err = ops
+            .create(CreateParams {
+                project_id: pid,
+                git_identity: None,
+            })
+            .unwrap_err();
+        assert_eq!(err.code, "project_busy");
+
+        // Release the held job so its worker thread ends cleanly.
+        drop(tx);
     }
 }

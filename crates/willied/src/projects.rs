@@ -72,7 +72,9 @@ impl OpError {
 #[derive(Debug)]
 pub struct Ops {
     state: Arc<Mutex<State>>,
-    runner: Runner,
+    // Shared so the session-create path can consult the same per-project
+    // busy set this owner's job submissions populate.
+    runner: Arc<Runner>,
     state_dir: PathBuf,
     workspaces_dir: PathBuf,
     clock: fn() -> String,
@@ -232,7 +234,7 @@ fn check_cancelled(
     Some(("interrupted".to_owned(), message, remediation))
 }
 
-fn busy_err() -> OpError {
+pub(crate) fn busy_err() -> OpError {
     OpError::new(
         "project_busy",
         "a job is already running for this project",
@@ -545,12 +547,19 @@ impl Ops {
     ) -> Self {
         Self {
             state,
-            runner,
+            runner: Arc::new(runner),
             state_dir,
             workspaces_dir,
             clock,
             out,
         }
+    }
+
+    /// A shared handle to the job runner, so the session-create path can
+    /// query the per-project busy set this owner's submissions populate.
+    #[must_use]
+    pub(crate) fn runner_handle(&self) -> Arc<Runner> {
+        Arc::clone(&self.runner)
     }
 
     /// Trips a running job's cancel flag; a no-op once it has finished.

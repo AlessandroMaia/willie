@@ -45,11 +45,12 @@ pub fn install(
         })
 }
 
-/// Runs `command` through `sh -c` with `HOME` set to `home`, the same way
-/// a session's launch environment is built. Success carries stdout as
-/// the job's log; a spawn failure or a non-zero exit both fail the job
-/// `install_failed`, with the process's stderr (or the spawn error) as
-/// the message.
+/// Runs `command` through `sh -c`, inheriting the daemon's environment
+/// with `HOME` overridden to `home`. This differs from a session launch,
+/// which starts the harness under a closed environment allowlist via
+/// `execve`. Success carries stdout as the job's log; a spawn failure or
+/// a non-zero exit both fail the job `install_failed`, with the process's
+/// stderr (or the spawn error) as the message.
 fn run_installer(command: &str, home: &Path) -> JobOutcome {
     let remediation = || remediation_for("install_failed").to_owned();
     let output = Command::new("sh")

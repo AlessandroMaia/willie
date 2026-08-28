@@ -7,7 +7,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use willie_core::session::{SessionEvent, SessionSpec, from_log};
+use willie_core::session::{SessionEvent, SessionSpec};
 
 /// `<state>/sessions`.
 #[must_use]
@@ -47,9 +47,6 @@ pub fn load_all(state_dir: &Path) -> Vec<(SessionSpec, Vec<SessionEvent>)> {
             continue;
         };
         let events = read_events(&dir.join("events.jsonl"));
-        // Shape check only: a malformed line was already dropped by
-        // `read_events`, and folding here proves the survivors apply.
-        let _ = from_log(&spec, &events);
         out.push((spec, events));
     }
     out

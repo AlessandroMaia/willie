@@ -42,7 +42,7 @@ impl EventLog {
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600).custom_flags(libc_o_cloexec());
+            options.mode(0o600).custom_flags(libc::O_CLOEXEC);
         }
         let file = options.open(path)?;
         Ok(Self {
@@ -73,12 +73,6 @@ impl EventLog {
         }
         event
     }
-}
-
-#[cfg(unix)]
-fn libc_o_cloexec() -> i32 {
-    // O_CLOEXEC is 0o2000000 on every Linux architecture.
-    0o2_000_000
 }
 
 /// Every parseable line, in order. Lines that do not parse are skipped:

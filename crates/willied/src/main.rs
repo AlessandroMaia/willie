@@ -171,6 +171,7 @@ fn run_stdio() -> ExitCode {
         run_dir,
         home,
         real_clock,
+        ops.runner_handle(),
     );
     // Re-adopt live supervisors (and finalise dead ones) before serving.
     session_ops.scan();

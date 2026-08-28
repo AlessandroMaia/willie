@@ -227,6 +227,7 @@ mod tests {
             std::env::temp_dir().join("willie-server-test-run"),
             std::env::temp_dir().join("willie-server-test-home"),
             clock,
+            ops.runner_handle(),
         );
         let mut server =
             Server::new(fake_doctor, Arc::clone(&state), ops, sessions, out);

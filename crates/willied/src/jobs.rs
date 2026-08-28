@@ -252,6 +252,14 @@ impl Runner {
         Ok(id)
     }
 
+    /// Whether a per-project job is currently in flight for `project_id`.
+    /// The session-create path consults this so it never starts a
+    /// supervisor whose workspace a `remove` job may already be deleting.
+    #[must_use]
+    pub fn is_busy(&self, project_id: &ProjectId) -> bool {
+        lock(&self.busy).contains(project_id)
+    }
+
     /// Trips `id`'s cancel flag. A no-op once the job has finished.
     pub fn cancel(&self, id: &JobId) {
         if let Some(c) = lock(&self.cancels).get(id) {

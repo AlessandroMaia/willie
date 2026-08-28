@@ -86,6 +86,14 @@ impl<K: Kind> Id<K> {
         }
     }
 
+    /// The all-zero id of this family: a deterministic placeholder for a
+    /// slot that must be filled before any real id is known. It denotes no
+    /// real entity and never collides with a generated (time-based) id.
+    #[must_use]
+    pub const fn nil() -> Self {
+        Self::from_ulid(Ulid::nil())
+    }
+
     /// The prefix used by this id family, without the underscore.
     #[must_use]
     pub const fn prefix() -> &'static str {
@@ -198,6 +206,15 @@ mod tests {
     fn parsing_rejects_garbage_after_the_prefix() {
         let err = "sess_not-a-ulid".parse::<SessionId>().unwrap_err();
         assert!(matches!(err, ParseIdError::InvalidUlid(_)));
+    }
+
+    #[test]
+    fn nil_is_the_all_zero_id_and_is_stable() {
+        assert_eq!(ProjectId::nil(), ProjectId::nil());
+        assert_eq!(
+            ProjectId::nil().to_string(),
+            "proj_00000000000000000000000000"
+        );
     }
 
     #[test]
