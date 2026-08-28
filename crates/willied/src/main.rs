@@ -12,6 +12,8 @@ mod git;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod handlers;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod harness;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod identity;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod jobs;

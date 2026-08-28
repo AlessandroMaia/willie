@@ -86,7 +86,13 @@ pub fn health(started: Instant) -> Result<Value, RpcError> {
 }
 
 pub fn doctor(run: fn() -> DoctorReport) -> Result<Value, RpcError> {
-    serde_json::to_value(run()).map_err(internal)
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut report = run();
+    #[cfg(target_os = "linux")]
+    report
+        .checks
+        .push(crate::harness::doctor_check(&crate::harness::home()));
+    serde_json::to_value(report).map_err(internal)
 }
 
 pub fn project_add(ops: &Ops, p: Value) -> Result<Value, RpcError> {
