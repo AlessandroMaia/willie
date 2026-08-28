@@ -177,3 +177,289 @@ fn an_unreadable_spec_fails_closed() {
     assert!(line.starts_with("fail spec_invalid: "), "{line}");
     let _ = fs::remove_dir_all(&root);
 }
+
+use std::{
+    io::{Read, Write},
+    net::Shutdown,
+    os::unix::net::UnixStream,
+};
+
+use willie_linux::wire;
+use willie_proto::supervisor::{CloseReason, Closed, Hello, Role, Status};
+
+#[derive(Debug)]
+pub struct TestClient {
+    pub stream: UnixStream,
+    decoder: wire::Decoder,
+}
+
+impl TestClient {
+    pub fn connect(socket: &Path, role: Role, rows: u16, cols: u16) -> Self {
+        let stream = UnixStream::connect(socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut c = Self {
+            stream,
+            decoder: wire::Decoder::new(),
+        };
+        c.send(
+            &wire::encode_json(wire::HELLO, &Hello { role, rows, cols })
+                .unwrap(),
+        );
+        c
+    }
+
+    /// Connect without saying hello, to break the protocol on purpose.
+    pub fn connect_silent(socket: &Path) -> Self {
+        let stream = UnixStream::connect(socket).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        Self {
+            stream,
+            decoder: wire::Decoder::new(),
+        }
+    }
+
+    pub fn send(&mut self, frame: &[u8]) {
+        self.stream.write_all(frame).unwrap();
+    }
+
+    /// Next frame, or `None` on EOF/timeout.
+    pub fn next_frame(&mut self) -> Option<wire::Frame> {
+        loop {
+            if let Some(f) = self.decoder.pop() {
+                return Some(f);
+            }
+            let mut buf = [0u8; 8192];
+            match self.stream.read(&mut buf) {
+                Ok(0) | Err(_) => return None,
+                Ok(n) => self.decoder.push(&buf[..n]),
+            }
+        }
+    }
+
+    /// Concatenated OUTPUT until `pred` holds on the total or the stream
+    /// ends; returns what was seen.
+    pub fn output_until(&mut self, pred: impl Fn(&[u8]) -> bool) -> Vec<u8> {
+        let mut seen = Vec::new();
+        while !pred(&seen) {
+            match self.next_frame() {
+                Some(f) if f.kind == wire::OUTPUT => seen.extend(f.payload),
+                Some(_) => {}
+                None => break,
+            }
+        }
+        seen
+    }
+
+    /// Skips frames until a CLOSED arrives.
+    pub fn closed(&mut self) -> Option<Closed> {
+        loop {
+            let f = self.next_frame()?;
+            if f.kind == wire::CLOSED {
+                return wire::decode_json(&f.payload).ok();
+            }
+        }
+    }
+}
+
+// A lifecycle helper kept beside `exited` for later stop-task tests.
+#[allow(dead_code)]
+fn started(events: &[SessionEvent]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e.kind, SessionEventKind::Started { .. }))
+}
+
+fn socket_of(root: &Path) -> PathBuf {
+    root.join("s.sock")
+}
+
+fn kill(pid: u32, signal: i32) {
+    // SAFETY: signalling a process this test started.
+    unsafe { libc::kill(pid as i32, signal) };
+}
+
+#[test]
+fn a_terminal_echoes_input_replays_to_a_late_client_and_is_told_why_it_closed()
+{
+    let root = scratch("echo");
+    let bin = fake_harness(&root, "exec cat");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    let pid: u32 = line.strip_prefix("ok ").unwrap().parse().unwrap();
+    let sock = socket_of(&root);
+    assert!(wait_until(Duration::from_secs(5), || sock.exists()));
+
+    let mut a = TestClient::connect(&sock, Role::Terminal, 24, 80);
+    a.send(&wire::encode(wire::INPUT, b"hello\n"));
+    let seen = a.output_until(|s| s.windows(5).any(|w| w == b"hello"));
+    assert!(String::from_utf8_lossy(&seen).contains("hello"), "{seen:?}");
+    a.send(&wire::encode(wire::DETACH, b""));
+    drop(a);
+    assert!(wait_until(Duration::from_secs(5), || {
+        read_events(&spec)
+            .iter()
+            .any(|e| matches!(e.kind, SessionEventKind::Detached { .. }))
+    }));
+
+    // A late client sees the ring first.
+    let mut b = TestClient::connect(&sock, Role::Terminal, 24, 80);
+    let seen = b.output_until(|s| s.windows(5).any(|w| w == b"hello"));
+    assert!(String::from_utf8_lossy(&seen).contains("hello"));
+
+    kill(pid, libc::SIGTERM);
+    let closed = b.closed().expect("a CLOSED frame");
+    assert_eq!(closed.reason, CloseReason::Exited);
+    assert_eq!(closed.signal, Some(libc::SIGTERM));
+    assert!(wait_until(Duration::from_secs(5), || !sock.exists()));
+    let events = read_events(&spec);
+    assert!(events.iter().any(|e| matches!(
+        e.kind,
+        SessionEventKind::Exited {
+            signal: Some(15),
+            ..
+        }
+    )));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_client_whose_first_frame_is_not_hello_is_closed_with_protocol() {
+    let root = scratch("protocol");
+    let bin = fake_harness(&root, "sleep 30");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (_, line) = launch(&spec);
+    let pid: u32 = line.strip_prefix("ok ").unwrap().parse().unwrap();
+    let sock = socket_of(&root);
+    assert!(wait_until(Duration::from_secs(5), || sock.exists()));
+    let mut c = TestClient::connect_silent(&sock);
+    c.send(&wire::encode(wire::INPUT, b"x"));
+    let closed = c.closed().expect("a CLOSED frame");
+    assert_eq!(closed.reason, CloseReason::Protocol);
+    kill(pid, libc::SIGKILL);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn two_terminals_share_the_session_and_the_last_resize_wins() {
+    let root = scratch("two");
+    let bin = fake_harness(&root, "exec cat");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (_, line) = launch(&spec);
+    let pid: u32 = line.strip_prefix("ok ").unwrap().parse().unwrap();
+    let sock = socket_of(&root);
+    assert!(wait_until(Duration::from_secs(5), || sock.exists()));
+    let mut a = TestClient::connect(&sock, Role::Terminal, 24, 80);
+    let mut b = TestClient::connect(&sock, Role::Terminal, 30, 100);
+    a.send(&wire::encode(wire::INPUT, b"ping\n"));
+    let seen = b.output_until(|s| s.windows(4).any(|w| w == b"ping"));
+    assert!(String::from_utf8_lossy(&seen).contains("ping"));
+    b.send(&wire::encode_resize(40, 120));
+    assert!(wait_until(Duration::from_secs(5), || {
+        read_events(&spec).iter().rev().find_map(|e| match e.kind {
+            SessionEventKind::Resized { rows, cols } => Some((rows, cols)),
+            _ => None,
+        }) == Some((40, 120))
+    }));
+    kill(pid, libc::SIGKILL);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_client_that_never_reads_is_dropped_as_too_slow_and_the_session_survives() {
+    let root = scratch("slow");
+    let bin = fake_harness(&root, "exec yes");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (_, line) = launch(&spec);
+    let pid: u32 = line.strip_prefix("ok ").unwrap().parse().unwrap();
+    let sock = socket_of(&root);
+    assert!(wait_until(Duration::from_secs(5), || sock.exists()));
+    let slow = TestClient::connect(&sock, Role::Terminal, 24, 80);
+    // Never read from `slow`: once its 1 MiB queue overflows under the
+    // flood from `yes`, the supervisor drops it and logs a `detached`.
+    // Detection reads the event log, not the socket — a peer's shutdown
+    // does not purge our receive queue, so a slow socket read could never
+    // drain a full backlog to observe EOF inside the window.
+    let dropped = wait_until(Duration::from_secs(20), || {
+        read_events(&spec)
+            .iter()
+            .any(|e| matches!(e.kind, SessionEventKind::Detached { .. }))
+    });
+    assert!(dropped, "the slow client was never dropped");
+    let _ = slow.stream.shutdown(Shutdown::Both);
+    let mut fresh = TestClient::connect(&sock, Role::Terminal, 24, 80);
+    let seen = fresh.output_until(|s| s.len() > 10);
+    assert!(seen.len() > 10, "the session died with the slow client");
+    kill(pid, libc::SIGKILL);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_full_screen_program_gets_a_size_nudge_instead_of_a_replay() {
+    let root = scratch("alt");
+    let bin = fake_harness(&root, "printf '\\033[?1049hSCREEN'; sleep 30");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (_, line) = launch(&spec);
+    let pid: u32 = line.strip_prefix("ok ").unwrap().parse().unwrap();
+    let sock = socket_of(&root);
+    assert!(wait_until(Duration::from_secs(5), || sock.exists()));
+    std::thread::sleep(Duration::from_millis(500));
+    let mut c = TestClient::connect(&sock, Role::Terminal, 24, 80);
+    // Nothing is replayed; the nudge is visible in the event log.
+    assert!(wait_until(Duration::from_secs(5), || {
+        let sizes: Vec<(u16, u16)> = read_events(&spec)
+            .iter()
+            .filter_map(|e| match e.kind {
+                SessionEventKind::Resized { rows, cols } => Some((rows, cols)),
+                _ => None,
+            })
+            .collect();
+        sizes.ends_with(&[(24, 79), (24, 80)])
+    }));
+    c.stream
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    let seen = c.output_until(|s| s.windows(6).any(|w| w == b"SCREEN"));
+    assert!(
+        !String::from_utf8_lossy(&seen).contains("SCREEN"),
+        "replayed: {seen:?}"
+    );
+    kill(pid, libc::SIGKILL);
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_control_client_gets_status_and_live_events() {
+    let root = scratch("control");
+    let bin = fake_harness(&root, "sleep 30");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (_, line) = launch(&spec);
+    let pid: u32 = line.strip_prefix("ok ").unwrap().parse().unwrap();
+    let sock = socket_of(&root);
+    assert!(wait_until(Duration::from_secs(5), || sock.exists()));
+    let mut ctl = TestClient::connect(&sock, Role::Control, 0, 0);
+    ctl.send(&wire::encode(wire::STATUS_REQ, b""));
+    let f = ctl.next_frame().unwrap();
+    assert_eq!(f.kind, wire::STATUS);
+    let status: Status = wire::decode_json(&f.payload).unwrap();
+    assert_eq!(status.pid, pid);
+    assert_eq!(status.state, "running");
+    assert_eq!(status.clients, 0);
+    let _term = TestClient::connect(&sock, Role::Terminal, 24, 80);
+    let attached = loop {
+        let f = ctl.next_frame().expect("an EVENT frame");
+        if f.kind == wire::EVENT {
+            let ev: SessionEvent = wire::decode_json(&f.payload).unwrap();
+            if matches!(ev.kind, SessionEventKind::Attached { .. }) {
+                break true;
+            }
+        }
+    };
+    assert!(attached);
+    kill(pid, libc::SIGKILL);
+    let _ = fs::remove_dir_all(&root);
+}

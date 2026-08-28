@@ -13,6 +13,9 @@ mod detach;
 mod events;
 #[cfg(target_os = "linux")]
 mod pty;
+mod screen;
+#[cfg(target_os = "linux")]
+mod server;
 mod spec;
 
 use std::process::ExitCode;
@@ -66,6 +69,18 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
         }
     };
     events.append(SessionEventKind::Created);
+    let listener = match server::bind(&paths.socket) {
+        Ok(listener) => listener,
+        Err(e) => {
+            let text = format!("cannot bind {}: {e}", paths.socket.display());
+            events.append(SessionEventKind::Failed {
+                code: "supervisor_spawn_failed".into(),
+                message: text.clone(),
+            });
+            let _ = reply.fail("supervisor_spawn_failed", &text);
+            return ExitCode::from(EXIT_FAILURE);
+        }
+    };
     let (master, slave) = match pty::open() {
         Ok(pair) => pair,
         Err(e) => {
@@ -104,26 +119,26 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
         }
     };
     let pid = u32::try_from(child).unwrap_or(0);
-    events.append(SessionEventKind::Started { pid });
+    let started = events.append(SessionEventKind::Started { pid });
+    let shared = server::Shared::new(
+        master,
+        child,
+        started.at.clone(),
+        paths.socket.clone(),
+        events,
+    );
+    if let Err(e) = server::start(&shared, listener) {
+        let _ = reply.fail("supervisor_spawn_failed", &e.to_string());
+        return ExitCode::from(EXIT_FAILURE);
+    }
     let _ = reply.ok(pid);
     reply.close();
-
-    // Until the socket server exists (next task) the output is drained
-    // and discarded; the harness still runs to completion.
-    let mut buf = [0u8; 16 * 1024];
-    while let Ok(n) = pty::read(&master, &mut buf) {
-        if n == 0 {
-            break;
-        }
-    }
+    server::serve(&shared);
     let exit = pty::wait(child).unwrap_or(pty::Exit {
         code: None,
         signal: None,
     });
-    events.append(SessionEventKind::Exited {
-        code: exit.code,
-        signal: exit.signal,
-    });
+    server::finish(&shared, exit);
     ExitCode::SUCCESS
 }
 
@@ -181,6 +196,16 @@ fn main() -> ExitCode {
         events::EventLog::append,
         events::epoch_secs,
         EXIT_FAILURE,
+    );
+    // `screen` is pure and compiled on every target, yet only the Linux
+    // socket code drives it; name its items so the host build checks them.
+    let _ = (
+        screen::Ring::new,
+        screen::Ring::push,
+        screen::Ring::snapshot,
+        screen::AltScreen::default,
+        screen::AltScreen::feed,
+        screen::AltScreen::active,
     );
     eprintln!(
         "{} runs only inside the Willie Linux distribution",
