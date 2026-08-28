@@ -8,6 +8,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used)]
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod control;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod git;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod handlers;
