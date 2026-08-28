@@ -30,34 +30,27 @@ else refuse with `git_identity_missing`. This supersedes the projects
 slice's `copy_source_identity` stopgap — copying the source's `HEAD`
 author into the clone's *local* configuration during `add` — because a
 local identity outranks the global one this decision writes, so the
-stopgap must go. As of this record that removal has **not** landed:
-`copy_source_identity` (`crates/willied/src/projects.rs`) still runs on
-every `add`. It is a follow-up, not a design choice left open — see
-Consequences and Not decided.
+stopgap had to go: `copy_source_identity` and its only caller are
+removed from `crates/willied/src/projects.rs`, along with the `git.rs`
+helper (`head_author`) it alone used.
 
 ## Consequences
 
 - Every session's commits resolve to one identity, written once to the
-  distro user's global config and reused by every workspace and shell —
-  once the stopgap below is gone.
+  distro user's global config and reused by every workspace and shell.
 - A user with no git identity anywhere is told to set one at
   `session.create`, rather than a session committing as a stranger.
-- Until `copy_source_identity` is removed, **every** project's workspace
-  — new ones included, not only ones from before this record — still
-  gets the source checkout's `HEAD` author written as its *local* git
-  identity by `add`. A local identity always wins over the global one
-  this decision resolves, so a plain `git commit` made directly in that
-  workspace (by a person, or by the agent through a shell outside a
-  session) still uses the copied author, not this resolution, until the
-  call is deleted or the local override is unset by hand
-  (`git config --unset user.name` / `user.email`, run in the workspace);
-  the acceptance checklist names the exact commands.
+- `add` no longer writes any git identity into the workspace. A plain
+  `git commit` made directly in a workspace (by a person, or by the
+  agent through a shell outside a session) now uses the distro user's
+  global identity too, once something has written it — a session
+  created for any project, or the identity set by hand. Workspaces
+  added before this change keep whatever local identity
+  `copy_source_identity` already wrote them until it is unset by hand
+  (`git config --unset user.name` / `user.email`, run in the
+  workspace); the acceptance checklist names the exact commands.
 
 ## Not decided
 
 Mounting the user's real `~/.gitconfig` (the `git.identity` sandbox
-capability, ARCHITECTURE §3.3) belongs to the sandbox slice. Removing
-`copy_source_identity` from `projects.rs`'s `add` job is not left open
-by choice — it is a known gap this record surfaces so a later task in
-this branch, or the whole-of-Plan-A gate, closes it deliberately instead
-of by accident.
+capability, ARCHITECTURE §3.3) belongs to the sandbox slice.

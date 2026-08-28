@@ -247,17 +247,14 @@ the control connections; supervisors do not notice.
 already holds `user.name` and `user.email` — nothing to do; (2) the
 `git_identity` in the params, read by the engine from the Windows global
 configuration; (3) `git -C <source> config user.name` / `user.email` on
-the Windows checkout; (4) `git_identity_missing`. Decision 0015 requires
-the stopgap `add` applies today — `projects.rs::copy_source_identity`
-copying the source `HEAD` author into the clone's *local* configuration
-— to be **removed**: a local identity outranks the global one, so the
-copied author (possibly another person) would win over the user's own
-whenever a commit is made directly in the workspace. That removal has
-**not landed**: `copy_source_identity` still runs on every `add`, so
-every workspace — not only ones from before this slice — keeps a local
-override until `git config --unset user.name` / `user.email` is run in
-it by hand; the acceptance checklist says so. Removing the call is
-tracked as a follow-up in decision 0015, not closed by this slice.
+the Windows checkout; (4) `git_identity_missing`. The stopgap `add`
+applied before this slice — copying the source `HEAD` author into the
+clone's *local* configuration — is **removed** (decision 0015): a
+local identity outranks the global one, so the copied author (possibly
+another person) would have won over the user's own. Workspaces added
+before this slice keep their local identity until
+`git config --unset user.name` / `user.email` is run in them by hand;
+the acceptance checklist names the exact commands.
 
 **`project.remove`** is refused with `sessions_running` while a session
 of that project is `running` or `stopping`: unregistering or deleting the

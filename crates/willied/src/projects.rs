@@ -272,42 +272,6 @@ fn source_no_commits_err() -> OpError {
     )
 }
 
-/// Copies the source's `HEAD` commit author into the clone's local git
-/// identity. The `willie` distro user has none of its own, so without
-/// this a commit made in the workspace (by a person or the agent) fails
-/// with "Please tell me who you are"; the source's own author is the
-/// closest thing to a sensible default. Best effort only: the clone and
-/// its remotes are the load-bearing part of `add`, so a failure here is
-/// logged and does not fail the job.
-fn copy_source_identity(src: &Path, workspace: &Path) {
-    let (name, email) = match git::head_author(src) {
-        Ok(pair) => pair,
-        Err(e) => {
-            eprintln!(
-                "willied: could not read the source git identity: {}",
-                e.message
-            );
-            return;
-        }
-    };
-    if !name.is_empty()
-        && let Err(e) = git::run(workspace, &["config", "user.name", &name])
-    {
-        eprintln!(
-            "willied: could not set the workspace user.name: {}",
-            e.message
-        );
-    }
-    if !email.is_empty()
-        && let Err(e) = git::run(workspace, &["config", "user.email", &email])
-    {
-        eprintln!(
-            "willied: could not set the workspace user.email: {}",
-            e.message
-        );
-    }
-}
-
 /// `add`'s job: clone the source into the workspace, rename `origin` to
 /// `windows`, copy the source's other remotes, disable line-ending
 /// translation in the clone and enable `updateInstead` pushes into the
@@ -346,7 +310,6 @@ fn run_add(
     if let Some(err) = check_cancelled(cancel, JobKind::Add, ctx, &project) {
         return Err(err);
     }
-    copy_source_identity(src, workspace);
     git::run(workspace, &["config", "core.autocrlf", "false"])
         .map_err(|e| add_fail(ctx, &project, e))?;
     git::run(
@@ -1134,33 +1097,6 @@ mod tests {
         .unwrap();
         let done = wait_job_done(&state);
         assert!(matches!(done, JobState::Done), "{done:?}");
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn add_copies_the_source_head_authors_identity_into_the_workspace() {
-        let root = scratch("add-identity");
-        let src = root.join("src");
-        init_repo(&src);
-        let (ops, state) = ops(&root);
-        let res = ops
-            .add(AddParams {
-                windows_path: src.to_string_lossy().into_owned(),
-                name: None,
-            })
-            .unwrap();
-        wait_job_done(&state);
-        let ws = state.lock().unwrap().projects[&res.project_id]
-            .workspace
-            .clone();
-        let email =
-            git::run(Path::new(&ws), &["config", "--local", "user.email"])
-                .unwrap();
-        assert_eq!(email.trim(), "t@t");
-        let name =
-            git::run(Path::new(&ws), &["config", "--local", "user.name"])
-                .unwrap();
-        assert_eq!(name.trim(), "t");
         let _ = fs::remove_dir_all(&root);
     }
 

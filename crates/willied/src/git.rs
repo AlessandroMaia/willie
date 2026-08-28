@@ -80,15 +80,6 @@ pub fn has_commits(repo: &Path) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
-/// Reads the `HEAD` commit's author name and email, trimmed. The caller
-/// must ensure `repo` `has_commits`; on an unborn branch this fails with
-/// `git_failed`.
-pub fn head_author(repo: &Path) -> Result<(String, String), GitError> {
-    let name = run(repo, &["log", "-1", "--format=%an"])?;
-    let email = run(repo, &["log", "-1", "--format=%ae"])?;
-    Ok((name.trim().to_owned(), email.trim().to_owned()))
-}
-
 pub fn is_clean(repo: &Path) -> Result<bool, GitError> {
     Ok(run(repo, &["status", "--porcelain"])?.trim().is_empty())
 }
@@ -197,16 +188,6 @@ mod tests {
         run(&dir, &["checkout", head.trim()]).unwrap();
         let err = current_branch(&dir).unwrap_err();
         assert_eq!(err.code, "source_detached_head");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn head_author_reads_the_head_commits_author() {
-        let dir = scratch("author");
-        init_repo(&dir);
-        let (name, email) = head_author(&dir).unwrap();
-        assert_eq!(name, "t");
-        assert_eq!(email, "t@t");
         let _ = fs::remove_dir_all(&dir);
     }
 }
