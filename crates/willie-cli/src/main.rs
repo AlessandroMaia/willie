@@ -7,6 +7,9 @@
 
 use std::process::ExitCode;
 
+#[cfg(target_os = "linux")]
+mod attach;
+
 use willie_proto::daemon::{CheckStatus, DoctorReport};
 
 const EXIT_FAILURE: u8 = 1;
@@ -21,7 +24,18 @@ fn version_line() -> String {
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
     Version,
-    Doctor { json: bool },
+    Doctor {
+        json: bool,
+    },
+    /// Serve one terminal from the session at `target` (a session id or a
+    /// socket path).
+    Attach {
+        target: String,
+        /// Fixed window size, for a client with no terminal of its own.
+        size: Option<(u16, u16)>,
+        /// Whether to put the local terminal in raw mode.
+        raw: bool,
+    },
     Usage,
 }
 
@@ -30,7 +44,50 @@ fn parse(args: &[&str]) -> Command {
         ["--version"] => Command::Version,
         ["doctor"] => Command::Doctor { json: false },
         ["doctor", "--json"] => Command::Doctor { json: true },
+        ["attach", rest @ ..] => parse_attach(rest),
         _ => Command::Usage,
+    }
+}
+
+fn parse_attach(args: &[&str]) -> Command {
+    let mut target = None;
+    let mut size = None;
+    let mut raw = true;
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match *arg {
+            "--no-raw" => raw = false,
+            "--size" => match rest.next().and_then(|v| parse_size(v)) {
+                Some(parsed) => size = Some(parsed),
+                None => return Command::Usage,
+            },
+            other if other.starts_with('-') => return Command::Usage,
+            other if target.is_none() => target = Some(other.to_owned()),
+            _ => return Command::Usage,
+        }
+    }
+    match target {
+        Some(target) => Command::Attach { target, size, raw },
+        None => Command::Usage,
+    }
+}
+
+/// `ROWSxCOLS`, as `stty size` reports it: rows first.
+fn parse_size(text: &str) -> Option<(u16, u16)> {
+    let (rows, cols) = text.split_once('x')?;
+    Some((rows.parse().ok()?, cols.parse().ok()?))
+}
+
+/// A bare session id is the well-known socket; anything with a `/` is a
+/// socket path (tests, hand-made sessions).
+fn socket_for(target: &str) -> std::path::PathBuf {
+    if target.contains('/') {
+        std::path::PathBuf::from(target)
+    } else {
+        willie_linux::paths::session_socket(
+            std::path::Path::new(willie_linux::paths::RUN_DIR),
+            target,
+        )
     }
 }
 
@@ -87,7 +144,10 @@ fn doctor(json: bool) -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: willie doctor [--json] | willie --version");
+    eprintln!(
+        "usage: willie attach [--no-raw] [--size ROWSxCOLS] \
+         <session-id|socket> | willie doctor [--json] | willie --version"
+    );
     ExitCode::from(EXIT_USAGE)
 }
 
@@ -101,13 +161,25 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Doctor { json } => doctor(json),
+        Command::Attach { target, size, raw } => {
+            attach::run(&socket_for(&target), size, raw)
+        }
         Command::Usage => usage(),
     }
 }
 
 #[cfg(not(target_os = "linux"))]
 fn main() -> ExitCode {
-    let _ = (doctor, render, render_json, exit_code, parse);
+    let _ = (
+        doctor,
+        render,
+        render_json,
+        exit_code,
+        parse,
+        parse_attach,
+        parse_size,
+        socket_for,
+    );
     eprintln!(
         "{} runs only inside the Willie Linux distribution",
         version_line()
@@ -154,6 +226,41 @@ mod tests {
         assert_eq!(parse(&["--json", "doctor"]), Command::Usage);
         assert_eq!(parse(&["doctor", "--json", "extra"]), Command::Usage);
         assert_eq!(parse(&[]), Command::Usage);
+    }
+
+    #[test]
+    fn attach_takes_an_id_or_a_path_and_two_optional_flags() {
+        assert_eq!(
+            parse(&["attach", "sess_01J"]),
+            Command::Attach {
+                target: "sess_01J".into(),
+                size: None,
+                raw: true
+            }
+        );
+        assert_eq!(
+            parse(&["attach", "--no-raw", "--size", "24x80", "/tmp/s.sock"]),
+            Command::Attach {
+                target: "/tmp/s.sock".into(),
+                size: Some((24, 80)),
+                raw: false
+            }
+        );
+        assert_eq!(parse(&["attach"]), Command::Usage);
+        assert_eq!(parse(&["attach", "--size", "x", "a"]), Command::Usage);
+        assert_eq!(parse(&["attach", "a", "b"]), Command::Usage);
+    }
+
+    #[test]
+    fn a_bare_id_resolves_to_the_run_dir_socket_and_a_path_is_kept() {
+        assert_eq!(
+            socket_for("sess_01J"),
+            std::path::PathBuf::from("/run/willie/sessions/sess_01J.sock")
+        );
+        assert_eq!(
+            socket_for("/tmp/x.sock"),
+            std::path::PathBuf::from("/tmp/x.sock")
+        );
     }
 
     #[test]

@@ -16,5 +16,9 @@ willie-core = { workspace = true }
 willie-linux = { workspace = true }
 willie-proto = { workspace = true }
 
+# Raw mode, signals and `TIOCGWINSZ` for `willie attach`; Linux only.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }
+
 [lints]
 workspace = true
