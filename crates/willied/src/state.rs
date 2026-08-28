@@ -8,8 +8,9 @@ use std::{
 };
 
 use willie_core::{
-    id::{JobId, ProjectId},
+    id::{JobId, ProjectId, SessionId},
     project::Project,
+    session::Session,
 };
 use willie_proto::{
     job::Job,
@@ -22,6 +23,7 @@ use crate::{outbound::Outbound, store};
 pub struct State {
     pub projects: BTreeMap<ProjectId, Project>,
     pub jobs: BTreeMap<JobId, Job>,
+    pub sessions: BTreeMap<SessionId, Session>,
     pub seq: u64,
 }
 
@@ -35,6 +37,7 @@ impl State {
         Self {
             projects,
             jobs: BTreeMap::new(),
+            sessions: BTreeMap::new(),
             seq: 0,
         }
     }
@@ -45,9 +48,7 @@ impl State {
             seq: self.seq,
             projects: self.projects.values().cloned().collect(),
             jobs: self.jobs.values().cloned().collect(),
-            // The daemon does not track sessions yet; a later task adds
-            // the field to `State` and populates this from it.
-            sessions: Vec::new(),
+            sessions: self.sessions.values().cloned().collect(),
         }
     }
 
@@ -84,6 +85,31 @@ impl State {
             seq,
             kind: EventKind::JobChanged { job },
         }
+    }
+
+    // Called from `session.create`/lifecycle handling (Task 8); allow
+    // until then so the plain (non-test) binary still builds clean.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn upsert_session(&mut self, session: Session) -> Event {
+        let seq = self.bump();
+        self.sessions.insert(session.id, session.clone());
+        Event {
+            seq,
+            kind: EventKind::SessionChanged { session },
+        }
+    }
+
+    /// Ids of the project's sessions that are still live.
+    // Called from the session RPCs (Task 8); allow until then.
+    #[allow(dead_code)]
+    #[must_use]
+    pub fn live_session_ids_for(&self, project: &ProjectId) -> Vec<SessionId> {
+        self.sessions
+            .values()
+            .filter(|s| s.project_id == *project && s.state.is_live())
+            .map(|s| s.id)
+            .collect()
     }
 }
 
@@ -137,5 +163,27 @@ mod tests {
         assert_eq!(e2.seq, 2);
         assert_eq!(s.snapshot().seq, 2);
         assert!(s.snapshot().projects.is_empty());
+    }
+
+    #[test]
+    fn a_session_upsert_bumps_seq_and_shows_in_the_snapshot() {
+        use willie_core::session::{Session, SessionState};
+        let mut s = State::default();
+        let sess = Session {
+            id: SessionId::new(),
+            project_id: ProjectId::new(),
+            harness: "claude-code".into(),
+            workspace: "/w".into(),
+            state: SessionState::Running,
+            created_at: "t".into(),
+            started_at: None,
+            finished_at: None,
+            pid: Some(3),
+            clients: 0,
+        };
+        let ev = s.upsert_session(sess.clone());
+        assert_eq!(ev.seq, 1);
+        assert_eq!(s.snapshot().sessions.len(), 1);
+        assert_eq!(s.live_session_ids_for(&sess.project_id), vec![sess.id]);
     }
 }

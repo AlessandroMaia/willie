@@ -78,14 +78,16 @@ struct Cleanup {
     pool: Arc<Pool>,
     busy: Arc<Mutex<HashSet<ProjectId>>>,
     cancels: Arc<Mutex<HashMap<JobId, Cancel>>>,
-    project_id: ProjectId,
+    project_id: Option<ProjectId>,
     id: JobId,
 }
 
 impl Drop for Cleanup {
     fn drop(&mut self) {
         self.pool.release();
-        lock(&self.busy).remove(&self.project_id);
+        if let Some(project_id) = self.project_id {
+            lock(&self.busy).remove(&project_id);
+        }
         lock(&self.cancels).remove(&self.id);
     }
 }
@@ -146,6 +148,33 @@ impl Runner {
                 return Err(());
             }
         }
+        self.spawn_job(kind, Some(project_id), work)
+    }
+
+    /// A job that belongs to no project (a tool install). It shares the
+    /// pool but not the per-project exclusion.
+    // Called from the harness install RPC (Task 8); allow until then so
+    // the plain (non-test) binary still builds clean.
+    #[allow(dead_code)]
+    pub fn submit_global(
+        &self,
+        kind: JobKind,
+        work: Work,
+    ) -> Result<JobId, ()> {
+        self.spawn_job(kind, None, work)
+    }
+
+    /// Shared machinery behind [`Runner::submit`] and
+    /// [`Runner::submit_global`]: registers the job, emits its running
+    /// state, and runs `work` on a pooled thread. The per-project `busy`
+    /// entry is the caller's concern -- the [`Cleanup`] guard here only
+    /// clears it when the job actually has a project.
+    fn spawn_job(
+        &self,
+        kind: JobKind,
+        project_id: Option<ProjectId>,
+        work: Work,
+    ) -> Result<JobId, ()> {
         let id = JobId::new();
         let cancel = Cancel::default();
         lock(&self.cancels).insert(id, cancel.clone());
@@ -153,7 +182,7 @@ impl Runner {
         let job = Job {
             id,
             kind,
-            project_id: Some(project_id),
+            project_id,
             state: JobState::Running,
             started_at: started_at.clone(),
             finished_at: None,
@@ -199,7 +228,7 @@ impl Runner {
             let done = Job {
                 id,
                 kind,
-                project_id: Some(project_id),
+                project_id,
                 state: final_state,
                 started_at,
                 finished_at: Some(clock()),
@@ -290,6 +319,32 @@ mod tests {
         (Runner::new(Arc::clone(&state), out, clock), state)
     }
 
+    /// A state and outbound writer for tests that build their own
+    /// [`Runner`] directly, e.g. to assert on the state it shares.
+    fn test_runner_state()
+    -> (Arc<Mutex<State>>, Outbound, thread::JoinHandle<()>) {
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, h) = Outbound::spawn(std::io::sink());
+        (state, out, h)
+    }
+
+    /// Polls `state` for up to three seconds until `id`'s job leaves
+    /// `Running`, then returns. Panics if it never does.
+    fn wait_for_job_done(state: &Arc<Mutex<State>>, id: JobId) {
+        for _ in 0..300 {
+            {
+                let s = lock(state);
+                if let Some(job) = s.jobs.get(&id)
+                    && !matches!(job.state, JobState::Running)
+                {
+                    return;
+                }
+            }
+            thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("job should have finished within 3 seconds");
+    }
+
     #[test]
     fn a_second_job_on_a_busy_project_is_refused() {
         let (runner, _state) = runner();
@@ -312,6 +367,22 @@ mod tests {
         );
         assert!(second.is_err(), "same project must be busy");
         tx.send(()).unwrap();
+    }
+
+    #[test]
+    fn a_global_job_has_no_project_and_still_runs_to_done() {
+        let (state, out, _h) = test_runner_state();
+        let runner = Runner::new(state.clone(), out, clock);
+        let id = runner
+            .submit_global(
+                JobKind::InstallHarness,
+                Box::new(|_| Ok("ok".into())),
+            )
+            .unwrap();
+        wait_for_job_done(&state, id);
+        let job = state.lock().unwrap().jobs[&id].clone();
+        assert_eq!(job.project_id, None);
+        assert!(matches!(job.state, JobState::Done));
     }
 
     #[test]

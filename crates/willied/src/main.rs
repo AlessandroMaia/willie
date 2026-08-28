@@ -12,6 +12,8 @@ mod git;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod handlers;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod identity;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod jobs;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod outbound;
@@ -32,6 +34,11 @@ const EXIT_USAGE: u8 = 2;
 /// can run against a private, hermetic state directory.
 #[cfg(target_os = "linux")]
 const STATE_DIR_ENV: &str = "WILLIE_STATE_DIR";
+/// Where session sockets and other runtime state live, overridable for
+/// the same reason. Consumed by the sessions RPC task.
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+const RUN_DIR_ENV: &str = "WILLIE_RUN_DIR";
 /// Where workspaces are cloned, overridable for the same reason.
 #[cfg(target_os = "linux")]
 const PROJECTS_DIR_ENV: &str = "WILLIE_PROJECTS_DIR";

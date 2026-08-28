@@ -14,6 +14,7 @@ path = "src/main.rs"
 willie-core = { workspace = true }
 willie-proto = { workspace = true }
 willie-linux = { workspace = true }
+willie-harness = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
 
