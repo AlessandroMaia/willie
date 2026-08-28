@@ -24,6 +24,20 @@ pub fn willied_bin() -> String {
     willie_core::paths::windows_to_drvfs(raw).unwrap_or_else(|| raw.to_owned())
 }
 
+/// The Linux path of the built `willie-sess`, which lives beside `willied`
+/// in the same target directory. There is no `CARGO_BIN_EXE_*` for a
+/// sibling crate's binary, so derive it from `willied`'s already-DrvFs
+/// path: that uses `/` separators, so `with_file_name` works here (this
+/// runs inside the distro), whereas the raw baked Windows path does not.
+/// The daemon reads the result from `WILLIE_SESS_BIN`.
+pub fn sess_bin() -> String {
+    let willied = willied_bin();
+    Path::new(&willied)
+        .with_file_name("willie-sess")
+        .to_string_lossy()
+        .into_owned()
+}
+
 /// Whether `git` can be run; prints the one skip reason when it cannot.
 pub fn git_available() -> bool {
     match Command::new("git").arg("--version").output() {
@@ -36,12 +50,15 @@ pub fn git_available() -> bool {
 }
 
 /// A unique scratch root under the system temp dir (ext4 `/tmp` inside the
-/// distribution), cleared first so a rerun starts clean.
+/// distribution), cleared first so a rerun starts clean. The suffix is kept
+/// short on purpose: a session's Unix socket lives at
+/// `<root>/run/sessions/<id>.sock`, and the whole path plus the 31-char
+/// session id must fit in the kernel's ~108-byte socket path limit.
 pub fn scratch(name: &str) -> PathBuf {
     let root = std::env::temp_dir().join(format!(
-        "willie-it-{name}-{}-{}",
+        "wl-{name}-{}-{}",
         std::process::id(),
-        nanos()
+        nanos() % 100_000
     ));
     let _ = std::fs::remove_dir_all(&root);
     root
@@ -91,11 +108,38 @@ pub struct Daemon {
 }
 
 impl Daemon {
+    /// Spawns the daemon with only the state and workspaces directories
+    /// overridden; the run and home directories default under the state
+    /// directory. Used by tests that never create a session.
     pub fn start(state_dir: &Path, workspaces_dir: &Path) -> Daemon {
+        Daemon::start_with(
+            state_dir,
+            workspaces_dir,
+            &state_dir.join("run"),
+            &state_dir.join("home"),
+        )
+    }
+
+    /// Spawns the daemon with every hermetic directory overridden,
+    /// including the run dir (where session sockets live) and the home
+    /// (session PATH, git identity, harness lookup). Points the daemon at
+    /// the freshly-built `willie-sess` and unsets `TERM`/`TZ` so a
+    /// supervisor's launch environment is deterministic.
+    pub fn start_with(
+        state_dir: &Path,
+        workspaces_dir: &Path,
+        run_dir: &Path,
+        home: &Path,
+    ) -> Daemon {
         let mut child = Command::new(willied_bin())
             .arg("--stdio")
             .env("WILLIE_STATE_DIR", state_dir)
             .env("WILLIE_PROJECTS_DIR", workspaces_dir)
+            .env("WILLIE_RUN_DIR", run_dir)
+            .env("WILLIE_HOME", home)
+            .env("WILLIE_SESS_BIN", sess_bin())
+            .env_remove("TERM")
+            .env_remove("TZ")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -169,6 +213,13 @@ impl Daemon {
         }
         panic!("no response to id {id} within {deadline:?}");
     }
+
+    /// Sends `state.snapshot` and returns its `result` object (the
+    /// `{ seq, projects, jobs, sessions }` snapshot).
+    pub fn snapshot(&mut self) -> Value {
+        let id = self.send("state.snapshot", serde_json::json!({}));
+        self.wait_response(id, Duration::from_secs(5), |_| {})["result"].clone()
+    }
 }
 
 impl Drop for Daemon {
@@ -186,4 +237,61 @@ pub fn is_response_to(v: &Value, id: u64) -> bool {
 /// True when `v` is a `state.event` notification.
 pub fn is_state_event(v: &Value) -> bool {
     v.get("method").and_then(Value::as_str) == Some("state.event")
+}
+
+/// Records an add job reaching `Done` from a `state.event`, and fails the
+/// test loudly if the job failed instead.
+fn note_add_job(ev: &Value, done: &mut bool) {
+    let params = &ev["params"];
+    if params["kind"] == "job_changed" {
+        match params["job"]["state"]["state"].as_str() {
+            Some("done") => *done = true,
+            Some("failed") => panic!("the add job failed: {params}"),
+            _ => {}
+        }
+    }
+}
+
+/// Adds `src` as a project, waits for its add job to reach `Done`, and
+/// returns the new project id. Panics if the add errors or never finishes.
+pub fn add_ready_project(d: &mut Daemon, src: &Path) -> String {
+    let mut job_done = false;
+    let add_id = d.send(
+        "project.add",
+        serde_json::json!({ "windows_path": src.to_string_lossy() }),
+    );
+    let resp = d.wait_response(add_id, Duration::from_secs(30), |ev| {
+        if is_state_event(ev) {
+            note_add_job(ev, &mut job_done);
+        }
+    });
+    let project_id = resp
+        .get("result")
+        .and_then(|r| r["project_id"].as_str())
+        .unwrap_or_else(|| panic!("project.add errored: {resp}"))
+        .to_owned();
+    let until = Instant::now() + Duration::from_secs(30);
+    while !job_done && Instant::now() < until {
+        if let Some(ev) = d.recv(Duration::from_secs(5))
+            && is_state_event(&ev)
+        {
+            note_add_job(&ev, &mut job_done);
+        }
+    }
+    assert!(job_done, "the add job never reached Done");
+    project_id
+}
+
+/// Polls `cond` every 100ms until it returns true or `timeout` elapses.
+pub fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
+    let until = Instant::now() + timeout;
+    loop {
+        if cond() {
+            return true;
+        }
+        if Instant::now() >= until {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 }

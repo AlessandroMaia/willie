@@ -28,7 +28,7 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpError {
-    pub code: &'static str,
+    pub code: String,
     pub message: String,
     pub remediation: String,
 }
@@ -40,9 +40,31 @@ impl OpError {
         remediation: impl Into<String>,
     ) -> Self {
         Self {
-            code,
+            code: code.to_owned(),
             message: message.into(),
             remediation: remediation.into(),
+        }
+    }
+
+    /// A session/tool error whose remediation comes from the shared
+    /// `willie_core::session` table; the message is borrowed and copied.
+    pub(crate) fn coded(code: &'static str, message: &str) -> Self {
+        Self {
+            code: code.to_owned(),
+            message: message.to_owned(),
+            remediation: willie_core::session::remediation_for(code).to_owned(),
+        }
+    }
+
+    /// Same, for a code and message the daemon received at runtime (a
+    /// supervisor readiness failure), where the code is not `'static`.
+    pub(crate) fn coded_owned(code: String, message: String) -> Self {
+        let remediation =
+            willie_core::session::remediation_for(&code).to_owned();
+        Self {
+            code,
+            message,
+            remediation,
         }
     }
 }
@@ -59,7 +81,7 @@ pub struct Ops {
 
 /// The Linux path git should use for a registered source. A real source
 /// is a Windows path; tests pass a Linux path straight through.
-fn source_to_linux(source: &str) -> Option<String> {
+pub(crate) fn source_to_linux(source: &str) -> Option<String> {
     if source.len() >= 2 && source.as_bytes()[1] == b':' {
         windows_to_drvfs(source)
     } else if source.starts_with('/') {
@@ -739,6 +761,16 @@ impl Ops {
         force: bool,
     ) -> Result<JobRef, OpError> {
         let project = self.get_project(id)?;
+        // A project with a live session must not be removed: the
+        // supervisor and its workspace are still in use. The guard reads
+        // the shared state directly, so `Ops` needs no session handle.
+        if !lock(&self.state).live_session_ids_for(&id).is_empty() {
+            return Err(OpError::new(
+                "sessions_running",
+                "the project has a running session",
+                willie_core::session::remediation_for("sessions_running"),
+            ));
+        }
         let state = Arc::clone(&self.state);
         let state_dir = self.state_dir.clone();
         let out = self.out.clone();

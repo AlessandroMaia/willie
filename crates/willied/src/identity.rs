@@ -7,16 +7,12 @@ use std::{path::Path, process::Command};
 use willie_proto::session::GitIdentity;
 
 /// Why an identity could not be ensured.
-// Read by `session.create`'s error path (Task 8); allow until then so
-// the plain (non-test) binary still builds clean.
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct EnsureError {
     code: &'static str,
     message: String,
 }
 
-#[allow(dead_code)]
 impl EnsureError {
     #[must_use]
     pub fn code(&self) -> &'static str {
@@ -31,8 +27,6 @@ impl EnsureError {
 /// Ensure `<home>/.gitconfig` has a `user.name` and `user.email`, in
 /// order: keep an existing one; else write the Windows identity; else the
 /// source checkout's; else fail closed.
-// Called from `session.create` (Task 8); allow until then.
-#[allow(dead_code)]
 pub fn ensure(
     home: &Path,
     windows: Option<&GitIdentity>,
@@ -57,16 +51,12 @@ pub fn ensure(
 }
 
 /// Read the global identity as the distro user would see it.
-// Only `ensure` calls this today, and `ensure` itself is not yet called
-// from production code (Task 8 wires it in); allow until then.
-#[allow(dead_code)]
 fn read_identity(home: &Path) -> Option<(String, String)> {
     let name = global_config(home, "user.name")?;
     let email = global_config(home, "user.email")?;
     (!name.is_empty() && !email.is_empty()).then_some((name, email))
 }
 
-#[allow(dead_code)]
 fn write_identity(
     home: &Path,
     name: &str,
@@ -76,7 +66,6 @@ fn write_identity(
     set_global(home, "user.email", email)
 }
 
-#[allow(dead_code)]
 fn global_config(home: &Path, key: &str) -> Option<String> {
     let out = Command::new("git")
         .args(["config", "--global", key])
@@ -90,7 +79,6 @@ fn global_config(home: &Path, key: &str) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
-#[allow(dead_code)]
 fn set_global(home: &Path, key: &str, value: &str) -> Result<(), EnsureError> {
     let ok = Command::new("git")
         .args(["config", "--global", key, value])
@@ -109,7 +97,6 @@ fn set_global(home: &Path, key: &str, value: &str) -> Result<(), EnsureError> {
     }
 }
 
-#[allow(dead_code)]
 fn git_config(repo: &Path, key: &str) -> Option<String> {
     let out = Command::new("git")
         .arg("-C")

@@ -26,9 +26,15 @@ mod projects;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod server;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod session_store;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod sessions;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod state;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod store;
+
+pub(crate) use state::lock;
 
 use std::process::ExitCode;
 
@@ -41,7 +47,6 @@ const STATE_DIR_ENV: &str = "WILLIE_STATE_DIR";
 /// Where session sockets and other runtime state live, overridable for
 /// the same reason. Consumed by the sessions RPC task.
 #[cfg(target_os = "linux")]
-#[allow(dead_code)]
 const RUN_DIR_ENV: &str = "WILLIE_RUN_DIR";
 /// Where workspaces are cloned, overridable for the same reason.
 #[cfg(target_os = "linux")]
@@ -70,6 +75,20 @@ fn real_clock() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("{secs}")
+}
+
+/// A clock for timestamps produced outside the request path (finalising a
+/// lost session on a background thread), where threading the injected
+/// clock through is not worth it. The real epoch clock on Linux; a fixed
+/// stamp on other targets, which never reach this code at runtime.
+#[cfg(target_os = "linux")]
+pub(crate) fn real_clock_or_zero() -> String {
+    real_clock()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn real_clock_or_zero() -> String {
+    "0".to_owned()
 }
 
 /// A daemon that died mid-add leaves a project stuck `Preparing`. On the
@@ -120,6 +139,13 @@ fn run_stdio() -> ExitCode {
         std::env::var(PROJECTS_DIR_ENV)
             .unwrap_or_else(|_| DEFAULT_PROJECTS_DIR.to_owned()),
     );
+    let run_dir = PathBuf::from(
+        std::env::var(RUN_DIR_ENV)
+            .unwrap_or_else(|_| willie_linux::paths::RUN_DIR.to_owned()),
+    );
+    // The distro user's home (session PATH, git identity, harness lookup),
+    // overridable via `WILLIE_HOME` for hermetic tests.
+    let home = harness::home();
 
     let (out, writer_handle) = outbound::Outbound::spawn(std::io::stdout());
     let state = Arc::new(Mutex::new(state::State::load(&state_dir)));
@@ -128,15 +154,29 @@ fn run_stdio() -> ExitCode {
     let ops = projects::Ops::new(
         Arc::clone(&state),
         runner,
-        state_dir,
+        state_dir.clone(),
         workspaces_dir,
         real_clock,
         out.clone(),
     );
+    // The run dir feeds both the socket path written into each spec and
+    // the daemon's own connect/scan path, so both sides agree on where a
+    // session's socket lives.
+    let session_ops = sessions::SessionOps::new(
+        Arc::clone(&state),
+        out.clone(),
+        state_dir,
+        run_dir,
+        home,
+        real_clock,
+    );
+    // Re-adopt live supervisors (and finalise dead ones) before serving.
+    session_ops.scan();
     let mut server = server::Server::new(
         willie_linux::doctor::run_all,
         Arc::clone(&state),
         ops,
+        session_ops,
         out.clone(),
     );
 

@@ -15,10 +15,14 @@ use willie_proto::{
     job::method as job,
     project::method as project,
     rpc::{Request, Response, RpcError},
+    session::method as session,
     state::method as state_method,
 };
 
-use crate::{handlers, outbound::Outbound, projects::Ops, state::State};
+use crate::{
+    handlers, outbound::Outbound, projects::Ops, sessions::SessionOps,
+    state::State,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitReason {
@@ -31,6 +35,7 @@ pub struct Server {
     doctor: fn() -> DoctorReport,
     state: Arc<Mutex<State>>,
     ops: Ops,
+    sessions: SessionOps,
     out: Outbound,
     shutting_down: bool,
 }
@@ -49,6 +54,7 @@ impl Server {
         doctor: fn() -> DoctorReport,
         state: Arc<Mutex<State>>,
         ops: Ops,
+        sessions: SessionOps,
         out: Outbound,
     ) -> Self {
         Self {
@@ -56,6 +62,7 @@ impl Server {
             doctor,
             state,
             ops,
+            sessions,
             out,
             shutting_down: false,
         }
@@ -93,6 +100,11 @@ impl Server {
             job::LIST => handlers::job_list(&self.state),
             job::GET => handlers::job_get(&self.state, req.params),
             job::CANCEL => handlers::job_cancel(&self.ops, req.params),
+            session::CREATE => {
+                handlers::session_create(&self.sessions, req.params)
+            }
+            session::STOP => handlers::session_stop(&self.sessions, req.params),
+            session::LIST => handlers::session_list(&self.sessions),
             state_method::SNAPSHOT => {
                 handlers::state_snapshot(&self.ops, &self.state)
             }
@@ -150,7 +162,8 @@ mod tests {
 
     use super::*;
     use crate::{
-        jobs::Runner, outbound::Outbound, projects::Ops, state::State,
+        jobs::Runner, outbound::Outbound, projects::Ops, sessions::SessionOps,
+        state::State,
     };
 
     fn fake_doctor() -> DoctorReport {
@@ -205,7 +218,16 @@ mod tests {
             clock,
             out.clone(),
         );
-        let mut server = Server::new(fake_doctor, Arc::clone(&state), ops, out);
+        let sessions = SessionOps::new(
+            Arc::clone(&state),
+            out.clone(),
+            std::env::temp_dir().join("willie-server-test-state"),
+            std::env::temp_dir().join("willie-server-test-run"),
+            std::env::temp_dir().join("willie-server-test-home"),
+            clock,
+        );
+        let mut server =
+            Server::new(fake_doctor, Arc::clone(&state), ops, sessions, out);
         let reason = server.serve(Cursor::new(input)).unwrap();
         // Drop every `Outbound` sender so the writer thread drains and ends.
         drop(server);

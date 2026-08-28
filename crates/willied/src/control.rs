@@ -25,13 +25,16 @@ use willie_proto::supervisor::{Hello, Role, Status};
 #[derive(Debug)]
 pub struct Control {
     stream: UnixStream,
+    /// Frames (and a trailing partial frame) read while looking for the
+    /// status reply but sent by the supervisor after it. Reading a stream
+    /// socket can pull several frames in one syscall, so `status` may
+    /// consume an event that belongs to `watch`; keeping the decoder on
+    /// the connection hands those frames to `watch` instead of losing
+    /// them.
+    decoder: wire::Decoder,
 }
 
 /// Attach to a supervisor as the control client.
-///
-/// Called by session adoption once it lands (Task 8c); allow dead code
-/// until then so the plain (non-test) binary still builds clean.
-#[allow(dead_code)]
 pub fn connect(socket: &Path) -> io::Result<Control> {
     let mut stream = UnixStream::connect(socket)?;
     let hello = Hello {
@@ -42,14 +45,14 @@ pub fn connect(socket: &Path) -> io::Result<Control> {
     let frame = wire::encode_json(wire::HELLO, &hello)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     stream.write_all(&frame)?;
-    Ok(Control { stream })
+    Ok(Control {
+        stream,
+        decoder: wire::Decoder::new(),
+    })
 }
 
 impl Control {
     /// Ask for and read one status. Used when adopting a session at start.
-    ///
-    /// Wired in the sessions RPC task (8c); until then nothing calls it.
-    #[allow(dead_code)]
     pub fn status(&mut self) -> io::Result<Status> {
         self.stream
             .write_all(&wire::encode(wire::STATUS_REQ, b""))?;
@@ -70,12 +73,13 @@ impl Control {
     /// more: a frame the supervisor sent ahead of the status reply (an
     /// event, say) may already share the same read as that reply, and
     /// blocking on another read would wait on bytes that already
-    /// arrived.
+    /// arrived. Reads through the connection's own decoder so a frame that
+    /// arrived after the status reply, in the same read, stays buffered
+    /// for `watch` to deliver.
     fn read_status_reply(&mut self) -> io::Result<Status> {
-        let mut decoder = wire::Decoder::new();
         let mut buf = [0u8; 4096];
         loop {
-            while let Some(f) = decoder.pop() {
+            while let Some(f) = self.decoder.pop() {
                 if f.kind == wire::STATUS {
                     return wire::decode_json(&f.payload).map_err(|e| {
                         io::Error::new(io::ErrorKind::InvalidData, e)
@@ -86,14 +90,11 @@ impl Control {
             if n == 0 {
                 return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
             }
-            decoder.push(&buf[..n]);
+            self.decoder.push(&buf[..n]);
         }
     }
 
     /// Ask the supervisor to stop its harness.
-    ///
-    /// Wired in the sessions RPC task (8c); until then nothing calls it.
-    #[allow(dead_code)]
     pub fn stop(&mut self) -> io::Result<()> {
         self.stream.write_all(&wire::encode(wire::STOP, b""))
     }
@@ -101,10 +102,7 @@ impl Control {
     /// Spawn a reader that folds every event into `on_event` until the
     /// supervisor closes. The thread ends on a `closed` frame or EOF, so
     /// the caller learns the connection is over when `on_event` stops
-    /// being called — Task 8c owns finalising the session from there.
-    ///
-    /// Wired in the sessions RPC task (8c); until then nothing calls it.
-    #[allow(dead_code)]
+    /// being called — the session code finalises the session from there.
     pub fn watch(
         &mut self,
         mut on_event: impl FnMut(SessionEvent) + Send + 'static,
@@ -112,10 +110,12 @@ impl Control {
         let Ok(stream) = self.stream.try_clone() else {
             return;
         };
+        // Take the frames `status` buffered past the status reply so the
+        // reader delivers them before it blocks on the socket again.
+        let mut decoder = std::mem::take(&mut self.decoder);
         let _ = thread::Builder::new().name("control".to_owned()).spawn(
             move || {
                 let mut stream = stream;
-                let mut decoder = wire::Decoder::new();
                 let mut buf = [0u8; 8192];
                 loop {
                     while let Some(f) = decoder.pop() {

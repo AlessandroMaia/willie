@@ -87,9 +87,6 @@ impl State {
         }
     }
 
-    // Called from `session.create`/lifecycle handling (Task 8); allow
-    // until then so the plain (non-test) binary still builds clean.
-    #[allow(dead_code)]
     #[must_use]
     pub fn upsert_session(&mut self, session: Session) -> Event {
         let seq = self.bump();
@@ -101,8 +98,6 @@ impl State {
     }
 
     /// Ids of the project's sessions that are still live.
-    // Called from the session RPCs (Task 8); allow until then.
-    #[allow(dead_code)]
     #[must_use]
     pub fn live_session_ids_for(&self, project: &ProjectId) -> Vec<SessionId> {
         self.sessions
@@ -115,7 +110,8 @@ impl State {
 
 /// Recovers a poisoned lock instead of panicking, matching the discipline
 /// in `jobs` and `projects`: one worker's panic must not wedge state.
-fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
+/// Re-exported at the crate root as `crate::lock` for the session code.
+pub(crate) fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

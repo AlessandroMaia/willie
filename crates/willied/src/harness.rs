@@ -16,9 +16,6 @@ pub fn home() -> PathBuf {
 }
 
 /// The Claude Code harness descriptor.
-// Read by session creation once it lands (Task 9); allow until then so
-// the plain (non-test) binary still builds clean.
-#[allow(dead_code)]
 #[must_use]
 pub fn claude() -> ClaudeCode {
     ClaudeCode
