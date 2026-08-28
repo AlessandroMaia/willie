@@ -927,10 +927,10 @@ mod tests {
         panic!("job never finished");
     }
 
-    /// Sets a `user.*` identity directly, for a repo `add` never
-    /// touches (e.g. a fresh `git init` used as a relocate source). A
-    /// workspace from `add` already has one, copied from the source's
-    /// `HEAD` author.
+    /// Sets a `user.*` identity directly. `add` no longer writes one into
+    /// the workspace — decision 0015 removed that stopgap — so any test
+    /// that makes a real commit, in a workspace or a fresh `git init`
+    /// used as a relocate source, sets one by hand here.
     fn configure_identity(dir: &Path) {
         git::run(dir, &["config", "user.email", "t@t"]).unwrap();
         git::run(dir, &["config", "user.name", "t"]).unwrap();
