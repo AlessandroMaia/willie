@@ -236,8 +236,8 @@ States: `creating → running → exited(code) | failed(reason)`, with a
 transient `stopping`. Truth: `/var/lib/willie/sessions/<id>/spec.json`
 (immutable after creation) and `events.jsonl` (append-only: `created`,
 `started{pid}`, `attached{client}`, `detached`, `resized{cols,rows}`,
-`exited{code,signal}`, `failed{reason}`). SQLite is a rebuildable index
-(`willie reindex`).
+`stop_requested{by}`, `exited{code,signal}`, `failed{reason}`). SQLite is
+a rebuildable index (`willie reindex`).
 
 ### 3.2 Flows
 
@@ -250,8 +250,9 @@ transient `stopping`. Truth: `/var/lib/willie/sessions/<id>/spec.json`
 3. `willie-sess` opens the PTY, builds the sandbox, runs the harness on
    the PTY slave, listens on `/run/willie/sessions/<id>.sock` (0600),
    records `started`, notifies the daemon over `willied.sock`.
-4. `willied` replies `{ session_id, attach_command }`; the engine runs
-   `wt.exe -w 0 new-tab -p "Willie" --title "<project>" -- wsl.exe -d willie --exec /opt/willie/bin/willie attach <id>`.
+4. `willied` replies `{ session }` once the supervisor reports ready; the
+   engine composes and runs `wt.exe … wsl.exe --exec … willie attach
+   <id>` itself — there is no `attach_command` on the wire.
 5. `willie attach` connects to the session socket, receives the ring
    buffer, puts its tty in raw mode, relays bytes both ways and
    `SIGWINCH` → `resize`. Several attaches may coexist; all read-write.
@@ -260,8 +261,14 @@ transient `stopping`. Truth: `/var/lib/willie/sessions/<id>/spec.json`
 `SIGTERM` (5 s) → `SIGKILL` to the process group; `exited` recorded; the
 supervisor exits when the last client detaches.
 
-**Daemon restart.** Scan `/run/willie/sessions/*.sock`, ping each
-supervisor, remove dead sockets, rebuild `sessions` from the event logs.
+**Daemon restart.** It scans the session directories under
+`/var/lib/willie/sessions/`, reading each one's spec and event log, and
+adopts the supervisors whose sockets answer `status` — pid, client count
+and start time come from that reply — while finalising the rest from the
+event log alone, marking a still-live-looking session `failed
+{ supervisor_lost }` when even the log has no terminal event. The session
+index lives in memory, rebuilt this way on every start; SQLite indexing
+is still deferred.
 
 **Resume.** A new session whose `args` come from
 `Harness::resume_args(harness_session_id)`; the harness's own id is found
@@ -516,7 +523,7 @@ wizard of §2.4. Code signing is out of scope for now.
 | ----- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----- |
 | F0    | distribution registered; UI shows health; `doctor` — **delivered 2026-08-26** | `distro/`, engine (import, supervision), `willied` (hello/health/doctor), `willie doctor`, Dashboard, NSIS | S1 |
 | F1    | projects: register a Windows checkout, ext4 workspace synced through git (0011, 0013) | `project.*`, `job.*`, `state.*`, engine project methods and `engine.toml` roots, Projects screen, `just test-linux` | S5 |
-| F1    | sessions: Claude Code session in WT, no sandbox                | `session.*`, `willie-sess` (PTY, socket, events — sandbox off), `willie attach`, WT profile, Sessions screen | S2 |
+| F1    | sessions: Claude Code session in WT, no sandbox — **Linux core delivered 2026-08-28; UI in Plan B** | `session.*`, `willie-sess` (PTY, socket, events — sandbox off), `willie attach`, WT profile, Sessions screen | S2 |
 | F2    | proxy/CA propagated                                             | engine (WinHTTP, cert stores), `machine.env`, network `doctor`                                      | S4    |
 | F3    | sandbox with capabilities and layers                            | `willie-sess` (bwrap/seccomp/Landlock, `--inner`), `willie-core` (CapabilitySet, layers), `sandbox explain`, capability UI | S3 |
 | F4    | managed tools                                                   | `tool.*`, manifest, `Harness::detect`, Tools screen                                                  | —     |

@@ -90,18 +90,47 @@ filesystem on every `state.snapshot`, never trusted from disk.
 | `job.get` | `{ id }` | `Job` |
 | `job.cancel` | `{ id }` | `null` — trips the cancel flag; a no-op once finished |
 
-A `Job` is `{ id, kind, project_id, state, started_at, finished_at?,
-log_tail }`; `state` is `running`, `done` or `failed { code, message,
-remediation }`.
+A `Job` is `{ id, kind, project_id?, state, started_at, finished_at?,
+log_tail }`; `project_id` is absent for a job that belongs to no project
+(a tool install). `kind` is `add`, `remove`, `sync_to_windows`,
+`update_from_windows`, `relocate` or `install_harness`; `state` is
+`running`, `done` or `failed { code, message, remediation }`.
+
+## `session.*`
+| Method | Params | Result |
+| --- | --- | --- |
+| `session.create` | `CreateParams { project_id, git_identity? { name, email } }` | `CreateResult { session }` — the session, already `running`, or an error if it could not start |
+| `session.stop` | `{ id }` | `null` — asks the supervisor to stop; the outcome arrives as a `session_changed` event |
+| `session.list` | `{}` | `SessionList { sessions: [Session] }` |
+
+A `Session` is `{ id, project_id, harness, workspace, state, created_at,
+started_at?, finished_at?, pid?, clients }`; `state` is `creating`,
+`running`, `stopping`, `exited { code?, signal? }` or `failed { code,
+message, remediation }`. Creating a session is synchronous up to the
+supervisor's readiness: the reply already carries a `running` session or
+the coded failure. There is no `attach_command` in the reply — the engine
+composes `wsl.exe … willie attach <id>` itself. An unknown `project_id`
+fails with the existing `project_not_found` code (see Project problem
+codes below), not a new one.
+
+## `tool.*`
+| Method | Params | Result |
+| --- | --- | --- |
+| `tool.install` | `InstallParams { harness }` | `JobRef { job_id }` — the install runs as a job; watch its `job_changed` events |
+
+`harness_already_installed` and `tool_busy` come back synchronously as
+the call's own error, before any job starts; a job that starts and then
+fails always carries `install_failed`.
 
 ## `state.*`
 | Method | Params | Result |
 | --- | --- | --- |
-| `state.snapshot` | `{}` | `Snapshot { seq, projects: [Project], jobs: [Job] }` |
+| `state.snapshot` | `{}` | `Snapshot { seq, projects: [Project], jobs: [Job], sessions: [Session] }` |
 
 `state.event` is a notification (daemon → client), never a request. Its
 params are `Event { seq, kind }` where `kind` is `project_changed
-{ project }`, `project_removed { id }` or `job_changed { job }`. `seq` is a
+{ project }`, `project_removed { id }`, `job_changed { job }` or
+`session_changed { session }`. `seq` is a
 monotonic counter shared by the snapshot and every event: a client that
 holds a snapshot at `seq = N` applies every event with `seq > N` in order.
 A single writer owns stdout, so events never interleave and their `seq`
@@ -145,7 +174,7 @@ project's `state: failed { code }`. Those codes include `git_failed`,
 `windows_tree_dirty`, `windows_branch_mismatch`, `workspace_diverged`,
 `workspace_dirty` and `source_unrelated`. A daemon that stops mid-`add`
 turns the stuck project `failed { code: "interrupted" }` on its next
-start.
+start. A tool install job fails with `install_failed`.
 
 ## Project problem codes
 
@@ -166,8 +195,9 @@ to the same add/relocate flow as the codes around it.
 | `source_detached_head` | `project.add`'s fast validation reads the source's current branch and finds `HEAD` itself, no branch checked out | the source is on a branch that later turns out to differ from the workspace's — that is `windows_branch_mismatch`, only seen at sync time | check out a branch in the Windows checkout, then add again |
 | `project_exists` | `project.add`'s source matches an already-registered project's source, compared case-insensitively with a trailing separator ignored | the *workspace directory* for the derived slug already exists but no project references it — that is `workspace_exists` | this checkout is already registered; use its existing row instead of adding it again |
 | `workspace_exists` | `project.add` derives a slug for the workspace and a directory of that name already exists under `/home/willie/projects/` | the same checkout is already a registered project — that is `project_exists`, checked first | delete the kept workspace directory the message names (`rm -rf` inside the distribution), moving it aside first if it still holds work you want, then add the checkout again |
-| `project_not_found` | any `project.*` method (`remove`, `sync_to_windows`, `update_from_windows`, `relocate`, `rename`) names an id no longer in the daemon's state | the id is valid but a job is already running for it — that is `project_busy` | check the project id and try again; a stale UI should re-snapshot first |
+| `project_not_found` | any `project.*` method (`remove`, `sync_to_windows`, `update_from_windows`, `relocate`, `rename`), or `session.create`, names an id no longer in the daemon's state | the id is valid but a job is already running for it — that is `project_busy` | check the project id and try again; a stale UI should re-snapshot first |
 | `project_busy` | a `project.*` operation that starts a job is called while that project already has one job running — one job per project at a time | the daemon's 3-job pool is full but this project is idle — that job is queued, not refused; `project_busy` is per project | wait for the current job to finish, or cancel it with `job.cancel` |
+| `sessions_running` | `project.remove` is called while the project has at least one session in `running` or `stopping` | no session of the project is live — the remove job is submitted as usual | stop the project's sessions first |
 | `source_missing` | `sync_to_windows` or `update_from_windows` runs and the project's Windows source is gone — the directory no longer exists, or it exists but its `.git` does not (the same `source_present` check the project row uses) | the source exists but is dirty or on the wrong branch — that is `windows_tree_dirty`/`windows_branch_mismatch`, only checked once the source is confirmed present | relocate the project to a checkout that still exists |
 | `windows_tree_dirty` | `sync_to_windows` runs `git status --porcelain` on the Windows checkout before pushing and finds it non-empty | the tree is clean but on the wrong branch — that is `windows_branch_mismatch`, checked right after | commit or discard the changes in the Windows checkout, then try again — nothing was touched |
 | `windows_branch_mismatch` | `sync_to_windows`'s Windows checkout is clean but checked out on a branch other than the project's recorded one | the checkout is on the right branch but missing entirely — that is `source_missing`, checked first | check out the project's branch in the Windows checkout, then try again |
@@ -178,6 +208,34 @@ to the same add/relocate flow as the codes around it.
 | `git_failed` | any `git` invocation inside a job exits non-zero, or `git` itself cannot be spawned — the message carries git's own error output: the last few lines for an ordinary git command, and the whole clone log when `add`'s clone itself fails. The same code also covers a `remove`'s workspace-delete or a `rename`'s project-file write failing — an I/O error, not git's, so the message and remediation are I/O-appropriate there instead | the failure is one of the specific refusals above (dirty tree, diverged, unrelated history) — those are refused before the failing command ever runs, with their own code | check git's output and try again |
 | `interrupted` | two cases: (1) a project is still `preparing` when the daemon starts — an `add` whose clone never finished, turned `Failed{interrupted}` by the start-up sweep; (2) `job.cancel` (or a daemon shutdown, if the process survives long enough) trips a job's cancel flag after its work has already started — the job only notices at its next cancellation checkpoint, and reports `interrupted` for any job kind | the cancel flag is already tripped *before* the job's work starts — that produces `cancelled`, not `interrupted`; an app close mid-`sync_to_windows`/`update_from_windows`/`relocate` whose process exits before the next checkpoint runs leaves no code at all — job records are never persisted, so that job simply vanishes and the project is left exactly as it was | per kind: for `add`, there is no retry — remove the project and add it again; for every other kind, just retry the operation |
 | `cancelled` | the job's cancel flag was already tripped when its work was about to start, so the runner ended it `failed { code: "cancelled" }` without ever running it | the flag trips after the work has begun — that is `interrupted`, reported at the job's next cancellation checkpoint; the job had already finished when cancel was called — a no-op, the job keeps its real outcome | start the operation again if it is still needed |
+
+## Session and tool codes
+
+These are the codes a `session.*`/`tool.*` refusal carries, whether they
+come back synchronously as the `error` of the reply, or later inside a
+`session_changed` event's `Session.state: failed { code }` or a
+`job_changed` event's `state: failed { code }`. `session_not_found` is
+reserved: no session method today distinguishes an unknown id from one
+whose supervisor cannot be reached, so `session.stop` reports
+`session_not_running` for both. Remediations match
+`willie_core::session::remediation_for`, the one table both the daemon
+and the app read from.
+
+| Code | When | Remediation |
+| --- | --- | --- |
+| `project_not_ready` | `session.create` on a project that is `preparing` or `failed` | wait for the project to be ready, or fix its failure first |
+| `harness_not_installed` | no harness binary on the session `PATH` (or `--version` fails) | click Install on the Dashboard |
+| `git_identity_missing` | none of the identity sources — an existing `~/.gitconfig`, the Windows identity, the source checkout's — yields a name and e-mail | set `git config --global user.name` and `user.email` on Windows, then open the session again |
+| `supervisor_spawn_failed` | `willie-sess` could not be executed, or its launcher's readiness line could not be parsed | run `willie doctor`; reinstall the distribution if the supervisor binary is missing |
+| `supervisor_timeout` | no readiness reply from the supervisor within ten seconds | open the session again; run `willie doctor` if it repeats |
+| `harness_exec_failed` | the harness child's `execvp` failed (binary gone, workspace deleted by hand) | reinstall Claude Code, or remove the project and add it again |
+| `session_not_found` | reserved for an unknown session id; not produced today (see above) | refresh the Sessions screen |
+| `session_not_running` | `session.stop` on a session with no live control connection | nothing to stop; open a new session |
+| `sessions_running` | `project.remove` while the project has a `running` or `stopping` session | stop the project's sessions first |
+| `supervisor_lost` | a session's control connection ended and a follow-up probe of its socket got no answer, with no terminal event in its log — set only inside the session's own `Failed` state, never as a call's synchronous error | open a new session |
+| `harness_already_installed` | `tool.install` when detection already finds the harness | nothing to install |
+| `tool_busy` | a tool job is already running | wait for the running install to finish |
+| `install_failed` | the installer exited non-zero, or could not be spawned | read the installer output, check the network, then try again |
 
 ## Engine problem codes
 
