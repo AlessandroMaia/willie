@@ -63,6 +63,18 @@ later. Expect a short, visible delay between an action and its result.
 One line per row walked. Note the repositories used and any surprising
 timing.
 
+The rows below are **reconstructed** from the corrections an earlier walk
+drove, not a captured transcript: a walk of the pre-correction build
+surfaced three defects (rows 5b, 8a, 10), each fixed in the
+projects-followups work and now green in the daemon tests. The raw
+transcript and exact date were not recorded at the time, so `Date` reads
+"unrecorded" and the untouched rows are left blank — re-walk the current
+(corrected) build to fill per-row pass/fail.
+
 | Date | Row | Result | Notes |
 | ---- | --- | ------ | ----- |
-|      |     |        |       |
+| unrecorded | 5b | found → fixed | `update_from_windows`' `workspace_diverged` remediation looped ("send to Windows first" would itself be refused); reworded to name a real recovery (fix `580ef3a`; a later slice also made a merely-ahead workspace a no-op, `d46793a`). |
+| unrecorded | 8a | found → fixed | re-adding a checkout after remove-keeping-workspace dead-ended on `workspace_exists` with unhelpful advice; the remediation now names the kept clone's path and the exact `rm -rf`, and the row was split into 8a–8e (fix `c3e14f0`). |
+| unrecorded | 10 | found → fixed | an interrupted `add` showed the remediation "retry the operation", but there is no Retry for `add`; now "remove the project and add it again" (fix `27d2836`). |
+| unrecorded | 1–4, 5a, 6–9 | walked, not recorded | exercised in the same walk (their behaviour is what surfaced the rows above), but individual pass/fail was not captured — re-walk to record. |
+
