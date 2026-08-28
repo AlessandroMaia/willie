@@ -263,8 +263,8 @@ supervisor exits when the last client detaches.
 
 **Daemon restart.** It scans the session directories under
 `/var/lib/willie/sessions/`, reading each one's spec and event log, and
-adopts the supervisors whose sockets answer `status` — pid, client count
-and start time come from that reply — while finalising the rest from the
+adopts the supervisors whose sockets answer `status` — pid and client
+count come from that reply — while finalising the rest from the
 event log alone, marking a still-live-looking session `failed
 { supervisor_lost }` when even the log has no terminal event. The session
 index lives in memory, rebuilt this way on every start; SQLite indexing

@@ -218,8 +218,8 @@ come back synchronously as the `error` of the reply, or later inside a
 reserved: no session method today distinguishes an unknown id from one
 whose supervisor cannot be reached, so `session.stop` reports
 `session_not_running` for both. Remediations match
-`willie_core::session::remediation_for`, the one table both the daemon
-and the app read from.
+`willie_core::session::remediation_for`, the one table the daemon
+reads from (and the app will, once its Plan B session UI lands).
 
 | Code | When | Remediation |
 | --- | --- | --- |
@@ -228,7 +228,7 @@ and the app read from.
 | `git_identity_missing` | none of the identity sources — an existing `~/.gitconfig`, the Windows identity, the source checkout's — yields a name and e-mail | set `git config --global user.name` and `user.email` on Windows, then open the session again |
 | `supervisor_spawn_failed` | `willie-sess` could not be executed, or its launcher's readiness line could not be parsed | run `willie doctor`; reinstall the distribution if the supervisor binary is missing |
 | `supervisor_timeout` | no readiness reply from the supervisor within ten seconds | open the session again; run `willie doctor` if it repeats |
-| `harness_exec_failed` | the harness child's `execvp` failed (binary gone, workspace deleted by hand) | reinstall Claude Code, or remove the project and add it again |
+| `harness_exec_failed` | the harness child's `chdir` or `execve` failed (binary gone, workspace deleted by hand) | reinstall Claude Code, or remove the project and add it again |
 | `session_not_found` | reserved for an unknown session id; not produced today (see above) | refresh the Sessions screen |
 | `session_not_running` | `session.stop` on a session with no live control connection | nothing to stop; open a new session |
 | `sessions_running` | `project.remove` while the project has a `running` or `stopping` session | stop the project's sessions first |
