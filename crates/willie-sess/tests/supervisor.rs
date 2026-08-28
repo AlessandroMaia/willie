@@ -463,3 +463,116 @@ fn a_control_client_gets_status_and_live_events() {
     kill(pid, libc::SIGKILL);
     let _ = fs::remove_dir_all(&root);
 }
+
+/// The parent of `pid`, from `/proc/<pid>/stat` (field 4).
+fn parent_of(pid: u32) -> u32 {
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+    let after = stat.rsplit(')').next().unwrap();
+    after.split_whitespace().nth(1).unwrap().parse().unwrap()
+}
+
+fn launch_with_grace(spec: &Path, grace_ms: u32) -> (i32, String) {
+    let out = Command::new(sess_bin())
+        .args(["run", "--spec", &spec.to_string_lossy()])
+        .env("WILLIE_SESS_STOP_GRACE_MS", grace_ms.to_string())
+        .output()
+        .unwrap();
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).trim().to_owned(),
+    )
+}
+
+#[test]
+fn a_stop_from_the_daemon_climbs_the_ladder_to_sigkill_and_reports_stopped() {
+    let root = scratch("ladder");
+    let bin = fake_harness(&root, "trap '' INT TERM; sleep 30");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (code, line) = launch_with_grace(&spec, 200);
+    assert_eq!(code, 0, "{line}");
+    let sock = socket_of(&root);
+    assert!(wait_until(Duration::from_secs(5), || sock.exists()));
+    let mut term = TestClient::connect(&sock, Role::Terminal, 24, 80);
+    let mut ctl = TestClient::connect(&sock, Role::Control, 0, 0);
+    ctl.send(&wire::encode(wire::STOP, b""));
+    let closed = term.closed().expect("a CLOSED frame");
+    assert_eq!(closed.reason, CloseReason::Stopped);
+    assert_eq!(closed.signal, Some(libc::SIGKILL));
+    let events = read_events(&spec);
+    assert!(events.iter().any(|e| matches!(
+        &e.kind, SessionEventKind::StopRequested { by } if by == "daemon"
+    )));
+    assert!(events.iter().any(|e| matches!(
+        e.kind,
+        SessionEventKind::Exited {
+            signal: Some(9),
+            ..
+        }
+    )));
+    assert!(wait_until(Duration::from_secs(5), || !sock.exists()));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn a_stop_is_visible_as_stopping_and_sigterm_ends_a_harness_that_ignores_sigint()
+ {
+    let root = scratch("stopping");
+    let bin = fake_harness(&root, "trap '' INT; sleep 30");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (_, _) = launch_with_grace(&spec, 1500);
+    let sock = socket_of(&root);
+    assert!(wait_until(Duration::from_secs(5), || sock.exists()));
+    let mut ctl = TestClient::connect(&sock, Role::Control, 0, 0);
+    ctl.send(&wire::encode(wire::STOP, b""));
+    std::thread::sleep(Duration::from_millis(200));
+    ctl.send(&wire::encode(wire::STATUS_REQ, b""));
+    let state = loop {
+        let f = ctl.next_frame().expect("a STATUS frame");
+        if f.kind == wire::STATUS {
+            let s: Status = wire::decode_json(&f.payload).unwrap();
+            break s.state;
+        }
+    };
+    assert_eq!(state, "stopping");
+    assert!(wait_until(Duration::from_secs(5), || {
+        read_events(&spec).iter().any(|e| {
+            matches!(
+                e.kind,
+                SessionEventKind::Exited {
+                    signal: Some(15),
+                    ..
+                }
+            )
+        })
+    }));
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn sigterm_to_the_supervisor_is_a_clean_shutdown() {
+    let root = scratch("sigterm");
+    let bin = fake_harness(&root, "sleep 30");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (_, line) = launch(&spec);
+    let harness: u32 = line.strip_prefix("ok ").unwrap().parse().unwrap();
+    let sock = socket_of(&root);
+    assert!(wait_until(Duration::from_secs(5), || sock.exists()));
+    let mut term = TestClient::connect(&sock, Role::Terminal, 24, 80);
+    kill(parent_of(harness), libc::SIGTERM);
+    let closed = term.closed().expect("a CLOSED frame");
+    assert_eq!(closed.reason, CloseReason::Shutdown);
+    assert_eq!(closed.signal, Some(libc::SIGINT));
+    assert!(wait_until(Duration::from_secs(5), || !sock.exists()));
+    let events = read_events(&spec);
+    assert!(events.iter().any(|e| matches!(
+        &e.kind, SessionEventKind::StopRequested { by } if by == "signal"
+    )));
+    assert!(events.iter().any(|e| matches!(
+        e.kind,
+        SessionEventKind::Exited {
+            signal: Some(2),
+            ..
+        }
+    )));
+    let _ = fs::remove_dir_all(&root);
+}

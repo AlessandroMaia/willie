@@ -16,6 +16,8 @@ mod pty;
 mod screen;
 #[cfg(target_os = "linux")]
 mod server;
+#[cfg(target_os = "linux")]
+mod signals;
 mod spec;
 
 use std::process::ExitCode;
@@ -32,7 +34,7 @@ fn version_line() -> String {
 /// The detached grandchild: set the session up and answer the launcher.
 #[cfg(target_os = "linux")]
 fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
-    use std::path::Path;
+    use std::{path::Path, sync::Arc};
 
     use willie_core::session::SessionEventKind;
 
@@ -126,10 +128,19 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
         started.at.clone(),
         paths.socket.clone(),
         events,
+        server::stop_grace(),
     );
+    // Block the shutdown signals now, after the harness has forked (so it
+    // does not inherit the block) but before any supervisor thread exists,
+    // so every one of them inherits the mask and the waiter alone consumes
+    // `SIGTERM`/`SIGHUP`.
+    signals::block_shutdown_signals();
     if let Err(e) = server::start(&shared, listener) {
         let _ = reply.fail("supervisor_spawn_failed", &e.to_string());
         return ExitCode::from(EXIT_FAILURE);
+    }
+    if let Err(e) = signals::spawn_waiter(Arc::clone(&shared)) {
+        eprintln!("willie-sess: signals are not handled: {e}");
     }
     let _ = reply.ok(pid);
     reply.close();

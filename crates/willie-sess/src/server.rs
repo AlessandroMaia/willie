@@ -94,6 +94,8 @@ pub struct Shared {
     clients: Mutex<Vec<ClientHandle>>,
     next_id: AtomicU64,
     events: EventLog,
+    /// How long the stop ladder waits between its rungs.
+    grace: Duration,
     phase: Mutex<Phase>,
     /// Why the session is ending when a stop was asked for.
     stop_cause: Mutex<Option<CloseReason>>,
@@ -115,6 +117,7 @@ impl Shared {
         started_at: String,
         socket: PathBuf,
         events: EventLog,
+        grace: Duration,
     ) -> Arc<Self> {
         Arc::new(Self {
             master,
@@ -130,6 +133,7 @@ impl Shared {
             clients: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(0),
             events,
+            grace,
             phase: Mutex::new(Phase::Running),
             stop_cause: Mutex::new(None),
         })
@@ -256,8 +260,15 @@ pub fn finish(shared: &Shared, exit: pty::Exit) {
     let frame = wire::encode_json(wire::CLOSED, &closed).unwrap_or_default();
     let handles: Vec<ClientHandle> =
         std::mem::take(&mut *lock(&shared.clients));
+    // Count the CLOSED frame into each client's budget so the drain below
+    // waits for it to be written, not just for earlier output: a caught-up
+    // client would otherwise race the socket shutdown and lose the CLOSED.
+    let n = frame.len();
     for c in &handles {
-        let _ = c.tx.send(Msg::Close(frame.clone()));
+        c.queued.fetch_add(n, Ordering::SeqCst);
+        if c.tx.send(Msg::Close(frame.clone())).is_err() {
+            c.queued.fetch_sub(n, Ordering::SeqCst);
+        }
     }
     let _ = fs::remove_file(&shared.socket);
     let until = Instant::now() + DRAIN_GRACE;
@@ -271,8 +282,18 @@ pub fn finish(shared: &Shared, exit: pty::Exit) {
     }
 }
 
-/// Ask the harness to stop. Idempotent; extended with the full ladder in
-/// the stop task — here it records the request and sends `SIGINT`.
+/// Grace between the ladder's rungs. `WILLIE_SESS_STOP_GRACE_MS` shortens
+/// it for the tests; the default is five seconds per rung.
+#[must_use]
+pub fn stop_grace() -> Duration {
+    std::env::var("WILLIE_SESS_STOP_GRACE_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map_or(Duration::from_secs(5), Duration::from_millis)
+}
+
+/// Ask the harness to stop: `SIGINT`, then `SIGTERM`, then `SIGKILL`, one
+/// grace apart, to its whole process group. Idempotent.
 pub fn request_stop(shared: &Arc<Shared>, by: &str, cause: CloseReason) {
     {
         let mut phase = lock(&shared.phase);
@@ -286,8 +307,33 @@ pub fn request_stop(shared: &Arc<Shared>, by: &str, cause: CloseReason) {
         shared,
         SessionEventKind::StopRequested { by: by.to_owned() },
     );
-    // SAFETY: signalling the harness's own process group (it did setsid).
-    unsafe { libc::kill(-shared.child, libc::SIGINT) };
+    let owned = Arc::clone(shared);
+    let spawned = thread::Builder::new().name("stop-ladder".to_owned()).spawn(
+        move || {
+            for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGKILL] {
+                // SAFETY: signalling the harness's own process group.
+                unsafe { libc::kill(-owned.child, signal) };
+                if wait_exited(&owned, owned.grace) {
+                    return;
+                }
+            }
+        },
+    );
+    if let Err(e) = spawned {
+        eprintln!("willie-sess: cannot start the stop ladder: {e}");
+    }
+}
+
+/// Wait up to `grace` for the harness to exit, polling the phase.
+fn wait_exited(shared: &Shared, grace: Duration) -> bool {
+    let until = Instant::now() + grace;
+    while Instant::now() < until {
+        if shared.phase() == Phase::Exited {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    shared.phase() == Phase::Exited
 }
 
 fn status_of(shared: &Shared) -> Status {
@@ -331,7 +377,13 @@ fn close_client(client: &ClientHandle, reason: CloseReason) {
         signal: None,
     };
     if let Ok(frame) = wire::encode_json(wire::CLOSED, &closed) {
-        let _ = client.tx.send(Msg::Close(frame));
+        // Count the frame so `writer_loop`'s decrement for a `Msg::Close`
+        // stays symmetric; undo it if there is no writer left to drain it.
+        let n = frame.len();
+        client.queued.fetch_add(n, Ordering::SeqCst);
+        if client.tx.send(Msg::Close(frame)).is_err() {
+            client.queued.fetch_sub(n, Ordering::SeqCst);
+        }
     }
     if reason == CloseReason::TooSlow {
         let _ = client.stream.shutdown(Shutdown::Both);
@@ -382,7 +434,9 @@ fn writer_loop(
                 }
             }
             Msg::Close(bytes) => {
+                let n = bytes.len();
                 let _ = stream.write_all(&bytes);
+                queued.fetch_sub(n, Ordering::SeqCst);
                 let _ = stream.shutdown(Shutdown::Both);
                 break;
             }
