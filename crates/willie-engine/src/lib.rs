@@ -19,6 +19,7 @@ pub mod paths;
 pub mod prereqs;
 pub mod process;
 pub mod rpc;
+pub mod terminal;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod text;
