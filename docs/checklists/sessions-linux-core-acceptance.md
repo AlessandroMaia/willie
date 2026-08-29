@@ -81,9 +81,27 @@ re-adopts any session still running from this walk).
 
 ## Results
 
-One line per row walked. Note the harness version, the project used, and
-anything surprising (timing, a reflow glitch, a code that differed).
+Walked 2026-08-28 by the agent against **real Claude Code v2.1.251**, in
+an isolated environment (new binaries in `/tmp/willie-new`, private
+`WILLIE_STATE_DIR`/`WILLIE_RUN_DIR`/`WILLIE_HOME`/`WILLIE_PROJECTS_DIR`
+under `/tmp/wt`) so it never touched `/opt` or the running desktop app.
+The attach rows were exercised **headless** (`willie attach <sock>
+--no-raw --size`), which proves output delivery, input and detach but not
+a human's eyes on a GUI tab — the one row left for a person is the
+visual TUI reflow when you drag a real Windows Terminal tab (row 6's
+resize half). Re-walk from a real tab to confirm that.
 
 | Date | Row | Result | Notes |
 | ---- | --- | ------ | ----- |
-|      |     |        |       |
+| 2026-08-28 | 1 | pass | `daemon.doctor` lists a `Claude Code` check (the new daemon); reported `fail`/"not installed" before, `ok`/`2.1.251` after row 3 |
+| 2026-08-28 | 2 | pass | `project.add` of a `/tmp` source repo: add job `running`→`done`, project `ready` |
+| 2026-08-28 | 3 | pass | `tool.install` returned a `JobRef`, `install_harness` `running`→`done`; the real installer put Claude Code `2.1.251` in the isolated home |
+| 2026-08-28 | 4 | pass | `session.create` returned a `running` session (real `claude` as the harness pid); `spec.json` + `events.jsonl` (`created`,`started`) + the socket appeared |
+| 2026-08-28 | 5 | pass | headless attach received the genuine Claude Code v2.1.251 TUI over the framed socket (theme picker, logo, syntax-highlighted diff; ~5.9 KB) |
+| 2026-08-28 | 6 | partial | `Ctrl-]` detached cleanly ("detached, the session keeps running") and the supervisor + `claude` stayed alive; **visual reflow on a GUI tab drag not tested headlessly — confirm from a real WT tab** |
+| 2026-08-28 | 7 | pass | attaching again delivered the session's output again; the session survived detach/reattach |
+| 2026-08-28 | 8 | pass | a fresh daemon re-adopted the live session (listed/stopped it); on start it also finalises dead ones |
+| 2026-08-28 | 9 | pass | `session.stop`: `stop_requested{by:"daemon"}`→`exited{code:0}` (Claude Code exits 0 on the ladder's SIGINT); socket removed |
+| 2026-08-28 | 10 | pass | a supervisor killed / lost without a terminal event is finalised `failed{code:"supervisor_lost"}` by the next daemon's scan (observed repeatedly) |
+| 2026-08-28 | 11 | pass | `session.create` on an unknown project → `project_not_found`; `project_busy` and `sessions_running` are covered by the daemon integration tests |
+| 2026-08-28 | 12 | pass | the distro-global `~/.gitconfig` identity was ensured at `session.create` from the source checkout (`t <t@t>`), per decision 0015 (no per-clone local identity) |
