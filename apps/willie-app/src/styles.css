@@ -78,6 +78,10 @@ body {
   border-left: 3px solid #cf3b3b;
   padding: 0.5rem 0.75rem;
 }
+.notice {
+  border-left: 3px solid #3b82cf;
+  padding: 0.5rem 0.75rem;
+}
 .doctor ul {
   list-style: none;
   padding: 0;
@@ -228,6 +232,10 @@ body {
 }
 .badge-warning {
   color: #d9a400;
+}
+.badge-live {
+  color: #2e9e5b;
+  font-weight: 600;
 }
 
 .sessions {
