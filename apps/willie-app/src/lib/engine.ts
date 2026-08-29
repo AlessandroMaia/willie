@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { Candidate, Event, Snapshot } from "./proto";
+import type { Candidate, Event, Session, Snapshot } from "./proto";
 
 /* Mirrors of crates/willie-engine (EngineStatus) and willie-proto. */
 export type CheckStatus = "ok" | "fail" | "skip";
@@ -79,6 +79,25 @@ export const projects = {
   setRoots: (roots: string[]) => invoke("set_projects_roots", { roots }),
   discover: () => invoke<Candidate[]>("discover_projects"),
   openInExplorer: (path: string) => invoke("open_in_explorer", { path }),
+};
+
+export interface SessionOpened {
+  session: Session;
+  /* Present only when the session is live but no terminal tab opened;
+   * its remediation is the copy-paste `willie attach` line. */
+  terminal_problem?: Problem;
+}
+
+export const sessions = {
+  open: (projectId: string) =>
+    invoke<SessionOpened>("session_open", { projectId }),
+  attach: (id: string, title: string) =>
+    invoke("session_attach", { id, title }),
+  stop: (id: string) => invoke("session_stop", { id }),
+};
+
+export const tools = {
+  install: (harness: string) => invoke("tool_install", { harness }),
 };
 
 export const onDaemonEvent = (cb: (ev: Event) => void): Promise<UnlistenFn> =>
