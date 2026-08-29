@@ -98,4 +98,10 @@ describe("session helpers", () => {
     ).toBe("error");
     expect(stateChip({ state: "exited", code: 0 }).label).toContain("exited");
   });
+
+  it("marks a signal-terminated exit as an error, not a clean exit", () => {
+    const chip = stateChip({ state: "exited", code: null, signal: 9 });
+    expect(chip.label).toContain("signal");
+    expect(chip.tone).toBe("error");
+  });
 });

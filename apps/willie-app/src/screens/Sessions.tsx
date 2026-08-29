@@ -259,7 +259,7 @@ export function Sessions() {
       )}
 
       {snap === null ? (
-        <p className="muted">Loading sessions…</p>
+        !problem && <p className="muted">Loading sessions…</p>
       ) : snap.sessions.length === 0 ? (
         <p className="muted">No sessions yet — open one from a project.</p>
       ) : (

@@ -32,6 +32,9 @@ export function stateChip(state: SessionState): { label: string; tone: Tone } {
     case "stopping":
       return { label: "stopping", tone: "pending" };
     case "exited": {
+      if (state.code == null && state.signal != null) {
+        return { label: `exited (signal ${state.signal})`, tone: "error" };
+      }
       const code = state.code ?? 0;
       return { label: `exited ${code}`, tone: code === 0 ? "muted" : "error" };
     }
