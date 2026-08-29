@@ -14,6 +14,7 @@ pub mod discover;
 pub mod distro;
 pub mod engine;
 pub mod error;
+pub mod identity;
 pub mod paths;
 pub mod prereqs;
 pub mod process;
