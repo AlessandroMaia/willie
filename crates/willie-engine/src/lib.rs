@@ -25,4 +25,4 @@ pub(crate) mod test_support;
 pub mod text;
 pub mod wsl;
 
-pub use engine::{Engine, EngineStatus, Problem};
+pub use engine::{Engine, EngineStatus, Problem, SessionOpened};

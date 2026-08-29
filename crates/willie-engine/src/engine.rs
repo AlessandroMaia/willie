@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use willie_core::{
     id::{JobId, ProjectId, SessionId},
     project::Project,
+    session::Session,
 };
 use willie_proto::session::{
     CreateParams, CreateResult, GitIdentity, IdParams as SessionIdParams,
@@ -55,6 +56,13 @@ impl From<&EngineError> for Problem {
             remediation: err.remediation(),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionOpened {
+    pub session: Session,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_problem: Option<Problem>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -251,6 +259,56 @@ impl Engine {
         )
     }
 
+    /// Create a session and open its terminal. A terminal that fails to
+    /// launch does NOT undo the session (it is alive and attachable) — it
+    /// comes back as `terminal_problem` for the UI to surface.
+    pub fn session_open(
+        &mut self,
+        project_id: ProjectId,
+    ) -> Result<SessionOpened, EngineError> {
+        let identity = crate::identity::windows_git_identity();
+        let created = self.session_create(project_id, identity)?;
+        let title = self
+            .project_title(project_id)
+            .unwrap_or_else(|| created.session.id.to_string());
+        let terminal_problem =
+            match crate::terminal::open_tab(created.session.id, &title) {
+                Ok(()) => None,
+                Err(e) => Some(Problem::from(&EngineError::TerminalLaunch {
+                    message: e.to_string(),
+                    attach_hint: attach_hint(created.session.id),
+                })),
+            };
+        Ok(SessionOpened {
+            session: created.session,
+            terminal_problem,
+        })
+    }
+
+    /// Open (another) terminal for an existing session.
+    pub fn session_attach(
+        &mut self,
+        id: SessionId,
+        title: String,
+    ) -> Result<(), EngineError> {
+        crate::terminal::open_tab(id, &title).map_err(|e| {
+            EngineError::TerminalLaunch {
+                message: e.to_string(),
+                attach_hint: attach_hint(id),
+            }
+        })
+    }
+
+    /// The display name for a session's tab: the project's name if known.
+    fn project_title(&mut self, id: ProjectId) -> Option<String> {
+        self.project_list()
+            .ok()?
+            .projects
+            .into_iter()
+            .find(|p| p.id == id)
+            .map(|p| p.name)
+    }
+
     pub fn session_stop(&mut self, id: SessionId) -> Result<(), EngineError> {
         self.daemon_call(session::STOP, SessionIdParams { id })
     }
@@ -323,6 +381,16 @@ impl Engine {
     pub fn subscribe_events(&self) -> Option<Receiver<Notification>> {
         self.daemon.subscribe()
     }
+}
+
+/// The command a user runs to reach a session directly, quoted in
+/// `terminal_launch_failed`'s remediation when no tab could be opened.
+fn attach_hint(id: SessionId) -> String {
+    format!(
+        "wsl -d {} --user willie -- {} attach {id}",
+        crate::wsl::DISTRO_NAME,
+        "/opt/willie/bin/willie",
+    )
 }
 
 #[cfg(test)]
