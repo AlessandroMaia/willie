@@ -294,8 +294,10 @@ code below gets a row in `docs/PROTOCOL.md`.
   terminal that fails to open does **not** undo the session: it comes
   back as `terminal_problem` (`terminal_launch_failed`, remediation:
   the `wsl -d willie --user willie -- willie attach <id>` line to paste).
-- `session_attach(id)` opens the tab only; `session_stop(id)`;
-  `tool_install(harness)`.
+- `session_attach(id, title)` opens the tab only, for an already-running
+  session — a failure there is a plain `Err`, since (unlike
+  `session_open`) there is no session outcome left to protect;
+  `session_stop(id)`; `tool_install(harness)`.
 - The command lines are composed by pure functions, tested on the host.
 
 ### App — `apps/willie-app/src-tauri/src/lib.rs`, `apps/willie-app/src/`
@@ -391,10 +393,15 @@ row with the exact command or observation.
 
 ## Open questions
 
-- Retention of finished sessions: keep everything (favoured — two small
-  files each) or prune after N days once SQLite indexes them.
-- A Windows Terminal profile fragment (icon, name, a plain Willie shell):
-  favoured no, until a user asks.
+- ~~Retention of finished sessions: keep everything (favoured — two
+  small files each) or prune after N days once SQLite indexes them.~~
+  **Resolved: keep everything.** Plan B shipped no pruning; a finished
+  session's two files stay until an operator removes them by hand or a
+  later slice adds SQLite-backed pruning.
+- ~~A Windows Terminal profile fragment (icon, name, a plain Willie
+  shell): favoured no, until a user asks.~~ **Resolved: no.** `wt.exe`
+  is invoked with a plain `new-tab --title …`; nothing touches Windows
+  Terminal's `settings.json`.
 
 ## Plans
 
@@ -406,6 +413,9 @@ row with the exact command or observation.
   terminal launch and fallback, Windows identity; Tauri commands;
   `proto.ts`/`state.ts`; project row; Sessions screen; Dashboard
   Install; ARCHITECTURE updates; acceptance checklist; release note.
+  **Delivered 2026-08-28** — every bullet above shipped as designed; the
+  human-eyes TUI-reflow row Plan A's checklist left open is now
+  `sessions-acceptance.md` row 7.
 
 ## Follow-ups for the next slices
 
