@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Project, Snapshot } from "./proto";
+import type { Project, Session, SessionState, Snapshot } from "./proto";
 import { applyEvent, needsResnapshot } from "./state";
 
 const proj = (id: string, name: string): Project => ({
@@ -14,7 +14,22 @@ const proj = (id: string, name: string): Project => ({
   created_at: "t",
 });
 
-const empty: Snapshot = { seq: 0, projects: [], jobs: [] };
+const sess = (
+  id: string,
+  projectId: string,
+  state: SessionState = { state: "running" },
+): Session => ({
+  id,
+  project_id: projectId,
+  harness: "claude-code",
+  workspace: "/home/willie/projects/x",
+  state,
+  created_at: "1",
+  started_at: "1",
+  clients: 0,
+});
+
+const empty: Snapshot = { seq: 0, projects: [], jobs: [], sessions: [] };
 
 describe("daemon store", () => {
   it("applies a project_changed event and bumps seq", () => {
@@ -96,5 +111,22 @@ describe("daemon store", () => {
     expect(
       needsResnapshot(empty, { seq: 1, kind: "project_removed", id: "x" }),
     ).toBe(false);
+  });
+
+  it("applies a session_changed event, upserting by id and bumping seq", () => {
+    const first = applyEvent(empty, {
+      seq: 1,
+      kind: "session_changed",
+      session: sess("sess_1", "proj_1"),
+    });
+    expect(first.sessions).toHaveLength(1);
+    expect(first.seq).toBe(1);
+    const updated = applyEvent(first, {
+      seq: 2,
+      kind: "session_changed",
+      session: sess("sess_1", "proj_1", { state: "exited", code: 0 }),
+    });
+    expect(updated.sessions).toHaveLength(1);
+    expect(updated.sessions[0]?.state).toEqual({ state: "exited", code: 0 });
   });
 });
