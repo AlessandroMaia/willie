@@ -21,13 +21,19 @@ Before the walk:
   runs the daemon by hand; nothing else may.
 - **Install the current binaries into the distribution.** The installed
   daemon must be this slice's build (its `daemon.doctor` includes a
-  `Claude Code` check — an older daemon does not). Either
+  `Claude Code` check — an older daemon does not). The full path is
   `$env:WILLIE_TEST_DISTRO = "willie"; just app-build` and install
-  `target\release\bundle\nsis\Willie_0.1.0_x64-setup.exe`, or, for a
-  binaries-only refresh, from the repo root:
-  `just build-linux` then, in one line,
-  `wsl -d willie --user root -- sh -c "cp /mnt/c/github/pessoal/willie/target/x86_64-unknown-linux-musl/release/willied /mnt/c/github/pessoal/willie/target/x86_64-unknown-linux-musl/release/willie-sess /mnt/c/github/pessoal/willie/target/x86_64-unknown-linux-musl/release/willie /opt/willie/bin/ && chmod 0755 /opt/willie/bin/willied /opt/willie/bin/willie-sess /opt/willie/bin/willie"`
-  (adjust the repo path if yours differs).
+  `target\release\bundle\nsis\Willie_0.1.0_x64-setup.exe`. For a
+  binaries-only refresh, `just build-linux`, then copy the three release
+  musl binaries in as root (`<repo>` is the checkout on the Windows
+  drive, e.g. `/mnt/c/github/pessoal/willie`):
+
+  ```sh
+  R=<repo>/target/x86_64-unknown-linux-musl/release
+  wsl -d willie --user root -- sh -c \
+    "cp $R/willied $R/willie-sess $R/willie /opt/willie/bin/ && \
+     chmod 0755 /opt/willie/bin/willied /opt/willie/bin/willie-sess /opt/willie/bin/willie"
+  ```
 - Have one registered project with a `ready` workspace (walk
   `projects-and-workspaces-acceptance.md` rows 1–2, or reuse one).
 
