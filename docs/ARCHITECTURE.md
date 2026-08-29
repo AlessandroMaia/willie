@@ -293,14 +293,16 @@ and time).
 **App closed.** Daemon exits; supervisors and terminal tabs continue; on
 reopen the restart flow restores supervision.
 
-**App (engine + UI).** `session_attach`, `session_stop(id)` and
-`tool_install(harness)` are thin engine wrappers around
-`session.stop`/`tool.install`; the app never talks to a session socket
+**App (engine + UI).** `session_attach` opens one more terminal for an
+existing session — no daemon call involved; `session_stop(id)` and
+`tool_install(harness)` are the thin engine wrappers around
+`session.stop`/`tool.install`. The app never talks to a session socket
 itself. Like every other change, `session_changed` reaches the webview
 over `daemon://event`, the same stream as `project_changed` and
-`job_changed` — consistent with decision 0014: the daemon is a control
-client of the session socket, and the app is in turn only ever a
-control client of the daemon. The **Sessions** screen lists running
+`job_changed` — in the same spirit as decision 0014 (the daemon rides
+the session socket as a control client), the app in turn only ever
+talks to the daemon over its own RPC pipe. The **Sessions** screen
+lists running
 sessions (state, harness, attached clients, *Attach*, *Stop* with no
 confirmation) and the twenty most recently finished; a project's row
 gets an **Open session** button (enabled once the project is `ready`)
