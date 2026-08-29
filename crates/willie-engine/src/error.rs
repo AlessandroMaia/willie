@@ -368,18 +368,6 @@ mod tests {
     /// F0 writes no log file, so no remediation may send the user to
     /// one. "Log on as a service" is the name of a Windows right.
     #[test]
-    fn a_terminal_launch_failure_maps_to_its_code_and_a_paste_remediation() {
-        let p = crate::engine::Problem::from(&EngineError::TerminalLaunch {
-            message: "boom".into(),
-            attach_hint: "wsl -d willie --user willie -- willie attach \
-                          sess_1"
-                .into(),
-        });
-        assert_eq!(p.code, "terminal_launch_failed");
-        assert!(p.remediation.contains("willie attach sess_1"));
-    }
-
-    #[test]
     fn no_remediation_mentions_a_log() {
         const LOG_PHRASES: [&str; 6] = [
             "engine log",
@@ -396,5 +384,19 @@ mod tests {
                 assert!(!text.contains(phrase), "{}: {text}", err.code());
             }
         }
+    }
+
+    /// A failed tab is a paste-and-run remediation, not a dead end: the
+    /// exact attach line must survive into the problem the UI shows.
+    #[test]
+    fn a_terminal_launch_failure_maps_to_its_code_and_a_paste_remediation() {
+        let p = crate::engine::Problem::from(&EngineError::TerminalLaunch {
+            message: "boom".into(),
+            attach_hint: "wsl -d willie --user willie -- willie attach \
+                          sess_1"
+                .into(),
+        });
+        assert_eq!(p.code, "terminal_launch_failed");
+        assert!(p.remediation.contains("willie attach sess_1"));
     }
 }
