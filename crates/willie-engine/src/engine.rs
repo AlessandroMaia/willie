@@ -6,9 +6,14 @@ use std::{path::PathBuf, sync::mpsc::Receiver};
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use willie_core::{
-    id::{JobId, ProjectId},
+    id::{JobId, ProjectId, SessionId},
     project::Project,
 };
+use willie_proto::session::{
+    CreateParams, CreateResult, GitIdentity, IdParams as SessionIdParams,
+    SessionList, method as session,
+};
+use willie_proto::tool::{InstallParams, method as tool};
 use willie_proto::{
     daemon::DoctorReport,
     job::method as job,
@@ -230,6 +235,40 @@ impl Engine {
         name: String,
     ) -> Result<Project, EngineError> {
         self.daemon_call(project::RENAME, RenameParams { id, name })
+    }
+
+    pub fn session_create(
+        &mut self,
+        project_id: ProjectId,
+        git_identity: Option<GitIdentity>,
+    ) -> Result<CreateResult, EngineError> {
+        self.daemon_call(
+            session::CREATE,
+            CreateParams {
+                project_id,
+                git_identity,
+            },
+        )
+    }
+
+    pub fn session_stop(&mut self, id: SessionId) -> Result<(), EngineError> {
+        self.daemon_call(session::STOP, SessionIdParams { id })
+    }
+
+    pub fn session_list(&mut self) -> Result<SessionList, EngineError> {
+        self.daemon_call(session::LIST, serde_json::json!({}))
+    }
+
+    pub fn tool_install(
+        &mut self,
+        harness: &str,
+    ) -> Result<JobRef, EngineError> {
+        self.daemon_call(
+            tool::INSTALL,
+            InstallParams {
+                harness: harness.to_owned(),
+            },
+        )
     }
 
     pub fn job_cancel(&mut self, id: JobId) -> Result<(), EngineError> {
