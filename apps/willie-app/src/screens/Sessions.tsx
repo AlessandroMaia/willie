@@ -162,6 +162,7 @@ function RecentRow({ session, projectName }: RecentRowProps) {
 export function Sessions() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const snapRef = useRef<Snapshot | null>(null);
+  const [problem, setProblem] = useState<Problem | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rowProblems, setRowProblems] = useState<Map<string, Problem>>(
     new Map(),
@@ -173,11 +174,9 @@ export function Sessions() {
       .then((next) => {
         snapRef.current = next;
         setSnap(next);
+        setProblem(null);
       })
-      .catch(() => {
-        /* a failed refresh just leaves the previous snapshot on screen;
-         * the next daemon event or a manual reopen of the tab retries */
-      });
+      .catch((error: unknown) => setProblem(asProblem(error)));
   }, []);
 
   useEffect(() => {
@@ -239,12 +238,10 @@ export function Sessions() {
     }
   }
 
-  if (snap === null) {
-    return <main className="sessions">Loading sessions…</main>;
-  }
-
-  const live = liveSessions(snap.sessions);
-  const recent = recentTerminal(snap.sessions, TERMINAL_HISTORY_LIMIT);
+  const live = snap ? liveSessions(snap.sessions) : [];
+  const recent = snap
+    ? recentTerminal(snap.sessions, TERMINAL_HISTORY_LIMIT)
+    : [];
 
   return (
     <main className="sessions">
@@ -252,7 +249,18 @@ export function Sessions() {
         <h1>Sessions</h1>
       </header>
 
-      {snap.sessions.length === 0 ? (
+      {problem && (
+        <section className="problem" role="alert">
+          <strong>{problem.code}</strong> — {problem.message}
+          {problem.remediation && (
+            <div className="muted">→ {problem.remediation}</div>
+          )}
+        </section>
+      )}
+
+      {snap === null ? (
+        <p className="muted">Loading sessions…</p>
+      ) : snap.sessions.length === 0 ? (
         <p className="muted">No sessions yet — open one from a project.</p>
       ) : (
         <>
