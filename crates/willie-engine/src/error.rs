@@ -89,6 +89,11 @@ pub enum EngineError {
     PathNotFound { path: String },
     #[error("cannot write {path}: {message}")]
     ConfigWrite { path: String, message: String },
+    #[error("terminal launch failed: {message}")]
+    TerminalLaunch {
+        message: String,
+        attach_hint: String,
+    },
 }
 
 impl EngineError {
@@ -110,6 +115,7 @@ impl EngineError {
             Self::DistroNotRegistered => "distro_not_registered",
             Self::PathNotFound { .. } => "path_not_found",
             Self::ConfigWrite { .. } => "config_write_failed",
+            Self::TerminalLaunch { .. } => "terminal_launch_failed",
         }
     }
 
@@ -171,6 +177,9 @@ impl EngineError {
             Self::ConfigWrite { .. } => "check that Willie can write to \
                  %LOCALAPPDATA%\\Willie\\data"
                 .into(),
+            Self::TerminalLaunch { attach_hint, .. } => {
+                format!("open a terminal and run: {attach_hint}")
+            }
         }
     }
 }
@@ -335,6 +344,12 @@ mod tests {
                 path: r"C:\LOCALAPPDATA\Willie\data\engine.toml".into(),
                 message: "access is denied".into(),
             },
+            EngineError::TerminalLaunch {
+                message: "boom".into(),
+                attach_hint: "wsl -d willie --user willie -- willie \
+                              attach sess_1"
+                    .into(),
+            },
         ]
     }
 
@@ -369,5 +384,19 @@ mod tests {
                 assert!(!text.contains(phrase), "{}: {text}", err.code());
             }
         }
+    }
+
+    /// A failed tab is a paste-and-run remediation, not a dead end: the
+    /// exact attach line must survive into the problem the UI shows.
+    #[test]
+    fn a_terminal_launch_failure_maps_to_its_code_and_a_paste_remediation() {
+        let p = crate::engine::Problem::from(&EngineError::TerminalLaunch {
+            message: "boom".into(),
+            attach_hint: "wsl -d willie --user willie -- willie attach \
+                          sess_1"
+                .into(),
+        });
+        assert_eq!(p.code, "terminal_launch_failed");
+        assert!(p.remediation.contains("willie attach sess_1"));
     }
 }

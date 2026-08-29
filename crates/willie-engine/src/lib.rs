@@ -14,13 +14,15 @@ pub mod discover;
 pub mod distro;
 pub mod engine;
 pub mod error;
+pub mod identity;
 pub mod paths;
 pub mod prereqs;
 pub mod process;
 pub mod rpc;
+pub mod terminal;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod text;
 pub mod wsl;
 
-pub use engine::{Engine, EngineStatus, Problem};
+pub use engine::{Engine, EngineStatus, Problem, SessionOpened};

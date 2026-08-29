@@ -78,6 +78,10 @@ body {
   border-left: 3px solid #cf3b3b;
   padding: 0.5rem 0.75rem;
 }
+.notice {
+  border-left: 3px solid #3b82cf;
+  padding: 0.5rem 0.75rem;
+}
 .doctor ul {
   list-style: none;
   padding: 0;
@@ -202,6 +206,10 @@ body {
   border-radius: 0.4rem;
   padding: 0.4rem 0.6rem;
 }
+.chip-muted {
+  background: rgba(128, 128, 128, 0.15);
+  opacity: 0.75;
+}
 .spinner {
   width: 0.7rem;
   height: 0.7rem;
@@ -224,6 +232,47 @@ body {
 }
 .badge-warning {
   color: #d9a400;
+}
+.badge-live {
+  color: #2e9e5b;
+  font-weight: 600;
+}
+
+.sessions {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: 1.5rem;
+  display: grid;
+  gap: 1.5rem;
+}
+.sessions h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+.session-list {
+  display: grid;
+  gap: 0.75rem;
+}
+.session-row {
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 0.4rem;
+  padding: 0.75rem 1rem;
+  display: grid;
+  gap: 0.4rem;
+}
+.session-row-recent {
+  opacity: 0.75;
+}
+.session-row-main {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.session-row-detail {
+  display: grid;
+  gap: 0.2rem;
+  font-size: 0.9rem;
 }
 
 .modal-backdrop {

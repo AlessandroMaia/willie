@@ -21,3 +21,14 @@ function isNewer(a: Job, b: Job): boolean {
   if (a.started_at !== b.started_at) return a.started_at > b.started_at;
   return a.id > b.id;
 }
+
+/* The harness install is a tool job (no project_id), so `latestJobFor`
+ * never surfaces it; the Dashboard tracks it by kind instead. */
+export function latestInstallJob(jobs: Job[]): Job | undefined {
+  let latest: Job | undefined;
+  for (const j of jobs) {
+    if (j.kind !== "install_harness") continue;
+    if (!latest || isNewer(j, latest)) latest = j;
+  }
+  return latest;
+}

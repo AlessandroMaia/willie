@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { latestJobFor } from "./jobs";
+import { latestInstallJob, latestJobFor } from "./jobs";
 import type { Job } from "./proto";
 
 /* `startedAt` mirrors the wire: the daemon stamps `started_at` as whole
@@ -37,5 +37,33 @@ describe("latestJobFor", () => {
 
   it("returns undefined when no job matches the project", () => {
     expect(latestJobFor([], "proj_1")).toBeUndefined();
+  });
+});
+
+describe("latestInstallJob", () => {
+  /* Shadows the outer `job` (a `latestJobFor` fixture pinned to
+   * `sync_to_windows`): this suite needs to vary `kind` per call. */
+  const job = (
+    id: string,
+    kind: Job["kind"],
+    started_at: string,
+    project_id?: string,
+  ): Job => ({
+    id,
+    kind,
+    project_id,
+    state: { state: "running" },
+    started_at,
+    log_tail: "",
+  });
+
+  it("returns the newest install_harness job and ignores project jobs", () => {
+    const jobs = [
+      job("j1", "install_harness", "1"),
+      job("j2", "add", "9", "p1"),
+      job("j3", "install_harness", "5"),
+    ];
+    expect(latestInstallJob(jobs)?.id).toBe("j3");
+    expect(latestInstallJob([job("a", "add", "1", "p")])).toBeUndefined();
   });
 });

@@ -242,8 +242,11 @@ a rebuildable index (`willie reindex`).
 ### 3.2 Flows
 
 **Start.**
-1. UI → engine → RPC `session.create { project_id, git_identity? }`.
-   The `harness`, `capabilities_override?` and `args?` fields arrive with
+1. UI → engine's `session_open(project_id)`: the engine reads the
+   Windows git identity (`git.exe config --global user.name`/
+   `user.email`, `CREATE_NO_WINDOW`; no `git.exe` ⇒ none sent), then
+   calls RPC `session.create { project_id, git_identity? }`. The
+   `harness`, `capabilities_override?` and `args?` fields arrive with
    the sandbox and resume slices; they are not on the wire yet.
 2. `willied` resolves configuration layers (§3.4), validates
    **fail-closed**, writes `spec.json`, spawns `willie-sess <id>`
@@ -253,9 +256,18 @@ a rebuildable index (`willie reindex`).
    records `started`; the daemon rides the session socket as a control
    client (decision 0014) — the supervisor never calls the daemon and
    never depends on it.
-4. `willied` replies `{ session }` once the supervisor reports ready; the
-   engine composes and runs `wt.exe … wsl.exe --exec … willie attach
-   <id>` itself — there is no `attach_command` on the wire.
+4. `willied` replies `{ session }` once the supervisor reports ready;
+   the engine opens a Windows Terminal tab running `wsl.exe -d willie
+   --user willie --exec /opt/willie/bin/willie attach <id>` — there is
+   no `attach_command` on the wire. `wt.exe` is looked up on `PATH`,
+   then under `%LOCALAPPDATA%\Microsoft\WindowsApps`; when neither
+   exists, the same `wsl.exe …` line runs in a new console instead. A
+   tab that fails to open does not undo the session: `session_open`
+   returns it as a non-fatal `terminal_problem` (`terminal_launch_failed`,
+   remediation the paste-able attach line) alongside the running
+   session. `session_attach(id, title)` opens one more tab for an
+   already-running session the same way, except a failure there comes
+   back as a plain error — there is no session outcome left to protect.
 5. `willie attach` connects to the session socket, receives the ring
    buffer, puts its tty in raw mode, relays bytes both ways and
    `SIGWINCH` → `resize`. Several attaches may coexist; all read-write.
@@ -280,6 +292,24 @@ and time).
 
 **App closed.** Daemon exits; supervisors and terminal tabs continue; on
 reopen the restart flow restores supervision.
+
+**App (engine + UI).** `session_attach` opens one more terminal for an
+existing session — no daemon call involved; `session_stop(id)` and
+`tool_install(harness)` are the thin engine wrappers around
+`session.stop`/`tool.install`. The app never talks to a session socket
+itself. Like every other change, `session_changed` reaches the webview
+over `daemon://event`, the same stream as `project_changed` and
+`job_changed` — in the same spirit as decision 0014 (the daemon rides
+the session socket as a control client), the app in turn only ever
+talks to the daemon over its own RPC pipe. The **Sessions** screen
+lists running
+sessions (state, harness, attached clients, *Attach*, *Stop* with no
+confirmation) and the twenty most recently finished; a project's row
+gets an **Open session** button (enabled once the project is `ready`)
+and a badge with its live-session count; the Dashboard's harness doctor
+check gets an **Install** button that shows the install job's last log
+line while it runs. A session's terminal is always a Windows Terminal
+tab Willie composes and hands off — never a pty Willie renders itself.
 
 ### 3.3 Sandbox
 
@@ -526,7 +556,7 @@ wizard of §2.4. Code signing is out of scope for now.
 | ----- | --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ----- |
 | F0    | distribution registered; UI shows health; `doctor` — **delivered 2026-08-26** | `distro/`, engine (import, supervision), `willied` (hello/health/doctor), `willie doctor`, Dashboard, NSIS | S1 |
 | F1    | projects: register a Windows checkout, ext4 workspace synced through git (0011, 0013) | `project.*`, `job.*`, `state.*`, engine project methods and `engine.toml` roots, Projects screen, `just test-linux` | S5 |
-| F1    | sessions: Claude Code session in WT, no sandbox — **Linux core delivered 2026-08-28; UI in Plan B** | `session.*`, `willie-sess` (PTY, socket, events — sandbox off), `willie attach`, WT profile, Sessions screen | S2 |
+| F1    | sessions: Claude Code session in a WT tab, no sandbox — **delivered 2026-08-28** | `session.*`, `willie-sess` (PTY, socket, events — sandbox off), `willie attach`, engine (`session_open`/`session_attach`/`session_stop`/`tool_install`), Sessions screen, Projects-row Open session + badge, Dashboard Install | S2 |
 | F2    | proxy/CA propagated                                             | engine (WinHTTP, cert stores), `machine.env`, network `doctor`                                      | S4    |
 | F3    | sandbox with capabilities and layers                            | `willie-sess` (bwrap/seccomp/Landlock, `--inner`), `willie-core` (CapabilitySet, layers), `sandbox explain`, capability UI | S3 |
 | F4    | managed tools                                                   | `tool.*`, manifest, `Harness::detect`, Tools screen                                                  | —     |

@@ -43,5 +43,13 @@ export function applyEvent(current: Snapshot, ev: Event): Snapshot {
           : current.jobs.map((j, i) => (i === idx ? ev.job : j));
       return { ...current, seq, jobs };
     }
+    case "session_changed": {
+      const idx = current.sessions.findIndex((s) => s.id === ev.session.id);
+      const sessions =
+        idx === -1
+          ? [...current.sessions, ev.session]
+          : current.sessions.map((s, i) => (i === idx ? ev.session : s));
+      return { ...current, seq, sessions };
+    }
   }
 }

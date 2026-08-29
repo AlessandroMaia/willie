@@ -5,9 +5,11 @@ import {
   isProblem,
   onDaemonEvent,
   projects as projectsApi,
+  sessions as sessionsApi,
 } from "../lib/engine";
 import { latestJobFor } from "../lib/jobs";
 import type { Candidate, Job, JobKind, Project, Snapshot } from "../lib/proto";
+import { liveCount } from "../lib/sessions";
 import { applyEvent, needsResnapshot } from "../lib/state";
 
 function wslPathFor(slug: string): string {
@@ -134,6 +136,13 @@ export function Projects() {
   const [rowProblems, setRowProblems] = useState<Map<string, Problem>>(
     new Map(),
   );
+  /* A session that opened successfully but whose terminal tab could not
+   * be launched (`SessionOpened.terminal_problem`) — the session is
+   * alive, so this is kept apart from `rowProblems` and rendered as a
+   * dismissable notice instead of a row failure. */
+  const [openNotices, setOpenNotices] = useState<Map<string, Problem>>(
+    new Map(),
+  );
 
   const loadSnapshot = useCallback(() => {
     projectsApi
@@ -226,6 +235,15 @@ export function Projects() {
 
   function setRowProblem(projectId: string, problem: Problem | null) {
     setRowProblems((prev) => {
+      const next = new Map(prev);
+      if (problem) next.set(projectId, problem);
+      else next.delete(projectId);
+      return next;
+    });
+  }
+
+  function setOpenNotice(projectId: string, problem: Problem | null) {
+    setOpenNotices((prev) => {
       const next = new Map(prev);
       if (problem) next.set(projectId, problem);
       else next.delete(projectId);
@@ -358,6 +376,20 @@ export function Projects() {
       projectsApi.rename(project.id, name),
     );
     if (ok) setEditingId(null);
+  }
+
+  /* `runRow` already routes a thrown `Problem` (the create itself
+   * failing — `project_busy`, `harness_not_installed`, …) into
+   * `rowProblems`. A `terminal_problem` only ever rides along on a
+   * *successful* open — the session is alive, just no tab launched — so
+   * it is pulled out of the result here and kept in `openNotices`
+   * instead of being treated as a row failure. */
+  function openSession(project: Project) {
+    setOpenNotice(project.id, null);
+    runRow(project.id, project.id, async () => {
+      const result = await sessionsApi.open(project.id);
+      setOpenNotice(project.id, result.terminal_problem ?? null);
+    });
   }
 
   function syncToWindows(project: Project) {
@@ -613,6 +645,8 @@ export function Projects() {
             const jobRunning = job?.state.state === "running";
             const path = wslPathFor(project.slug);
             const rowProblem = rowProblems.get(project.id) ?? null;
+            const openNotice = openNotices.get(project.id) ?? null;
+            const live = liveCount(snap.sessions, project.id);
             return (
               <div key={project.id} className="project-row">
                 <div className="project-row-main">
@@ -642,6 +676,14 @@ export function Projects() {
                     </span>
                   )}
                   <StateChip project={project} job={job} onRetry={retry} />
+                  {live > 0 && (
+                    <span
+                      className="badge badge-live"
+                      title={`${live} live session${live === 1 ? "" : "s"}`}
+                    >
+                      {live} live
+                    </span>
+                  )}
                 </div>
 
                 <div className="project-row-detail muted">
@@ -681,7 +723,25 @@ export function Projects() {
                   </div>
                 )}
 
+                {openNotice && (
+                  <div className="notice" role="status">
+                    <span>{openNotice.message}</span>
+                    {openNotice.remediation && (
+                      <div className="muted">→ {openNotice.remediation}</div>
+                    )}
+                  </div>
+                )}
+
                 <div className="actions">
+                  <button
+                    type="button"
+                    disabled={
+                      isBusy || project.state.state !== "ready" || jobRunning
+                    }
+                    onClick={() => openSession(project)}
+                  >
+                    Open session
+                  </button>
                   <button
                     type="button"
                     disabled={

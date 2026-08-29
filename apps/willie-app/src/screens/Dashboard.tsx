@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { EngineStatus, Problem } from "../lib/engine";
-import { engine, isProblem, projects } from "../lib/engine";
+import {
+  engine,
+  isProblem,
+  onDaemonEvent,
+  projects,
+  tools,
+} from "../lib/engine";
 import type { Part } from "../lib/health";
 import { lightFor, overallHealth } from "../lib/health";
+import { latestInstallJob } from "../lib/jobs";
+import type { Job, Snapshot } from "../lib/proto";
+import { applyEvent, needsResnapshot } from "../lib/state";
 
 const PARTS: { key: Part; label: string }[] = [
   { key: "wsl", label: "WSL" },
@@ -15,7 +24,9 @@ export function Dashboard() {
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [projectCount, setProjectCount] = useState<number | null>(null);
+  const [snap, setSnap] = useState<Snapshot | null>(null);
+  const snapRef = useRef<Snapshot | null>(null);
+  const handledInstallJobRef = useRef<string | null>(null);
 
   const report = useCallback((error: unknown) => {
     setProblem(
@@ -49,25 +60,71 @@ export function Dashboard() {
     /* `state_snapshot` starts the daemon on demand when it is not
      * already running (booting the WSL VM, up to a 60s HELLO
      * timeout) — opening the Dashboard must never be what boots
-     * Willie, so the count is only fetched once the daemon is
-     * already up, and the effect re-runs as `daemonState` changes. */
+     * Willie, so the snapshot (and the event subscription that keeps
+     * it live) only run once the daemon is already up, and both tear
+     * down the moment `daemonState` leaves "running". */
     if (daemonState !== "running") {
-      setProjectCount(null);
+      snapRef.current = null;
+      setSnap(null);
       return;
     }
     let cancelled = false;
+    let unlisten: (() => void) | undefined;
     projects
       .snapshot()
-      .then((snap) => {
-        if (!cancelled) setProjectCount(snap.projects.length);
+      .then((next) => {
+        if (cancelled) return;
+        snapRef.current = next;
+        setSnap(next);
       })
       .catch(() => {
-        /* the count is a nicety; a failed snapshot just hides it */
+        /* the project count and install job are a nicety; a failed
+         * snapshot just hides them */
       });
+    onDaemonEvent((ev) => {
+      const current = snapRef.current;
+      if (current === null || needsResnapshot(current, ev)) {
+        projects
+          .snapshot()
+          .then((next) => {
+            if (!cancelled) {
+              snapRef.current = next;
+              setSnap(next);
+            }
+          })
+          .catch(() => {
+            /* same as above: keep showing the last known snapshot */
+          });
+        return;
+      }
+      const next = applyEvent(current, ev);
+      snapRef.current = next;
+      setSnap(next);
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
     return () => {
       cancelled = true;
+      unlisten?.();
     };
   }, [daemonState]);
+
+  const projectCount = snap?.projects.length ?? null;
+  const installJob = latestInstallJob(snap?.jobs ?? []);
+
+  useEffect(() => {
+    /* Fires once per job: a `useRef` (not state) remembers the last
+     * job id this effect acted on, since recording it in state would
+     * itself retrigger the effect. */
+    if (
+      installJob?.state.state === "done" &&
+      handledInstallJobRef.current !== installJob.id
+    ) {
+      handledInstallJobRef.current = installJob.id;
+      engine.doctor().then(refresh).catch(report);
+    }
+  }, [installJob?.id, installJob?.state.state, refresh, report]);
 
   async function run(name: string, action: () => Promise<unknown>) {
     setBusy(name);
@@ -162,20 +219,65 @@ export function Dashboard() {
         <section className="doctor">
           <h2>Doctor</h2>
           <ul>
-            {status.doctor.checks.map((c) => (
-              <li key={c.name} className={`check check-${c.status}`}>
-                <code>[{c.status}]</code> <strong>{c.name}</strong>{" "}
-                <span className="muted">{c.detail}</span>
-                {c.status === "fail" && c.remediation && (
-                  <div className="muted">→ {c.remediation}</div>
-                )}
-              </li>
-            ))}
+            {status.doctor.checks.map((c) => {
+              const isHarnessCheck = c.name === "Claude Code";
+              return (
+                <li key={c.name} className={`check check-${c.status}`}>
+                  <code>[{c.status}]</code> <strong>{c.name}</strong>{" "}
+                  <span className="muted">{c.detail}</span>
+                  {c.status === "fail" && c.remediation && (
+                    <div className="muted">→ {c.remediation}</div>
+                  )}
+                  {isHarnessCheck && c.status === "fail" && (
+                    <div className="actions">
+                      <button
+                        type="button"
+                        disabled={
+                          busy !== null || installJob?.state.state === "running"
+                        }
+                        onClick={() =>
+                          run("install-harness", () =>
+                            tools.install("claude-code"),
+                          )
+                        }
+                      >
+                        Install
+                      </button>
+                    </div>
+                  )}
+                  {isHarnessCheck && installJob?.state.state === "running" && (
+                    <div className="muted">{lastLogLine(installJob)}</div>
+                  )}
+                  {isHarnessCheck && installJob?.state.state === "failed" && (
+                    <div>
+                      <code>{installJob.state.code}</code> —{" "}
+                      {installJob.state.message}
+                      {installJob.state.remediation && (
+                        <div className="muted">
+                          → {installJob.state.remediation}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </section>
       )}
     </main>
   );
+}
+
+/* `log_tail` is a multi-line buffer the daemon keeps appending to as
+ * the job runs, often with trailing blank lines; only the last real
+ * line is worth showing beside the check. */
+function lastLogLine(job: Job): string {
+  const lines = job.log_tail.split("\n");
+  while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") {
+    lines.pop();
+  }
+  return lines[lines.length - 1] ?? "";
 }
 
 function describe(part: Part, s: EngineStatus): string {

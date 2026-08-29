@@ -11,11 +11,11 @@ mod state;
 use std::path::PathBuf;
 
 use tauri::{AppHandle, Emitter, Manager, State};
-use willie_core::id::{JobId, ProjectId};
+use willie_core::id::{JobId, ProjectId, SessionId};
 use willie_core::project::Project;
 use willie_engine::discover::Candidate;
 use willie_engine::error::EngineError;
-use willie_engine::{Engine, EngineStatus, Problem};
+use willie_engine::{Engine, EngineStatus, Problem, SessionOpened};
 use willie_proto::daemon::DoctorReport;
 use willie_proto::project::{AddResult, JobRef, ProjectList};
 use willie_proto::state::Snapshot;
@@ -268,6 +268,51 @@ fn discover_projects(
 }
 
 #[tauri::command(async)]
+fn session_open(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    project_id: ProjectId,
+) -> Result<SessionOpened, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.session_open(project_id)
+    })
+}
+
+#[tauri::command(async)]
+fn session_attach(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: SessionId,
+    title: String,
+) -> Result<(), Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.session_attach(id, title)
+    })
+}
+
+#[tauri::command(async)]
+fn session_stop(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: SessionId,
+) -> Result<(), Problem> {
+    daemon_command(&app, &state, &pump, |engine| engine.session_stop(id))
+}
+
+#[tauri::command(async)]
+fn tool_install(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    harness: String,
+) -> Result<JobRef, Problem> {
+    daemon_command(&app, &state, &pump, |engine| engine.tool_install(&harness))
+}
+
+#[tauri::command(async)]
 fn open_in_explorer(path: String) -> Result<(), Problem> {
     std::process::Command::new("explorer.exe")
         .arg(&path)
@@ -319,7 +364,11 @@ pub fn run() {
             projects_roots,
             set_projects_roots,
             discover_projects,
-            open_in_explorer
+            open_in_explorer,
+            session_open,
+            session_attach,
+            session_stop,
+            tool_install
         ])
         .run(tauri::generate_context!());
     if let Err(error) = result {
