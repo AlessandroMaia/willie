@@ -178,3 +178,51 @@ fn a_missing_socket_is_exit_1_with_a_plain_message() {
     assert!(stderr.contains("is not running"), "{stderr}");
     assert!(out.stdout.is_empty());
 }
+
+#[test]
+fn host_mode_forwards_input_and_resize_and_streams_output_raw() {
+    use willie_proto::hostterm;
+    let sock = scratch_socket("host");
+    let listener = UnixListener::bind(&sock).unwrap();
+
+    let mut child = Command::new(binary_path())
+        .args(["attach", sock.to_str().unwrap(), "--host"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+
+    let (mut server, _) = listener.accept().unwrap();
+    let mut dec = wire::Decoder::new();
+
+    // hello names the terminal role.
+    let hello = read_frame(&mut server, &mut dec, wire::HELLO);
+    let hello: Hello = wire::decode_json(&hello.payload).unwrap();
+    assert_eq!(hello.role, Role::Terminal);
+
+    let mut stdin = child.stdin.take().unwrap();
+
+    // an input host-frame becomes a wire INPUT frame.
+    stdin.write_all(&hostterm::encode_input(b"ls\n")).unwrap();
+    let f = read_frame(&mut server, &mut dec, wire::INPUT);
+    assert_eq!(f.payload, b"ls\n");
+
+    // a resize host-frame becomes a wire RESIZE frame (rows, cols).
+    stdin.write_all(&hostterm::encode_resize(40, 120)).unwrap();
+    let f = read_frame(&mut server, &mut dec, wire::RESIZE);
+    assert_eq!(wire::decode_resize(&f.payload), Some((40, 120)));
+
+    // a supervisor OUTPUT frame reaches the child's stdout raw.
+    server
+        .write_all(&wire::encode(wire::OUTPUT, b"hi there"))
+        .unwrap();
+    let mut out = [0u8; 8];
+    child.stdout.as_mut().unwrap().read_exact(&mut out).unwrap();
+    assert_eq!(&out, b"hi there");
+
+    // EOF on stdin is a clean detach; the session keeps running.
+    drop(stdin);
+    let _ = read_frame(&mut server, &mut dec, wire::DETACH);
+    assert!(child.wait().unwrap().success());
+}
