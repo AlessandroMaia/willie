@@ -50,6 +50,12 @@ workspace folder name; `<win>` its Windows checkout path.
 | 12 | Start a long-running project job (e.g. **Send to Windows** on a large workspace), then immediately click **Open session** on that same project | the row shows an inline `project_busy` problem with its remediation, and no session is created |
 | 13 | Remove the harness again (prereqs step), then click **Open session** on a `ready` project | the row shows an inline `harness_not_installed` problem with the remediation "click Install on the Dashboard", and no session is created |
 | 14 | With a session still `running` (repeat row 4 first if needed), close the Willie window entirely, then reopen it | the Sessions screen shows the same session under **Live**, restored from the daemon's re-adoption scan, not re-created; no console window appeared at any point |
+| 15 | With `<proj>` having a live session (repeat row 4 if needed), on its **Sessions** row click **Open in app** | an embedded terminal panel opens inside the Willie window, painting the Claude Code TUI; no Windows Terminal tab opens |
+| 16 | Type in the embedded terminal | Claude Code echoes the keystrokes and responds like any normal terminal session |
+| 17 | Resize the **Willie window** — the human-eyes row for the embedded path | the embedded TUI reflows to the new width/height |
+| 18 | Open a second live session (**Open session** again, on `<proj>` or another `ready` project), then click **Open in app** on its row | the first session's embedded terminal detaches (it keeps running, still listed under **Live**); the second session's terminal attaches, its screen restored from the ring replay |
+| 19 | On the embedded terminal panel, click **Close** | the panel goes away; the session stays listed under **Live**, unaffected |
+| 20 | Regression: with `wt.exe` present (not hidden), click **Open session** (not **Open in app**) on a `ready` project | exactly one Windows Terminal tab opens; no stray `wt.exe` window appears at any point |
 
 ## Results
 

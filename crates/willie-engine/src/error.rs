@@ -94,6 +94,8 @@ pub enum EngineError {
         message: String,
         attach_hint: String,
     },
+    #[error("embedded terminal failed: {message}")]
+    EmbeddedTerminal { message: String },
 }
 
 impl EngineError {
@@ -116,6 +118,7 @@ impl EngineError {
             Self::PathNotFound { .. } => "path_not_found",
             Self::ConfigWrite { .. } => "config_write_failed",
             Self::TerminalLaunch { .. } => "terminal_launch_failed",
+            Self::EmbeddedTerminal { .. } => "embedded_terminal_failed",
         }
     }
 
@@ -180,6 +183,10 @@ impl EngineError {
             Self::TerminalLaunch { attach_hint, .. } => {
                 format!("open a terminal and run: {attach_hint}")
             }
+            Self::EmbeddedTerminal { .. } => "open the session in a \
+                 Windows Terminal tab instead (Open session), or click \
+                 Run doctor"
+                .into(),
         }
     }
 }
@@ -349,6 +356,9 @@ mod tests {
                 attach_hint: "wsl -d willie --user willie -- willie \
                               attach sess_1"
                     .into(),
+            },
+            EngineError::EmbeddedTerminal {
+                message: "x".into(),
             },
         ]
     }

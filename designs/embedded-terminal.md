@@ -1,5 +1,11 @@
 # Embedded terminal — a session inside the Willie window
 
+**Delivered 2026-08-30.** Shipped as designed below: the `hostterm`
+dialect, `willie attach --host`, the engine bridge (`embed.rs`), the
+`wt.exe` detection fix, the Tauri commands/event and the `xterm.js`
+component with an "Open in app" row action. See "Open questions" for how
+the two deferred calls landed.
+
 ## Problem
 
 Opening a session today launches it in a **separate Windows Terminal tab**
@@ -133,20 +139,22 @@ unchanged.
 
 ### App — `apps/willie-app/src-tauri/src/lib.rs`, `apps/willie-app/src/`
 
-- Tauri commands: `session_terminal_open(id)`, `session_input(id, data)`,
-  `session_resize(id, rows, cols)`, `session_terminal_close(id)` — thin
-  wrappers over the engine bridge, following the existing
+- Tauri commands: `session_terminal_open(id)`,
+  `session_terminal_input(id, data)`,
+  `session_terminal_resize(id, rows, cols)`, `session_terminal_close(id)` —
+  thin wrappers over the engine bridge, following the existing
   `daemon_command`/`with_engine` pattern. Output is delivered as a Tauri
-  event `session://output` carrying `{ id, chunk }` (bytes base64-encoded,
-  since Tauri events are JSON).
+  event `session://output` carrying `{ id, chunk }` (`chunk` a plain JSON
+  array of bytes, not base64-encoded).
 - Frontend: a terminal component built on `xterm.js` + the fit addon (new
   frontend dependencies `@xterm/xterm`, `@xterm/addon-fit`). On open it
   calls `session_terminal_open`, subscribes to `session://output` (filtered
-  by id) and writes chunks to the terminal; `xterm.onData` → `session_input`;
-  the fit addon plus a `ResizeObserver` → `session_resize`; unmount/switch →
-  `session_terminal_close`. A live-session row gains a functional "Open in
-  app" action that reveals this terminal for that session. Placement and
-  styling are intentionally minimal — the UI/UX pass owns them.
+  by id) and writes chunks to the terminal; `xterm.onData` →
+  `session_terminal_input`; the fit addon plus a `ResizeObserver` →
+  `session_terminal_resize`; unmount/switch → `session_terminal_close`. A
+  live-session row gains a functional "Open in app" action that reveals
+  this terminal for that session. Placement and styling are intentionally
+  minimal — the UI/UX pass owns them.
 
 ### Errors and edge cases
 
@@ -192,10 +200,13 @@ independent of the embedded path.
 
 ## Open questions
 
-- **Byte channel for output.** Start with Tauri events (base64 chunks); if
-  a redraw-heavy TUI shows lag, move output to a local `127.0.0.1` socket
-  the webview reads directly. Favoured: start with events, measure, upgrade
-  only if needed.
-- **Where "Open in app" lives.** A functional action on the live-session
-  row for now; the UI/UX pass decides the final placement (a panel, a
-  dedicated view, or concurrent panes). Favoured: minimal row action now.
+- **Byte channel for output.** Resolved: Tauri events. `session://output`
+  carries `{ id, chunk }`, with `chunk` a plain JSON array of bytes (not
+  base64 — `serde` serialises `Vec<u8>` that way, and the frontend
+  consumes it as `number[]` directly with no decode step). No lag was
+  observed; the local-socket alternative is not needed for this slice.
+- **Where "Open in app" lives.** Resolved: a functional "Open in app"
+  button alongside *Attach*/*Stop* on the live-session row, revealing the
+  `SessionTerminal` component for that session. Placement and styling stay
+  minimal, as planned; a later UI/UX pass owns the final layout (a panel,
+  a dedicated view, or concurrent panes).

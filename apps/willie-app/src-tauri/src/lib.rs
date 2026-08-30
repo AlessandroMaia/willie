@@ -24,6 +24,13 @@ use crate::events::EventPump;
 use crate::state::{EngineState, image_candidates, workspace_root};
 
 const STATUS_EVENT: &str = "engine://status";
+const OUTPUT_EVENT: &str = "session://output";
+
+#[derive(Clone, serde::Serialize)]
+struct SessionOutput {
+    id: String,
+    chunk: Vec<u8>,
+}
 
 #[tauri::command]
 fn app_version() -> &'static str {
@@ -108,9 +115,10 @@ fn engine_doctor(
     outcome.0
 }
 
-/// A read-only engine call that never touches the daemon (host-side
-/// filesystem work only): lock, call, flatten the `EngineError`. No
-/// status to emit, no event pump to establish.
+/// An engine call that never goes through the daemon: lock, call,
+/// flatten the `EngineError`. No daemon RPC means no status to
+/// re-emit and no event pump to attach — true of both read-only
+/// filesystem queries and the host-side embedded-terminal spawn.
 fn query<T>(
     state: &State<'_, EngineState>,
     op: impl FnOnce(&mut Engine) -> Result<T, EngineError>,
@@ -313,6 +321,59 @@ fn tool_install(
 }
 
 #[tauri::command(async)]
+fn session_terminal_open(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    id: SessionId,
+) -> Result<(), Problem> {
+    let sink_app = app.clone();
+    let sink_id = id.to_string();
+    let sink = move |chunk: Vec<u8>| {
+        if let Err(e) = sink_app.emit(
+            OUTPUT_EVENT,
+            SessionOutput {
+                id: sink_id.clone(),
+                chunk,
+            },
+        ) {
+            eprintln!("willie-app: cannot emit session output: {e}");
+        }
+    };
+    query(&state, |engine| engine.session_terminal_open(id, sink))
+}
+
+#[tauri::command(async)]
+fn session_terminal_input(
+    state: State<'_, EngineState>,
+    id: SessionId,
+    data: String,
+) -> Result<(), Problem> {
+    with_engine(&state, |engine| {
+        engine.session_terminal_input(id, data.as_bytes())
+    })
+}
+
+#[tauri::command(async)]
+fn session_terminal_resize(
+    state: State<'_, EngineState>,
+    id: SessionId,
+    rows: u16,
+    cols: u16,
+) -> Result<(), Problem> {
+    with_engine(&state, |engine| {
+        engine.session_terminal_resize(id, rows, cols)
+    })
+}
+
+#[tauri::command(async)]
+fn session_terminal_close(
+    state: State<'_, EngineState>,
+    id: SessionId,
+) -> Result<(), Problem> {
+    with_engine(&state, |engine| engine.session_terminal_close(id))
+}
+
+#[tauri::command(async)]
 fn open_in_explorer(path: String) -> Result<(), Problem> {
     std::process::Command::new("explorer.exe")
         .arg(&path)
@@ -368,7 +429,11 @@ pub fn run() {
             session_open,
             session_attach,
             session_stop,
-            tool_install
+            tool_install,
+            session_terminal_open,
+            session_terminal_input,
+            session_terminal_resize,
+            session_terminal_close
         ])
         .run(tauri::generate_context!());
     if let Err(error) = result {

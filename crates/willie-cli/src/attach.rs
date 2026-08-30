@@ -243,11 +243,15 @@ fn finish(text: Option<&[u8]>, code: u8) -> ! {
     std::process::exit(i32::from(code));
 }
 
-/// Attach to the supervisor listening on `target`.
+/// Attach to the supervisor listening on `target`. In host mode (`host`)
+/// the client has no terminal of its own: stdin carries `hostterm` control
+/// frames instead of raw keystrokes, and stdout must carry only session
+/// bytes, so no status line is printed there.
 pub fn run(
     target: &std::path::Path,
     size: Option<(u16, u16)>,
     raw: bool,
+    host: bool,
 ) -> ExitCode {
     let stream = match UnixStream::connect(target) {
         Ok(stream) => stream,
@@ -260,14 +264,14 @@ pub fn run(
             return ExitCode::from(1);
         }
     };
-    if raw && !is_a_terminal(0) {
+    if !host && raw && !is_a_terminal(0) {
         eprintln!(
             "willie attach: stdin is not a terminal; use --no-raw or run \
              this from a terminal"
         );
         return ExitCode::from(1);
     }
-    let _guard = if raw {
+    let _guard = if !host && raw {
         match raw_mode() {
             Ok(guard) => Some(guard),
             Err(e) => {
@@ -278,7 +282,9 @@ pub fn run(
     } else {
         None
     };
-    install(libc::SIGWINCH, on_winch);
+    if !host {
+        install(libc::SIGWINCH, on_winch);
+    }
     install(libc::SIGTERM, on_hangup);
     install(libc::SIGHUP, on_hangup);
 
@@ -316,15 +322,83 @@ pub fn run(
         return ExitCode::from(1);
     }
 
-    let code = input_loop(fd, size);
+    let code = if host {
+        host_input_loop(fd)
+    } else {
+        input_loop(fd, size)
+    };
     if code == 0 {
         // Detach (or stdin ended): the output thread ends the process
         // when the socket closes; give it a moment, then leave anyway.
         let _ = writer.shutdown(Shutdown::Write);
         thread::sleep(std::time::Duration::from_millis(200));
-        finish(Some(b"willie: detached, the session keeps running"), 0);
+        // Host stdout carries only session bytes: the interactive
+        // "detached…" line would corrupt the app's byte stream.
+        if host {
+            finish(None, 0);
+        } else {
+            finish(Some(b"willie: detached, the session keeps running"), 0);
+        }
     }
     ExitCode::from(code)
+}
+
+/// Host mode: read `hostterm` frames from stdin and forward them to the
+/// supervisor as wire frames. Output still flows through `output_loop`.
+/// EOF on stdin is a clean detach; the session keeps running.
+#[cfg(target_os = "linux")]
+fn host_input_loop(fd: libc::c_int) -> u8 {
+    use willie_proto::hostterm::{self, HostFrame};
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 8 * 1024];
+    loop {
+        match read_fd(0, &mut chunk) {
+            Ok(0) => {
+                LEAVING.store(true, Ordering::SeqCst);
+                let _ = write_all_fd(fd, &wire::encode(wire::DETACH, b""));
+                return 0;
+            }
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                loop {
+                    match hostterm::decode_frame(&buf) {
+                        Ok(Some((frame, used))) => {
+                            buf.drain(..used);
+                            match frame {
+                                HostFrame::Input(bytes) => {
+                                    for part in bytes.chunks(wire::MAX_PAYLOAD)
+                                    {
+                                        if write_all_fd(
+                                            fd,
+                                            &wire::encode(wire::INPUT, part),
+                                        )
+                                        .is_err()
+                                        {
+                                            return 1;
+                                        }
+                                    }
+                                }
+                                HostFrame::Resize { rows, cols } => {
+                                    if write_all_fd(
+                                        fd,
+                                        &wire::encode_resize(rows, cols),
+                                    )
+                                    .is_err()
+                                    {
+                                        return 1;
+                                    }
+                                }
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(_) => return 1,
+                    }
+                }
+            }
+            Err(e) if e.raw_os_error() == Some(libc::EINTR) => continue,
+            Err(_) => return 1,
+        }
+    }
 }
 
 /// Forward keystrokes and window changes until the user detaches or stdin

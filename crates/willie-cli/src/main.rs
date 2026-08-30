@@ -35,6 +35,9 @@ enum Command {
         size: Option<(u16, u16)>,
         /// Whether to put the local terminal in raw mode.
         raw: bool,
+        /// Read `hostterm` frames from stdin instead of a raw terminal;
+        /// stdout carries only session bytes. For the desktop app.
+        host: bool,
     },
     Usage,
 }
@@ -53,10 +56,12 @@ fn parse_attach(args: &[&str]) -> Command {
     let mut target = None;
     let mut size = None;
     let mut raw = true;
+    let mut host = false;
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
         match *arg {
             "--no-raw" => raw = false,
+            "--host" => host = true,
             "--size" => match rest.next().and_then(|v| parse_size(v)) {
                 Some(parsed) => size = Some(parsed),
                 None => return Command::Usage,
@@ -67,7 +72,12 @@ fn parse_attach(args: &[&str]) -> Command {
         }
     }
     match target {
-        Some(target) => Command::Attach { target, size, raw },
+        Some(target) => Command::Attach {
+            target,
+            size,
+            raw,
+            host,
+        },
         None => Command::Usage,
     }
 }
@@ -145,7 +155,7 @@ fn doctor(json: bool) -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: willie attach [--no-raw] [--size ROWSxCOLS] \
+        "usage: willie attach [--no-raw] [--size ROWSxCOLS] [--host] \
          <session-id|socket> | willie doctor [--json] | willie --version"
     );
     ExitCode::from(EXIT_USAGE)
@@ -161,9 +171,12 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Command::Doctor { json } => doctor(json),
-        Command::Attach { target, size, raw } => {
-            attach::run(&socket_for(&target), size, raw)
-        }
+        Command::Attach {
+            target,
+            size,
+            raw,
+            host,
+        } => attach::run(&socket_for(&target), size, raw, host),
         Command::Usage => usage(),
     }
 }
@@ -235,7 +248,8 @@ mod tests {
             Command::Attach {
                 target: "sess_01J".into(),
                 size: None,
-                raw: true
+                raw: true,
+                host: false,
             }
         );
         assert_eq!(
@@ -243,12 +257,26 @@ mod tests {
             Command::Attach {
                 target: "/tmp/s.sock".into(),
                 size: Some((24, 80)),
-                raw: false
+                raw: false,
+                host: false,
             }
         );
         assert_eq!(parse(&["attach"]), Command::Usage);
         assert_eq!(parse(&["attach", "--size", "x", "a"]), Command::Usage);
         assert_eq!(parse(&["attach", "a", "b"]), Command::Usage);
+    }
+
+    #[test]
+    fn host_flag_parses() {
+        assert_eq!(
+            parse(&["attach", "sess_01J", "--host"]),
+            Command::Attach {
+                target: "sess_01J".into(),
+                size: None,
+                raw: true,
+                host: true,
+            }
+        );
     }
 
     #[test]

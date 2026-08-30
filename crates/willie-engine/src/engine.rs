@@ -82,6 +82,8 @@ pub struct Engine {
     distro: DistroManager,
     daemon: DaemonSupervisor,
     last_doctor: Option<DoctorReport>,
+    #[cfg(windows)]
+    pub(crate) embedded: Option<crate::embed::imp::Embedded>,
 }
 
 impl Engine {
@@ -92,6 +94,8 @@ impl Engine {
             distro: DistroManager,
             daemon: DaemonSupervisor::new(),
             last_doctor: None,
+            #[cfg(windows)]
+            embedded: None,
         }
     }
 

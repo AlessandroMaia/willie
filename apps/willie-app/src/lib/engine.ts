@@ -96,6 +96,22 @@ export const sessions = {
   stop: (id: string) => invoke("session_stop", { id }),
 };
 
+export const sessionTerminal = {
+  open: (id: string) => invoke("session_terminal_open", { id }),
+  input: (id: string, data: string) =>
+    invoke("session_terminal_input", { id, data }),
+  resize: (id: string, rows: number, cols: number) =>
+    invoke("session_terminal_resize", { id, rows, cols }),
+  close: (id: string) => invoke("session_terminal_close", { id }),
+};
+
+export const onSessionOutput = (
+  cb: (out: { id: string; chunk: number[] }) => void,
+): Promise<UnlistenFn> =>
+  listen<{ id: string; chunk: number[] }>("session://output", (event) =>
+    cb(event.payload),
+  );
+
 export const tools = {
   install: (harness: string) => invoke("tool_install", { harness }),
 };
