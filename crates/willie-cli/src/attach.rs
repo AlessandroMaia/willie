@@ -354,6 +354,7 @@ fn host_input_loop(fd: libc::c_int) -> u8 {
     loop {
         match read_fd(0, &mut chunk) {
             Ok(0) => {
+                LEAVING.store(true, Ordering::SeqCst);
                 let _ = write_all_fd(fd, &wire::encode(wire::DETACH, b""));
                 return 0;
             }

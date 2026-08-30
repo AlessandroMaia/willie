@@ -189,7 +189,7 @@ fn host_mode_forwards_input_and_resize_and_streams_output_raw() {
         .args(["attach", sock.to_str().unwrap(), "--host"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .unwrap();
 
@@ -221,8 +221,21 @@ fn host_mode_forwards_input_and_resize_and_streams_output_raw() {
     child.stdout.as_mut().unwrap().read_exact(&mut out).unwrap();
     assert_eq!(&out, b"hi there");
 
-    // EOF on stdin is a clean detach; the session keeps running.
+    // EOF on stdin is a clean detach; the session keeps running. The real
+    // supervisor closes the socket on `detach` with no `closed` frame
+    // (`willie-sess` breaks out of its loop and shuts the stream down), so
+    // mirror that here: a `LEAVING` flag missed on the host EOF path would
+    // make the output thread race this shutdown and report the connection
+    // lost instead of a clean detach.
     drop(stdin);
     let _ = read_frame(&mut server, &mut dec, wire::DETACH);
-    assert!(child.wait().unwrap().success());
+    server.shutdown(std::net::Shutdown::Both).unwrap();
+
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("connection to the session lost"),
+        "{stderr}"
+    );
 }
