@@ -259,6 +259,7 @@ impl Engine {
             CreateParams {
                 project_id,
                 git_identity,
+                resume: false,
             },
         )
     }

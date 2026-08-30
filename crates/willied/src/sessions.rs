@@ -129,6 +129,7 @@ impl SessionOps {
             env: launch.env,
             created_at: (self.clock)(),
             willie_version: willie_core::VERSION.to_owned(),
+            resumed_from: None,
         };
         let dir =
             session_store::write_spec(&self.state_dir, &spec).map_err(|e| {
@@ -425,6 +426,7 @@ fn placeholder(id: SessionId) -> Session {
         finished_at: None,
         pid: None,
         clients: 0,
+        resumed_from: None,
     }
 }
 
@@ -561,6 +563,7 @@ mod create_tests {
             .create(CreateParams {
                 project_id: pid,
                 git_identity: None,
+                resume: false,
             })
             .unwrap_err();
         assert_eq!(err.code, "project_busy");

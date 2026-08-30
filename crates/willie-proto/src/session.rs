@@ -24,6 +24,8 @@ pub struct CreateParams {
     pub project_id: ProjectId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_identity: Option<GitIdentity>,
+    #[serde(default)]
+    pub resume: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,5 +60,19 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(p.git_identity.unwrap().email, "a@x");
+    }
+
+    #[test]
+    fn create_params_default_to_a_fresh_session() {
+        let p: CreateParams = serde_json::from_value(serde_json::json!({
+            "project_id": ProjectId::new()
+        }))
+        .unwrap();
+        assert!(!p.resume);
+        let p: CreateParams = serde_json::from_value(serde_json::json!({
+            "project_id": ProjectId::new(), "resume": true
+        }))
+        .unwrap();
+        assert!(p.resume);
     }
 }

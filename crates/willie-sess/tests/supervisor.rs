@@ -68,6 +68,7 @@ pub fn write_spec(root: &Path, argv: &[&str], workspace: &Path) -> PathBuf {
         env,
         created_at: "1".into(),
         willie_version: willie_core::VERSION.into(),
+        resumed_from: None,
     };
     let path = dir.join("spec.json");
     fs::write(&path, serde_json::to_string(&spec).unwrap()).unwrap();

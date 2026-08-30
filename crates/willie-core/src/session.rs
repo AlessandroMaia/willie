@@ -63,6 +63,9 @@ pub struct Session {
     /// Attached terminals.
     #[serde(default)]
     pub clients: u32,
+    /// The session this one continues, if it was opened as a resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed_from: Option<SessionId>,
 }
 
 /// `spec.json`: immutable once written by the daemon. Everything the
@@ -79,6 +82,9 @@ pub struct SessionSpec {
     pub env: BTreeMap<String, String>,
     pub created_at: String,
     pub willie_version: String,
+    /// Persisted so a re-adopted session keeps its lineage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed_from: Option<SessionId>,
 }
 
 /// One line of `events.jsonl`.
@@ -179,6 +185,7 @@ pub fn from_log(spec: &SessionSpec, events: &[SessionEvent]) -> Session {
         finished_at: None,
         pid: None,
         clients: 0,
+        resumed_from: spec.resumed_from,
     };
     for event in events {
         apply_event(&mut session, event);
@@ -240,6 +247,7 @@ mod tests {
                 .collect(),
             created_at: "1".into(),
             willie_version: "0.1.0".into(),
+            resumed_from: None,
         }
     }
 
@@ -381,6 +389,34 @@ mod tests {
         apply_event(&mut s, &ev("2", SessionEventKind::Started { pid: 3 }));
         assert!(s.state.is_terminal());
         assert_eq!(s.pid, None);
+    }
+
+    #[test]
+    fn resumed_from_defaults_to_none_and_round_trips_when_set() {
+        let s = from_log(&spec(), &[]);
+        assert_eq!(s.resumed_from, None);
+        let v = serde_json::to_value(&s).unwrap();
+        assert!(v.get("resumed_from").is_none());
+        let back: Session = serde_json::from_value(v).unwrap();
+        assert_eq!(back, s);
+
+        let mut resumed = s;
+        resumed.resumed_from = Some(SessionId::new());
+        let v = serde_json::to_value(&resumed).unwrap();
+        assert_eq!(
+            v["resumed_from"],
+            serde_json::to_value(resumed.resumed_from.unwrap()).unwrap()
+        );
+        let back: Session = serde_json::from_value(v).unwrap();
+        assert_eq!(back.resumed_from, resumed.resumed_from);
+    }
+
+    #[test]
+    fn from_log_carries_resumed_from_from_the_spec() {
+        let mut origin = spec();
+        origin.resumed_from = Some(SessionId::new());
+        let s = from_log(&origin, &[]);
+        assert_eq!(s.resumed_from, origin.resumed_from);
     }
 
     #[test]
