@@ -200,12 +200,16 @@ fn resume_continues_the_projects_last_conversation() {
     let root = common::scratch("sess-resume");
     let src = root.join("src");
     common::init_repo(&src);
-    // A fake harness that ends on its own for a fresh session (mimicking a
-    // short finished conversation) but stays live when launched with
+    // A fake harness that mimics a short finished conversation for a fresh
+    // session (a brief delay before it exits, so the daemon's control
+    // client has time to connect before the exit — an instant exit races
+    // that connection and can leave the live `exited` event unobserved
+    // until the next rescan) but stays live when launched with
     // `--continue`, so the second resume attempt below finds a live one.
     let home = fake_home(
         &root,
-        "if [ \"$1\" = \"--continue\" ]; then exec cat; else exit 0; fi",
+        "if [ \"$1\" = \"--continue\" ]; then exec cat; \
+         else sleep 1; exit 0; fi",
     );
     let state_dir = root.join("state");
     let mut d = common::Daemon::start_with(
