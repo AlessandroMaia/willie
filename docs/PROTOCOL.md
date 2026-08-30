@@ -99,7 +99,7 @@ log_tail }`; `project_id` is absent for a job that belongs to no project
 ## `session.*`
 | Method | Params | Result |
 | --- | --- | --- |
-| `session.create` | `CreateParams { project_id, resume?, git_identity? { name, email } }` | `CreateResult { session }` — the session, already `running`, or an error if it could not start |
+| `session.create` | `CreateParams { project_id, git_identity? { name, email }, resume? }` | `CreateResult { session }` — the session, already `running`, or an error if it could not start |
 | `session.stop` | `{ id }` | `null` — asks the supervisor to stop; the outcome arrives as a `session_changed` event |
 | `session.list` | `{}` | `SessionList { sessions: [Session] }` |
 
