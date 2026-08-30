@@ -143,8 +143,8 @@ unchanged.
   `session_resize(id, rows, cols)`, `session_terminal_close(id)` — thin
   wrappers over the engine bridge, following the existing
   `daemon_command`/`with_engine` pattern. Output is delivered as a Tauri
-  event `session://output` carrying `{ id, chunk }` (bytes base64-encoded,
-  since Tauri events are JSON).
+  event `session://output` carrying `{ id, chunk }` (`chunk` a plain JSON
+  array of bytes, not base64-encoded).
 - Frontend: a terminal component built on `xterm.js` + the fit addon (new
   frontend dependencies `@xterm/xterm`, `@xterm/addon-fit`). On open it
   calls `session_terminal_open`, subscribes to `session://output` (filtered
