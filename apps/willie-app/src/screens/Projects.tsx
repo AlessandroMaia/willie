@@ -9,7 +9,7 @@ import {
 } from "../lib/engine";
 import { latestJobFor } from "../lib/jobs";
 import type { Candidate, Job, JobKind, Project, Snapshot } from "../lib/proto";
-import { liveCount } from "../lib/sessions";
+import { isLive, liveCount } from "../lib/sessions";
 import { applyEvent, needsResnapshot } from "../lib/state";
 
 function wslPathFor(slug: string): string {
@@ -392,6 +392,19 @@ export function Projects() {
     });
   }
 
+  /* Same shape as `openSession`: a `terminal_problem` on an otherwise
+   * successful resume is a live-session notice, not a row failure; a
+   * thrown `Problem` (`session_already_live`, `harness_cannot_resume`,
+   * …) falls through to `runRow`'s row-failure handling like any other
+   * action. */
+  function resumeSession(project: Project) {
+    setOpenNotice(project.id, null);
+    runRow(project.id, project.id, async () => {
+      const result = await sessionsApi.resume(project.id);
+      setOpenNotice(project.id, result.terminal_problem ?? null);
+    });
+  }
+
   function syncToWindows(project: Project) {
     runRow(project.id, project.id, () => projectsApi.syncToWindows(project.id));
   }
@@ -647,6 +660,13 @@ export function Projects() {
             const rowProblem = rowProblems.get(project.id) ?? null;
             const openNotice = openNotices.get(project.id) ?? null;
             const live = liveCount(snap.sessions, project.id);
+            /* Resume needs a finished conversation to resume and no live
+             * one already occupying the project — both read straight off
+             * the snapshot, never a locally-tracked flag. */
+            const hasFinishedSession = snap.sessions.some(
+              (s) => s.project_id === project.id && !isLive(s),
+            );
+            const canResume = live === 0 && hasFinishedSession;
             return (
               <div key={project.id} className="project-row">
                 <div className="project-row-main">
@@ -741,6 +761,18 @@ export function Projects() {
                     onClick={() => openSession(project)}
                   >
                     Open session
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      isBusy ||
+                      project.state.state !== "ready" ||
+                      jobRunning ||
+                      !canResume
+                    }
+                    onClick={() => resumeSession(project)}
+                  >
+                    Resume
                   </button>
                   <button
                     type="button"

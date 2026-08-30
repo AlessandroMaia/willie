@@ -59,6 +59,7 @@ export interface Session {
   finished_at?: string | null;
   pid?: number | null;
   clients: number;
+  resumed_from?: string | null;
 }
 export interface Snapshot {
   seq: number;

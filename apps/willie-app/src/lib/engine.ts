@@ -91,6 +91,8 @@ export interface SessionOpened {
 export const sessions = {
   open: (projectId: string) =>
     invoke<SessionOpened>("session_open", { projectId }),
+  resume: (projectId: string) =>
+    invoke<SessionOpened>("session_resume", { projectId }),
   attach: (id: string, title: string) =>
     invoke("session_attach", { id, title }),
   stop: (id: string) => invoke("session_stop", { id }),
