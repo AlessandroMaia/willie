@@ -115,9 +115,10 @@ fn engine_doctor(
     outcome.0
 }
 
-/// A read-only engine call that never touches the daemon (host-side
-/// filesystem work only): lock, call, flatten the `EngineError`. No
-/// status to emit, no event pump to establish.
+/// An engine call that never goes through the daemon: lock, call,
+/// flatten the `EngineError`. No daemon RPC means no status to
+/// re-emit and no event pump to attach — true of both read-only
+/// filesystem queries and the host-side embedded-terminal spawn.
 fn query<T>(
     state: &State<'_, EngineState>,
     op: impl FnOnce(&mut Engine) -> Result<T, EngineError>,

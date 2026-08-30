@@ -139,20 +139,22 @@ unchanged.
 
 ### App — `apps/willie-app/src-tauri/src/lib.rs`, `apps/willie-app/src/`
 
-- Tauri commands: `session_terminal_open(id)`, `session_input(id, data)`,
-  `session_resize(id, rows, cols)`, `session_terminal_close(id)` — thin
-  wrappers over the engine bridge, following the existing
+- Tauri commands: `session_terminal_open(id)`,
+  `session_terminal_input(id, data)`,
+  `session_terminal_resize(id, rows, cols)`, `session_terminal_close(id)` —
+  thin wrappers over the engine bridge, following the existing
   `daemon_command`/`with_engine` pattern. Output is delivered as a Tauri
   event `session://output` carrying `{ id, chunk }` (`chunk` a plain JSON
   array of bytes, not base64-encoded).
 - Frontend: a terminal component built on `xterm.js` + the fit addon (new
   frontend dependencies `@xterm/xterm`, `@xterm/addon-fit`). On open it
   calls `session_terminal_open`, subscribes to `session://output` (filtered
-  by id) and writes chunks to the terminal; `xterm.onData` → `session_input`;
-  the fit addon plus a `ResizeObserver` → `session_resize`; unmount/switch →
-  `session_terminal_close`. A live-session row gains a functional "Open in
-  app" action that reveals this terminal for that session. Placement and
-  styling are intentionally minimal — the UI/UX pass owns them.
+  by id) and writes chunks to the terminal; `xterm.onData` →
+  `session_terminal_input`; the fit addon plus a `ResizeObserver` →
+  `session_terminal_resize`; unmount/switch → `session_terminal_close`. A
+  live-session row gains a functional "Open in app" action that reveals
+  this terminal for that session. Placement and styling are intentionally
+  minimal — the UI/UX pass owns them.
 
 ### Errors and edge cases
 
