@@ -288,6 +288,18 @@ fn session_open(
 }
 
 #[tauri::command(async)]
+fn session_resume(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    project_id: ProjectId,
+) -> Result<SessionOpened, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.session_resume(project_id)
+    })
+}
+
+#[tauri::command(async)]
 fn session_attach(
     app: AppHandle,
     state: State<'_, EngineState>,
@@ -427,6 +439,7 @@ pub fn run() {
             discover_projects,
             open_in_explorer,
             session_open,
+            session_resume,
             session_attach,
             session_stop,
             tool_install,
