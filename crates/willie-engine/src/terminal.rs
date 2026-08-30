@@ -89,24 +89,29 @@ pub fn open_tab(id: SessionId, title: &str) -> Result<(), TerminalError> {
     }
 }
 
-/// `wt.exe` on `PATH` or under `%LOCALAPPDATA%\Microsoft\WindowsApps`.
+/// `wt.exe` under `%LOCALAPPDATA%\Microsoft\WindowsApps`, else on `PATH`.
+/// Detected by file presence only — never executed — so probing for
+/// Windows Terminal cannot open a window. The path is a Windows App
+/// Execution Alias (a reparse point), so presence is tested with
+/// `symlink_metadata`, which does not try to resolve it.
 #[cfg(windows)]
 fn locate_wt() -> Option<std::path::PathBuf> {
-    use std::os::windows::process::CommandExt;
-    if std::process::Command::new("wt.exe")
-        .arg("--version")
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .is_ok()
-    {
-        return Some(std::path::PathBuf::from("wt.exe"));
+    fn present(p: &std::path::Path) -> bool {
+        std::fs::symlink_metadata(p).is_ok()
     }
-    let local = std::env::var_os("LOCALAPPDATA")?;
-    let p = std::path::Path::new(&local)
-        .join("Microsoft")
-        .join("WindowsApps")
-        .join("wt.exe");
-    p.is_file().then_some(p)
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let p = std::path::Path::new(&local)
+            .join("Microsoft")
+            .join("WindowsApps")
+            .join("wt.exe");
+        if present(&p) {
+            return Some(p);
+        }
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join("wt.exe"))
+        .find(|p| present(p))
 }
 
 #[cfg(test)]
