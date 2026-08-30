@@ -46,7 +46,7 @@ export type SessionState =
   | { state: "creating" }
   | { state: "running" }
   | { state: "stopping" }
-  | { state: "exited"; code?: number | null; signal?: number | null }
+  | { state: "exited"; code: number | null; signal: number | null }
   | { state: "failed"; code: string; message: string; remediation: string };
 export interface Session {
   id: string;

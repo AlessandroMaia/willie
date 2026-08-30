@@ -245,20 +245,24 @@ export function Dashboard() {
                       </button>
                     </div>
                   )}
-                  {isHarnessCheck && installJob?.state.state === "running" && (
-                    <div className="muted">{lastLogLine(installJob)}</div>
-                  )}
-                  {isHarnessCheck && installJob?.state.state === "failed" && (
-                    <div>
-                      <code>{installJob.state.code}</code> —{" "}
-                      {installJob.state.message}
-                      {installJob.state.remediation && (
-                        <div className="muted">
-                          → {installJob.state.remediation}
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  {isHarnessCheck &&
+                    c.status === "fail" &&
+                    installJob?.state.state === "running" && (
+                      <div className="muted">{lastLogLine(installJob)}</div>
+                    )}
+                  {isHarnessCheck &&
+                    c.status === "fail" &&
+                    installJob?.state.state === "failed" && (
+                      <div>
+                        <code>{installJob.state.code}</code> —{" "}
+                        {installJob.state.message}
+                        {installJob.state.remediation && (
+                          <div className="muted">
+                            → {installJob.state.remediation}
+                          </div>
+                        )}
+                      </div>
+                    )}
                 </li>
               );
             })}

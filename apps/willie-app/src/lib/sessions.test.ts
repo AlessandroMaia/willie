@@ -29,7 +29,7 @@ describe("session helpers", () => {
   it("counts only live sessions for a project", () => {
     const list = [
       s("a", "p1", { state: "running" }, "3"),
-      s("b", "p1", { state: "exited", code: 0 }, "2"),
+      s("b", "p1", { state: "exited", code: 0, signal: null }, "2"),
       s("c", "p1", { state: "creating" }, "1"),
       s("d", "p2", { state: "running" }, "1"),
     ];
@@ -50,7 +50,7 @@ describe("session helpers", () => {
   it("lists live sessions newest first, excluding terminal ones", () => {
     const list = [
       s("old-live", "p", { state: "running" }, "2"),
-      s("dead", "p", { state: "exited", code: 0 }, "9"),
+      s("dead", "p", { state: "exited", code: 0, signal: null }, "9"),
       s("new-live", "p", { state: "running" }, "5"),
     ];
     expect(liveSessions(list).map((x) => x.id)).toEqual([
@@ -62,7 +62,7 @@ describe("session helpers", () => {
   it("returns the most recent finished sessions, capped, newest first", () => {
     const list = [
       s("live", "p", { state: "running" }, "50"),
-      s("f-old", "p", { state: "exited", code: 0 }, "1", "10"),
+      s("f-old", "p", { state: "exited", code: 0, signal: null }, "1", "10"),
       s(
         "f-mid",
         "p",
@@ -70,7 +70,7 @@ describe("session helpers", () => {
         "1",
         "20",
       ),
-      s("f-new", "p", { state: "exited", code: 1 }, "1", "30"),
+      s("f-new", "p", { state: "exited", code: 1, signal: null }, "1", "30"),
     ];
     expect(recentTerminal(list, 2).map((x) => x.id)).toEqual([
       "f-new",
@@ -96,7 +96,9 @@ describe("session helpers", () => {
         remediation: "r",
       }).tone,
     ).toBe("error");
-    expect(stateChip({ state: "exited", code: 0 }).label).toContain("exited");
+    expect(
+      stateChip({ state: "exited", code: 0, signal: null }).label,
+    ).toContain("exited");
   });
 
   it("marks a signal-terminated exit as an error, not a clean exit", () => {

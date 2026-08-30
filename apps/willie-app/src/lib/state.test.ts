@@ -124,9 +124,17 @@ describe("daemon store", () => {
     const updated = applyEvent(first, {
       seq: 2,
       kind: "session_changed",
-      session: sess("sess_1", "proj_1", { state: "exited", code: 0 }),
+      session: sess("sess_1", "proj_1", {
+        state: "exited",
+        code: 0,
+        signal: null,
+      }),
     });
     expect(updated.sessions).toHaveLength(1);
-    expect(updated.sessions[0]?.state).toEqual({ state: "exited", code: 0 });
+    expect(updated.sessions[0]?.state).toEqual({
+      state: "exited",
+      code: 0,
+      signal: null,
+    });
   });
 });
