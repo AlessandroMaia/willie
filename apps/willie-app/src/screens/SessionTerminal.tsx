@@ -43,6 +43,7 @@ export function SessionTerminal({ id, title }: SessionTerminalProps) {
     observer.observe(container);
 
     onSessionOutput((out) => {
+      if (cancelled) return;
       if (out.id === id) term.write(new Uint8Array(out.chunk));
     }).then((fn) => {
       if (cancelled) fn();
@@ -63,7 +64,13 @@ export function SessionTerminal({ id, title }: SessionTerminalProps) {
         reportResize();
       })
       .catch((error: unknown) => {
-        if (!cancelled) setProblem(isProblem(error) ? error : null);
+        if (!cancelled) {
+          setProblem(
+            isProblem(error)
+              ? error
+              : { code: "unknown", message: String(error), remediation: "" },
+          );
+        }
       });
 
     return () => {
