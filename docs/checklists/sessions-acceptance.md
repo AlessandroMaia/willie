@@ -56,6 +56,8 @@ workspace folder name; `<win>` its Windows checkout path.
 | 18 | Open a second live session (**Open session** again, on `<proj>` or another `ready` project), then click **Open in app** on its row | the first session's embedded terminal detaches (it keeps running, still listed under **Live**); the second session's terminal attaches, its screen restored from the ring replay |
 | 19 | On the embedded terminal panel, click **Close** | the panel goes away; the session stays listed under **Live**, unaffected |
 | 20 | Regression: with `wt.exe` present (not hidden), click **Open session** (not **Open in app**) on a `ready` project | exactly one Windows Terminal tab opens; no stray `wt.exe` window appears at any point |
+| 21 | With `<proj>` having a finished session that held some conversation (stop the session from row 9 first if needed) and no live session, click **Resume** on its Projects row | a new Windows Terminal tab opens, continuing the conversation — Claude Code recalls the prior context — instead of starting fresh; the Projects row's live badge goes to "1 live" |
+| 22 | With that resumed session still live, observe `<proj>`'s **Resume** button | it is disabled — a project with a live session cannot start a concurrent resume from the UI — and re-enables once the session ends. (The daemon also refuses a concurrent resume with `session_already_live` as a fail-closed backstop; not reachable by clicking here since the button is disabled, so this is covered instead by the daemon's own integration test, not this walk.) |
 
 ## Results
 

@@ -176,6 +176,7 @@ mod tests {
             finished_at: None,
             pid: Some(3),
             clients: 0,
+            resumed_from: None,
         };
         let ev = s.upsert_session(sess.clone());
         assert_eq!(ev.seq, 1);

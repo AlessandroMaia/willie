@@ -253,12 +253,14 @@ impl Engine {
         &mut self,
         project_id: ProjectId,
         git_identity: Option<GitIdentity>,
+        resume: bool,
     ) -> Result<CreateResult, EngineError> {
         self.daemon_call(
             session::CREATE,
             CreateParams {
                 project_id,
                 git_identity,
+                resume,
             },
         )
     }
@@ -270,8 +272,29 @@ impl Engine {
         &mut self,
         project_id: ProjectId,
     ) -> Result<SessionOpened, EngineError> {
+        self.session_open_impl(project_id, false)
+    }
+
+    /// Continue a project's last conversation: create the session with
+    /// `resume: true` and open its terminal, same shape as
+    /// [`Engine::session_open`].
+    pub fn session_resume(
+        &mut self,
+        project_id: ProjectId,
+    ) -> Result<SessionOpened, EngineError> {
+        self.session_open_impl(project_id, true)
+    }
+
+    /// Shared body for [`Engine::session_open`] and
+    /// [`Engine::session_resume`]: they differ only in the `resume` flag
+    /// passed to the daemon.
+    fn session_open_impl(
+        &mut self,
+        project_id: ProjectId,
+        resume: bool,
+    ) -> Result<SessionOpened, EngineError> {
         let identity = crate::identity::windows_git_identity();
-        let created = self.session_create(project_id, identity)?;
+        let created = self.session_create(project_id, identity, resume)?;
         let title = self
             .project_title(project_id)
             .unwrap_or_else(|| created.session.id.to_string());

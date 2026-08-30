@@ -16,6 +16,15 @@ pub enum Resume {
     Continue,
 }
 
+/// How to start the harness for one session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaunchMode {
+    /// A brand-new conversation.
+    Fresh,
+    /// Continue the most recent conversation in the workspace.
+    Continue,
+}
+
 /// What a harness can do. Data, not behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HarnessCapabilities {
@@ -118,7 +127,13 @@ pub trait Harness: std::fmt::Debug {
 
     /// The launch for one session. The environment is an allowlist even
     /// without a sandbox, so the sandbox feature only wraps the child.
-    fn launch(&self, binary: &Path, workspace: &Path, home: &Path) -> Launch {
+    fn launch(
+        &self,
+        binary: &Path,
+        workspace: &Path,
+        home: &Path,
+        mode: LaunchMode,
+    ) -> Launch {
         let _ = workspace;
         let mut env = BTreeMap::new();
         let path = session_path(home)
@@ -143,10 +158,11 @@ pub trait Harness: std::fmt::Debug {
             env.insert("TZ".to_owned(), tz);
         }
         env.insert("DISABLE_AUTOUPDATER".to_owned(), "1".to_owned());
-        Launch {
-            argv: vec![binary.to_string_lossy().into_owned()],
-            env,
+        let mut argv = vec![binary.to_string_lossy().into_owned()];
+        if mode == LaunchMode::Continue {
+            argv.push("--continue".to_owned());
         }
+        Launch { argv, env }
     }
 
     /// The official installer, as one `sh -c` command line. Only ever run
@@ -244,6 +260,20 @@ mod tests {
     }
 
     #[test]
+    fn claude_continue_mode_appends_the_continue_flag() {
+        let bin = std::path::Path::new("/opt/willie/bin/claude");
+        let ws = std::path::Path::new("/home/willie/projects/x");
+        let home = std::path::Path::new("/home/willie");
+        let fresh = ClaudeCode.launch(bin, ws, home, LaunchMode::Fresh);
+        assert_eq!(fresh.argv, vec![bin.to_string_lossy().into_owned()]);
+        let cont = ClaudeCode.launch(bin, ws, home, LaunchMode::Continue);
+        assert_eq!(
+            cont.argv,
+            vec![bin.to_string_lossy().into_owned(), "--continue".to_owned()]
+        );
+    }
+
+    #[test]
     fn launch_uses_the_binary_as_argv0_and_only_the_allowlisted_env() {
         // TZ is read from this process; make the test deterministic.
         // SAFETY: tests run single-threaded here; nothing reads the env
@@ -253,6 +283,7 @@ mod tests {
             Path::new("/home/willie/.local/bin/claude"),
             Path::new("/home/willie/projects/x"),
             Path::new("/home/willie"),
+            LaunchMode::Fresh,
         );
         assert_eq!(l.argv, vec!["/home/willie/.local/bin/claude".to_owned()]);
         let keys: Vec<&str> = l.env.keys().map(String::as_str).collect();

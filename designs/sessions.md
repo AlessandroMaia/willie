@@ -421,6 +421,12 @@ row with the exact command or observation.
 
 - The sandbox wraps the same `argv`/`env`/cwd — `willie-sess` gains the
   wrapper, nothing upstream changes.
-- Resume, once the harness's JSONL files are read.
+- ~~Resume, once the harness's JSONL files are read.~~ **Delivered
+  2026-08-30** as continue-latest (`designs/resume.md`): `session.create
+  { resume: true }` launches the harness with `--continue` and links the
+  new session to the project's most recent finished one via
+  `resumed_from`. Resuming a specific older session by id
+  (`Resume::ById`) — the JSONL-discovery idea this bullet originally
+  described — remains a follow-up.
 - An embedded terminal is one more `terminal` client of the socket.
 - SQLite for session history and pruning.

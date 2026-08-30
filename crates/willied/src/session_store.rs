@@ -91,6 +91,7 @@ mod tests {
             env: BTreeMap::new(),
             created_at: "1".into(),
             willie_version: "0.1.0".into(),
+            resumed_from: None,
         }
     }
 

@@ -96,6 +96,7 @@ mod tests {
             finished_at: None,
             pid: Some(4),
             clients: 1,
+            resumed_from: None,
         }
     }
 
