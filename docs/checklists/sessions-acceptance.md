@@ -53,6 +53,24 @@ workspace folder name; `<win>` its Windows checkout path.
 
 ## Results
 
+Walked 2026-08-29 by the user, through the app UI, against real Claude Code
+2.1.251, and approved. Concrete evidence was captured for rows 1–5 (below);
+rows 6–14 were walked and approved by the user and are recorded on that
+attestation (no separate per-row transcript was kept for them).
+
 | Date | Row | Result | Notes |
 | ---- | --- | ------ | ----- |
-|      |     |        |       |
+| 2026-08-29 | 1 | pass | Dashboard `Claude Code` check showed `[fail]` "not installed" with a remediation and an **Install** button. |
+| 2026-08-29 | 2 | pass | **Install** clicked; the install job ran. |
+| 2026-08-29 | 3 | pass | The check turned `[ok]` **Claude Code 2.1.251**; the Install button was gone. |
+| 2026-08-29 | 4 | pass | **Open session** on `projteste` created a live session (a tab attached — see row 5's "1 client attached"); the Projects row reflected the live session. |
+| 2026-08-29 | 5 | pass | **Sessions → Live** listed `projteste`, state `running`, harness `claude-code`, "1 client attached", started ~3 min ago, with **Attach**/**Stop**; **Recent** was empty ("No recent sessions."). |
+| 2026-08-29 | 6 | pass | Walked and approved by the user (typing reaches the agent). |
+| 2026-08-29 | 7 | pass | The human-eyes TUI-reflow-on-resize row (Plan A left it open) — walked and approved by the user. |
+| 2026-08-29 | 8 | pass | Attach opens a second tab onto the same session — walked and approved by the user. |
+| 2026-08-29 | 9 | pass | Stop ends the session; row moves Live → Recent as `exited 0`; badge clears — walked and approved by the user. |
+| 2026-08-29 | 10 | pass | `wt.exe`-hidden fallback: session still created, `terminal_launch_failed` notice with the paste-able attach line — walked and approved by the user. |
+| 2026-08-29 | 11 | pass | The pasted attach line attaches the session — walked and approved by the user. |
+| 2026-08-29 | 12 | pass | `project_busy` refusal inline, no session created — walked and approved by the user. |
+| 2026-08-29 | 13 | pass | `harness_not_installed` refusal inline ("click Install on the Dashboard") — walked and approved by the user. |
+| 2026-08-29 | 14 | pass | Close/reopen restores the live session via re-adoption; no console window appeared — walked and approved by the user. |
