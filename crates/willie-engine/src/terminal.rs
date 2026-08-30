@@ -8,8 +8,18 @@ use willie_core::id::SessionId;
 
 use crate::wsl;
 
-/// The Linux path of the CLI inside the distribution.
-const WILLIE_BIN: &str = "/opt/willie/bin/willie";
+/// The Linux path of the CLI inside the distribution. Shared with
+/// `engine::attach_hint` so the paste-able remediation names the same
+/// binary the launched tab runs.
+pub(crate) const WILLIE_BIN: &str = "/opt/willie/bin/willie";
+
+/// `CreateProcess` creation flags. The `wt.exe` launcher needs no window
+/// of its own — the tab it opens is Windows Terminal's own window; the
+/// console fallback gets a fresh console.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+#[cfg(windows)]
+const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
 
 /// Why a session could not be opened in any terminal.
 #[derive(Debug, thiserror::Error)]
@@ -55,10 +65,6 @@ pub fn open_tab(id: SessionId, title: &str) -> Result<(), TerminalError> {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
-        // The wt.exe launcher itself needs no window; the tab it opens is
-        // Windows Terminal's own window.
         if let Some(wt) = locate_wt()
             && std::process::Command::new(wt)
                 .args(wt_argv(&id, title))
@@ -89,7 +95,7 @@ fn locate_wt() -> Option<std::path::PathBuf> {
     use std::os::windows::process::CommandExt;
     if std::process::Command::new("wt.exe")
         .arg("--version")
-        .creation_flags(0x0800_0000)
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .is_ok()
     {
@@ -110,7 +116,8 @@ mod tests {
     #[test]
     fn the_attach_argv_targets_the_distro_user_and_the_willie_binary() {
         let a = attach_argv("sess_01J", "my project");
-        // `wsl.exe -d <distro> --user willie --exec /opt/willie/bin/willie attach sess_01J`
+        // wsl.exe -d <distro> --user willie --exec
+        //   /opt/willie/bin/willie attach sess_01J
         assert_eq!(a[0], "-d");
         assert_eq!(a[1], wsl::DISTRO_NAME);
         assert!(a.windows(2).any(|w| w == ["--user", "willie"]));

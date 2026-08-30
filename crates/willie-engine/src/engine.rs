@@ -389,7 +389,7 @@ fn attach_hint(id: SessionId) -> String {
     format!(
         "wsl -d {} --user willie -- {} attach {id}",
         crate::wsl::DISTRO_NAME,
-        "/opt/willie/bin/willie",
+        crate::terminal::WILLIE_BIN,
     )
 }
 
