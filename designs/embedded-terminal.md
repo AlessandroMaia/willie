@@ -1,5 +1,11 @@
 # Embedded terminal — a session inside the Willie window
 
+**Delivered 2026-08-30.** Shipped as designed below: the `hostterm`
+dialect, `willie attach --host`, the engine bridge (`embed.rs`), the
+`wt.exe` detection fix, the Tauri commands/event and the `xterm.js`
+component with an "Open in app" row action. See "Open questions" for how
+the two deferred calls landed.
+
 ## Problem
 
 Opening a session today launches it in a **separate Windows Terminal tab**
@@ -192,10 +198,13 @@ independent of the embedded path.
 
 ## Open questions
 
-- **Byte channel for output.** Start with Tauri events (base64 chunks); if
-  a redraw-heavy TUI shows lag, move output to a local `127.0.0.1` socket
-  the webview reads directly. Favoured: start with events, measure, upgrade
-  only if needed.
-- **Where "Open in app" lives.** A functional action on the live-session
-  row for now; the UI/UX pass decides the final placement (a panel, a
-  dedicated view, or concurrent panes). Favoured: minimal row action now.
+- **Byte channel for output.** Resolved: Tauri events. `session://output`
+  carries `{ id, chunk }`, with `chunk` a plain JSON array of bytes (not
+  base64 — `serde` serialises `Vec<u8>` that way, and the frontend
+  consumes it as `number[]` directly with no decode step). No lag was
+  observed; the local-socket alternative is not needed for this slice.
+- **Where "Open in app" lives.** Resolved: a functional "Open in app"
+  button alongside *Attach*/*Stop* on the live-session row, revealing the
+  `SessionTerminal` component for that session. Placement and styling stay
+  minimal, as planned; a later UI/UX pass owns the final layout (a panel,
+  a dedicated view, or concurrent panes).

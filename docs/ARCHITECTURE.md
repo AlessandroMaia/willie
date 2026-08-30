@@ -308,8 +308,23 @@ confirmation) and the twenty most recently finished; a project's row
 gets an **Open session** button (enabled once the project is `ready`)
 and a badge with its live-session count; the Dashboard's harness doctor
 check gets an **Install** button that shows the install job's last log
-line while it runs. A session's terminal is always a Windows Terminal
-tab Willie composes and hands off — never a pty Willie renders itself.
+line while it runs. A session's terminal is a Windows Terminal tab
+Willie composes and hands off by default, or — an "Open in app" action
+on the Sessions row — rendered inside the Willie window itself: the
+engine spawns `willie attach <id> --host` and bridges its stdio to an
+`xterm.js` terminal, one active at a time (opening another session in
+the app first detaches the current one; the session left behind keeps
+running). The bridge writes encoded `input`/`resize` frames to the
+child's stdin (a small `willie-proto::hostterm` dialect) and reads raw
+session output from its stdout; `attach --host` re-frames the input for
+the wire protocol the same way the tty-mode client does. This embedded
+path reuses the same session socket as the Windows-Terminal-tab path —
+consistent with decision 0014 — and coexists with it rather than
+replacing it. Shipping it also fixed `terminal::locate_wt`, which used
+to *execute* `wt.exe --version` to detect Windows Terminal and flashed a
+stray window on every open; it now resolves `wt.exe` by file presence
+only, on `PATH` and under `%LOCALAPPDATA%\Microsoft\WindowsApps`, and
+never runs it.
 
 ### 3.3 Sandbox
 
