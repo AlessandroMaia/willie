@@ -9,6 +9,7 @@
 //! new fields a default, so an older client can talk to a newer daemon.
 
 pub mod daemon;
+pub mod hostterm;
 pub mod job;
 pub mod project;
 pub mod rpc;
