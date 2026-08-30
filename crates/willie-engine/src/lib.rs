@@ -12,6 +12,7 @@ pub mod config;
 pub mod daemon;
 pub mod discover;
 pub mod distro;
+pub mod embed;
 pub mod engine;
 pub mod error;
 pub mod identity;
