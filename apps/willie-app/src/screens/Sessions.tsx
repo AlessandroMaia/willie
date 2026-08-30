@@ -15,6 +15,7 @@ import {
   type Tone,
 } from "../lib/sessions";
 import { applyEvent, needsResnapshot } from "../lib/state";
+import { SessionTerminal } from "./SessionTerminal";
 
 function asProblem(error: unknown): Problem {
   return isProblem(error)
@@ -91,6 +92,7 @@ interface LiveRowProps {
   problem: Problem | null;
   onAttach: () => void;
   onStop: () => void;
+  onOpenInApp: () => void;
 }
 
 function LiveRow({
@@ -100,6 +102,7 @@ function LiveRow({
   problem,
   onAttach,
   onStop,
+  onOpenInApp,
 }: LiveRowProps) {
   return (
     <div className="session-row">
@@ -130,6 +133,9 @@ function LiveRow({
         </button>
         <button type="button" disabled={busy} onClick={onStop}>
           Stop
+        </button>
+        <button type="button" disabled={busy} onClick={onOpenInApp}>
+          Open in app
         </button>
         {busy && <span className="muted">working…</span>}
       </div>
@@ -167,6 +173,7 @@ export function Sessions() {
   const [rowProblems, setRowProblems] = useState<Map<string, Problem>>(
     new Map(),
   );
+  const [openId, setOpenId] = useState<string | null>(null);
 
   const loadSnapshot = useCallback(() => {
     projectsApi
@@ -243,6 +250,24 @@ export function Sessions() {
     ? recentTerminal(snap.sessions, TERMINAL_HISTORY_LIMIT)
     : [];
 
+  /* Same join the rows use, resolved by id for the open terminal panel's
+   * heading. Falls back to the id itself, matching `projectNameFor`'s own
+   * fallback shape for a session whose project is gone. */
+  function titleFor(sessionId: string): string {
+    const session = snap?.sessions.find((s) => s.id === sessionId);
+    return session && snap
+      ? projectNameFor(snap, session.project_id)
+      : sessionId;
+  }
+
+  /* The embedded panel only makes sense for a session still in the live
+   * set; if it exited or was stopped out from under the open panel,
+   * clear `openId` on this render rather than waiting for a follow-up
+   * effect — the panel disappears in the same frame the row does. */
+  if (openId && !live.some((s) => s.id === openId)) {
+    setOpenId(null);
+  }
+
   return (
     <main className="sessions">
       <header>
@@ -280,6 +305,7 @@ export function Sessions() {
                     attach(session, projectNameFor(snap, session.project_id))
                   }
                   onStop={() => stop(session)}
+                  onOpenInApp={() => setOpenId(session.id)}
                 />
               ))
             )}
@@ -299,6 +325,22 @@ export function Sessions() {
               ))
             )}
           </section>
+
+          {openId && (
+            <section className="session-terminal">
+              <div className="session-terminal-head">
+                <strong>{titleFor(openId)}</strong>
+                <button type="button" onClick={() => setOpenId(null)}>
+                  Close
+                </button>
+              </div>
+              <SessionTerminal
+                key={openId}
+                id={openId}
+                title={titleFor(openId)}
+              />
+            </section>
+          )}
         </>
       )}
     </main>

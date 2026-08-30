@@ -275,6 +275,31 @@ body {
   font-size: 0.9rem;
 }
 
+.session-terminal {
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 0.4rem;
+  padding: 0.75rem 1rem;
+  display: grid;
+  gap: 0.5rem;
+}
+.session-terminal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.session-terminal-body {
+  display: grid;
+  gap: 0.5rem;
+}
+.terminal-surface {
+  height: 22rem;
+  background: #000;
+  border-radius: 0.3rem;
+  overflow: hidden;
+  padding: 0.4rem;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
