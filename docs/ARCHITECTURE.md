@@ -285,10 +285,19 @@ event log alone, marking a still-live-looking session `failed
 index lives in memory, rebuilt this way on every start; SQLite indexing
 is still deferred.
 
-**Resume.** A new session whose `args` come from
-`Harness::resume_args(harness_session_id)`; the harness's own id is found
-through the capability matrix (`projects/<slug>/*.jsonl`, matched by cwd
-and time).
+**Resume.** `session.create { resume: true }` builds the harness launch
+as `LaunchMode::Continue` — the same binary, `--continue` appended, still
+in the project's workspace — instead of `LaunchMode::Fresh`; the new
+session records which finished session it continues in `resumed_from`.
+It reuses this same create path end to end, including the open/terminal
+flow above, so a resumed session attaches, stops and streams to the
+embedded terminal like any other. Fail-closed: `harness_cannot_resume`
+when the harness's `Resume` capability is `None`, `session_already_live`
+when the project already has a live session (continuing elsewhere would
+double-drive the same transcript). This is continue-latest and
+project-scoped — it always targets the project's most recently finished
+session; resuming an arbitrary older session by id (`Resume::ById`) is a
+documented follow-up.
 
 **App closed.** Daemon exits; supervisors and terminal tabs continue; on
 reopen the restart flow restores supervision.
@@ -305,8 +314,10 @@ talks to the daemon over its own RPC pipe. The **Sessions** screen
 lists running
 sessions (state, harness, attached clients, *Attach*, *Stop* with no
 confirmation) and the twenty most recently finished; a project's row
-gets an **Open session** button (enabled once the project is `ready`)
-and a badge with its live-session count; the Dashboard's harness doctor
+gets an **Open session** button (enabled once the project is `ready`), a
+**Resume** button (enabled once the project is `ready`, has a finished
+session and no live session) that continues its last conversation, and a
+badge with its live-session count; the Dashboard's harness doctor
 check gets an **Install** button that shows the install job's last log
 line while it runs. A session's terminal is a Windows Terminal tab
 Willie composes and hands off by default, or — an "Open in app" action

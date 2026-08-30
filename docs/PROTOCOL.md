@@ -99,19 +99,30 @@ log_tail }`; `project_id` is absent for a job that belongs to no project
 ## `session.*`
 | Method | Params | Result |
 | --- | --- | --- |
-| `session.create` | `CreateParams { project_id, git_identity? { name, email } }` | `CreateResult { session }` — the session, already `running`, or an error if it could not start |
+| `session.create` | `CreateParams { project_id, resume?, git_identity? { name, email } }` | `CreateResult { session }` — the session, already `running`, or an error if it could not start |
 | `session.stop` | `{ id }` | `null` — asks the supervisor to stop; the outcome arrives as a `session_changed` event |
 | `session.list` | `{}` | `SessionList { sessions: [Session] }` |
 
 A `Session` is `{ id, project_id, harness, workspace, state, created_at,
-started_at?, finished_at?, pid?, clients }`; `state` is `creating`,
-`running`, `stopping`, `exited { code?, signal? }` or `failed { code,
-message, remediation }`. Creating a session is synchronous up to the
-supervisor's readiness: the reply already carries a `running` session or
-the coded failure. There is no `attach_command` in the reply — the engine
-composes `wsl.exe … willie attach <id>` itself. An unknown `project_id`
-fails with the existing `project_not_found` code (see Project problem
-codes below), not a new one.
+started_at?, finished_at?, pid?, clients, resumed_from? }`; `state` is
+`creating`, `running`, `stopping`, `exited { code?, signal? }` or `failed
+{ code, message, remediation }`. Creating a session is synchronous up to
+the supervisor's readiness: the reply already carries a `running` session
+or the coded failure. There is no `attach_command` in the reply — the
+engine composes `wsl.exe … willie attach <id>` itself. An unknown
+`project_id` fails with the existing `project_not_found` code (see
+Project problem codes below), not a new one.
+
+`CreateParams.resume` (default `false`) asks the daemon to continue the
+project's most recent conversation instead of starting fresh: the harness
+launches with its continue flag in the workspace, and the new session's
+`resumed_from` names the finished session it continues. This is
+continue-latest and project-scoped — there is no way yet to resume a
+specific older session by id. See `harness_cannot_resume` and
+`session_already_live` in the session codes below for its fail-closed
+guards; the existing `project_not_found`/`project_not_ready`/
+`project_busy`/`harness_not_installed` guards apply to a resume request
+unchanged.
 
 ## `tool.*`
 | Method | Params | Result |
@@ -224,6 +235,8 @@ reads from (and the app will, once its Plan B session UI lands).
 | Code | When | Remediation |
 | --- | --- | --- |
 | `project_not_ready` | `session.create` on a project that is `preparing` or `failed` | wait for the project to be ready, or fix its failure first |
+| `harness_cannot_resume` | `session.create { resume: true }` and the harness's `Resume` capability is `None` | open a fresh session instead; this harness cannot continue a conversation |
+| `session_already_live` | `session.create { resume: true }` while the project already has a live session | use the running session, or stop it first, then resume |
 | `harness_not_installed` | no harness binary on the session `PATH` (or `--version` fails) | click Install on the Dashboard |
 | `git_identity_missing` | none of the identity sources — an existing `~/.gitconfig`, the Windows identity, the source checkout's — yields a name and e-mail | set `git config --global user.name` and `user.email` on Windows, then open the session again |
 | `supervisor_spawn_failed` | `willie-sess` could not be executed, or its launcher's readiness line could not be parsed | run `willie doctor`; reinstall the distribution if the supervisor binary is missing |
