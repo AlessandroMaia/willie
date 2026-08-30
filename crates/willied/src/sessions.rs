@@ -19,7 +19,7 @@ use willie_core::{
         from_log,
     },
 };
-use willie_harness::Harness;
+use willie_harness::{Harness, LaunchMode};
 use willie_linux::paths::{SUPERVISOR_BIN, session_socket, sessions_run_dir};
 
 use crate::{
@@ -117,6 +117,7 @@ impl SessionOps {
             &installed.path,
             std::path::Path::new(&project.workspace),
             &self.home,
+            LaunchMode::Fresh,
         );
         let spec = SessionSpec {
             id,
