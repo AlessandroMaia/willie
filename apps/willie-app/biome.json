@@ -112,7 +112,11 @@
                       "@/app/*",
                       "@/features/sessions/*",
                       "@/features/health/*",
-                      "**/app/**"
+                      "**/app/**",
+                      "../sessions/**",
+                      "../health/**",
+                      "**/features/sessions/**",
+                      "**/features/health/**"
                     ]
                   }
                 ]
@@ -136,7 +140,11 @@
                       "@/app/*",
                       "@/features/projects/*",
                       "@/features/health/*",
-                      "**/app/**"
+                      "**/app/**",
+                      "../projects/**",
+                      "../health/**",
+                      "**/features/projects/**",
+                      "**/features/health/**"
                     ]
                   }
                 ]
@@ -160,7 +168,11 @@
                       "@/app/*",
                       "@/features/projects/*",
                       "@/features/sessions/*",
-                      "**/app/**"
+                      "**/app/**",
+                      "../projects/**",
+                      "../sessions/**",
+                      "**/features/projects/**",
+                      "**/features/sessions/**"
                     ]
                   }
                 ]
