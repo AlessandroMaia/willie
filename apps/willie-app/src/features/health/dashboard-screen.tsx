@@ -1,17 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { EngineStatus, Problem } from "../lib/engine";
-import {
-  engine,
-  isProblem,
-  onDaemonEvent,
-  projects,
-  tools,
-} from "../lib/engine";
-import type { Part } from "../lib/health";
-import { lightFor, overallHealth } from "../lib/health";
-import { latestInstallJob } from "../lib/jobs";
-import type { Job, Snapshot } from "../lib/proto";
-import { applyEvent, needsResnapshot } from "../lib/state";
+import type { Part } from "@/lib/domain/health";
+import { lightFor, overallHealth } from "@/lib/domain/health";
+import { latestInstallJob } from "@/lib/domain/jobs";
+import { applyEvent, needsResnapshot } from "@/lib/domain/state";
+import type { EngineStatus, Problem } from "@/lib/ipc";
+import { engine, isProblem, onDaemonEvent, projects, tools } from "@/lib/ipc";
+import type { Job, Snapshot } from "@/lib/proto";
 
 const PARTS: { key: Part; label: string }[] = [
   { key: "wsl", label: "WSL" },
@@ -20,7 +14,7 @@ const PARTS: { key: Part; label: string }[] = [
   { key: "doctor", label: "Doctor" },
 ];
 
-export function Dashboard() {
+export function DashboardScreen() {
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [busy, setBusy] = useState<string | null>(null);

@@ -1,4 +1,4 @@
-import type { Event, Snapshot } from "./proto";
+import type { Event, Snapshot } from "@/lib/proto";
 
 /**
  * True when `ev` does not extend `current` directly — either an event

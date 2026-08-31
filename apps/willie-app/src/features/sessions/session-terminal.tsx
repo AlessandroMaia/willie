@@ -2,8 +2,8 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
-import type { Problem } from "../lib/engine";
-import { isProblem, onSessionOutput, sessionTerminal } from "../lib/engine";
+import type { Problem } from "@/lib/ipc";
+import { isProblem, onSessionOutput, sessionTerminal } from "@/lib/ipc";
 
 interface SessionTerminalProps {
   id: string;

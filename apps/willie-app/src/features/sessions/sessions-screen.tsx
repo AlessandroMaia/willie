@@ -1,21 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SessionTerminal } from "@/screens/session-terminal";
-import type { Problem } from "../lib/engine";
-import {
-  isProblem,
-  onDaemonEvent,
-  projects as projectsApi,
-  sessions as sessionsApi,
-} from "../lib/engine";
-import type { Session, SessionState, Snapshot } from "../lib/proto";
+import { SessionTerminal } from "@/features/sessions/session-terminal";
 import {
   liveSessions,
   recentTerminal,
   stateChip,
   TERMINAL_HISTORY_LIMIT,
   type Tone,
-} from "../lib/sessions";
-import { applyEvent, needsResnapshot } from "../lib/state";
+} from "@/lib/domain/sessions";
+import { applyEvent, needsResnapshot } from "@/lib/domain/state";
+import type { Problem } from "@/lib/ipc";
+import {
+  isProblem,
+  onDaemonEvent,
+  projects as projectsApi,
+  sessions as sessionsApi,
+} from "@/lib/ipc";
+import type { Session, SessionState, Snapshot } from "@/lib/proto";
 
 function asProblem(error: unknown): Problem {
   return isProblem(error)
@@ -165,7 +165,7 @@ function RecentRow({ session, projectName }: RecentRowProps) {
   );
 }
 
-export function Sessions() {
+export function SessionsScreen() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const snapRef = useRef<Snapshot | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);

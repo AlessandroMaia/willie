@@ -1,16 +1,16 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Problem } from "../lib/engine";
+import { latestJobFor } from "@/lib/domain/jobs";
+import { isLive, liveCount } from "@/lib/domain/sessions";
+import { applyEvent, needsResnapshot } from "@/lib/domain/state";
+import type { Problem } from "@/lib/ipc";
 import {
   isProblem,
   onDaemonEvent,
   projects as projectsApi,
   sessions as sessionsApi,
-} from "../lib/engine";
-import { latestJobFor } from "../lib/jobs";
-import type { Candidate, Job, JobKind, Project, Snapshot } from "../lib/proto";
-import { isLive, liveCount } from "../lib/sessions";
-import { applyEvent, needsResnapshot } from "../lib/state";
+} from "@/lib/ipc";
+import type { Candidate, Job, JobKind, Project, Snapshot } from "@/lib/proto";
 
 function wslPathFor(slug: string): string {
   return `\\\\wsl.localhost\\willie\\home\\willie\\projects\\${slug}`;
@@ -101,7 +101,7 @@ function StateChip({ project, job, onRetry }: StateChipProps) {
   return <span className="chip chip-ready">ready</span>;
 }
 
-export function Projects() {
+export function ProjectsScreen() {
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const snapRef = useRef<Snapshot | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);

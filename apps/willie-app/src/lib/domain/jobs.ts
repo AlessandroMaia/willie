@@ -1,4 +1,4 @@
-import type { Job } from "./proto";
+import type { Job } from "@/lib/proto";
 
 /* The UI never computes project or job truth: this is a read-only
  * projection over the job list the snapshot hands the store — the

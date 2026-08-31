@@ -1,4 +1,4 @@
-import type { Session, SessionState } from "./proto";
+import type { Session, SessionState } from "@/lib/proto";
 
 /**
  * A non-terminal session — the UI's "live vs history" split. This is the

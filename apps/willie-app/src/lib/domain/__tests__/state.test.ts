@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Project, Session, SessionState, Snapshot } from "./proto";
-import { applyEvent, needsResnapshot } from "./state";
+import { applyEvent, needsResnapshot } from "@/lib/domain/state";
+import type { Project, Session, SessionState, Snapshot } from "@/lib/proto";
 
 const proj = (id: string, name: string): Project => ({
   id,
