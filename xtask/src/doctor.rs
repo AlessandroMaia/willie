@@ -127,25 +127,96 @@ const CHECKS: &[Check] = &[
     },
 ];
 
-pub fn run(_root: &Path) -> TaskResult {
-    let mut missing_required = Vec::new();
+/// A prerequisite that is a file in the working tree rather than a
+/// program on PATH. Absence is always a failure: both entries below
+/// stop `just check` from completing, so reporting them as optional
+/// would only move the confusion later.
+struct FileCheck {
+    name: &'static str,
+    /// Relative to the workspace root.
+    path: &'static str,
+    hint: &'static str,
+}
+
+const FILES: &[FileCheck] = &[
+    FileCheck {
+        name: "frontend dependencies",
+        path: "node_modules",
+        hint: "run `just setup` (installs from the lockfile at the root)",
+    },
+    FileCheck {
+        name: "reference denylist",
+        path: "docs/blueprint/refs-denylist.txt",
+        hint: "`just check-refs` cannot run without it: place the list \
+there, or point WILLIE_REFS_DENYLIST at it",
+    },
+];
+
+/// The major version in `engines.node` of the root `package.json`.
+/// Hand-parsed on purpose: one field of one file does not justify a
+/// JSON dependency in a dev-only task.
+fn node_floor(root: &Path) -> Option<u32> {
+    let text = std::fs::read_to_string(root.join("package.json")).ok()?;
+    let line = text.lines().find(|line| line.contains("\"node\""))?;
+    first_number(line)
+}
+
+/// True when a detected `node --version` (`v24.18.0`) is at or above
+/// `floor`. An unparsable version fails: an unknown version is
+/// reported, never assumed good.
+fn meets_node_floor(detected: &str, floor: u32) -> bool {
+    first_number(detected).is_some_and(|major| major >= floor)
+}
+
+/// The first run of digits in `text`, as a number.
+fn first_number(text: &str) -> Option<u32> {
+    let digits: String = text
+        .chars()
+        .skip_while(|c| !c.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
+        .collect();
+    digits.parse().ok()
+}
+
+pub fn run(root: &Path) -> TaskResult {
+    let mut missing = Vec::new();
+    let floor = node_floor(root);
     for check in CHECKS {
         match detect(check) {
-            Some(version) => println!("[ok ] {:<28} {}", check.name, version),
+            Some(version) => {
+                if check.name == "node"
+                    && let Some(floor) = floor
+                    && !meets_node_floor(&version, floor)
+                {
+                    println!(
+                        "[FAIL] {:<28} {version} is below the required \
+Node {floor} (engines.node)",
+                        check.name
+                    );
+                    missing.push(check.name);
+                    continue;
+                }
+                println!("[ok ] {:<28} {}", check.name, version);
+            }
             None if check.required => {
                 println!("[FAIL] {:<28} {}", check.name, check.hint);
-                missing_required.push(check.name);
+                missing.push(check.name);
             }
             None => println!("[skip] {:<28} {}", check.name, check.hint),
         }
     }
-    if missing_required.is_empty() {
+    for check in FILES {
+        if root.join(check.path).exists() {
+            println!("[ok ] {:<28} {}", check.name, check.path);
+        } else {
+            println!("[FAIL] {:<28} {}", check.name, check.hint);
+            missing.push(check.name);
+        }
+    }
+    if missing.is_empty() {
         Ok(())
     } else {
-        Err(format!(
-            "missing required tools: {}",
-            missing_required.join(", ")
-        ))
+        Err(format!("missing prerequisites: {}", missing.join(", ")))
     }
 }
 
@@ -219,5 +290,42 @@ mod tests {
         let strict = probe(&["x"]);
         assert!(accept(&strict, false, "1.0").is_none());
         assert_eq!(accept(&strict, true, "\n 1.0 \n").unwrap(), "1.0");
+    }
+
+    #[test]
+    fn node_at_or_above_the_floor_passes_and_below_it_fails() {
+        assert!(meets_node_floor("v24.18.0", 22));
+        assert!(meets_node_floor("v22.0.0", 22));
+        assert!(!meets_node_floor("v20.19.0", 22));
+    }
+
+    #[test]
+    fn an_unreadable_node_version_fails_closed() {
+        assert!(!meets_node_floor("not a version", 22));
+        assert!(!meets_node_floor("", 22));
+    }
+
+    #[test]
+    fn the_node_floor_is_read_from_the_engines_field() {
+        let dir = std::env::temp_dir().join("willie-doctor-floor");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            "{\n  \"engines\": {\n    \"node\": \">=22.0.0\"\n  }\n}\n",
+        )
+        .unwrap();
+        assert_eq!(node_floor(&dir), Some(22));
+    }
+
+    #[test]
+    fn every_file_check_has_a_relative_path_and_a_hint() {
+        for check in FILES {
+            assert!(!check.hint.is_empty(), "{} has no hint", check.name);
+            assert!(
+                !Path::new(check.path).is_absolute(),
+                "{} must be relative to the workspace root",
+                check.name
+            );
+        }
     }
 }
