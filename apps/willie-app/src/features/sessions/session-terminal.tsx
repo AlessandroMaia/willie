@@ -45,10 +45,20 @@ export function SessionTerminal({ id, title }: SessionTerminalProps) {
     onSessionOutput((out) => {
       if (cancelled) return;
       if (out.id === id) term.write(new Uint8Array(out.chunk));
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setProblem(
+            isProblem(error)
+              ? error
+              : { code: "unknown", message: String(error), remediation: "" },
+          );
+        }
+      });
 
     term.onData((data) => {
       sessionTerminal.input(id, data).catch(() => {

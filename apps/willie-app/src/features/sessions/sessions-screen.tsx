@@ -202,10 +202,12 @@ export function SessionsScreen() {
       const next = applyEvent(current, ev);
       snapRef.current = next;
       setSnap(next);
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((error: unknown) => setProblem(asProblem(error)));
     return () => {
       cancelled = true;
       unlisten?.();

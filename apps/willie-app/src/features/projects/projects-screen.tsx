@@ -206,10 +206,12 @@ export function ProjectsScreen() {
           return next;
         });
       }
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((error: unknown) => setProblem(asProblem(error)));
     return () => {
       cancelled = true;
       unlisten?.();
@@ -386,7 +388,7 @@ export function ProjectsScreen() {
    * instead of being treated as a row failure. */
   function openSession(project: Project) {
     setOpenNotice(project.id, null);
-    runRow(project.id, project.id, async () => {
+    void runRow(project.id, project.id, async () => {
       const result = await sessionsApi.open(project.id);
       setOpenNotice(project.id, result.terminal_problem ?? null);
     });
@@ -399,24 +401,26 @@ export function ProjectsScreen() {
    * action. */
   function resumeSession(project: Project) {
     setOpenNotice(project.id, null);
-    runRow(project.id, project.id, async () => {
+    void runRow(project.id, project.id, async () => {
       const result = await sessionsApi.resume(project.id);
       setOpenNotice(project.id, result.terminal_problem ?? null);
     });
   }
 
   function syncToWindows(project: Project) {
-    runRow(project.id, project.id, () => projectsApi.syncToWindows(project.id));
+    void runRow(project.id, project.id, () =>
+      projectsApi.syncToWindows(project.id),
+    );
   }
 
   function updateFromWindows(project: Project) {
-    runRow(project.id, project.id, () =>
+    void runRow(project.id, project.id, () =>
       projectsApi.updateFromWindows(project.id),
     );
   }
 
   function cancelJobFor(job: Job) {
-    runRow(projectJobId(job), job.id, () => projectsApi.cancelJob(job.id));
+    void runRow(projectJobId(job), job.id, () => projectsApi.cancelJob(job.id));
   }
 
   /* A job outcome the daemon reports asynchronously (`workspace_dirty`
@@ -426,7 +430,7 @@ export function ProjectsScreen() {
   function forceRemoveJob(job: Job) {
     const projectId = projectJobId(job);
     const keepWorkspace = removeAttempts.get(projectId) ?? true;
-    runRow(projectId, projectId, () =>
+    void runRow(projectId, projectId, () =>
       projectsApi.remove(projectId, keepWorkspace, true),
     );
   }
@@ -443,7 +447,7 @@ export function ProjectsScreen() {
     const fn = retryFn(job);
     if (fn) {
       const projectId = projectJobId(job);
-      runRow(projectId, projectId, fn);
+      void runRow(projectId, projectId, fn);
     }
   }
 

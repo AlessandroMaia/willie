@@ -38,15 +38,18 @@ export function DashboardScreen() {
     refresh();
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    engine.onStatus(setStatus).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
+    engine
+      .onStatus(setStatus)
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(report);
     return () => {
       cancelled = true;
       unlisten?.();
     };
-  }, [refresh]);
+  }, [refresh, report]);
 
   const daemonState = status?.daemon.state ?? null;
 
@@ -94,15 +97,17 @@ export function DashboardScreen() {
       const next = applyEvent(current, ev);
       snapRef.current = next;
       setSnap(next);
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(report);
     return () => {
       cancelled = true;
       unlisten?.();
     };
-  }, [daemonState]);
+  }, [daemonState, report]);
 
   const projectCount = snap?.projects.length ?? null;
   const installJob = latestInstallJob(snap?.jobs ?? []);
