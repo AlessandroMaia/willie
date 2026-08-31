@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { SessionTerminal } from "@/screens/SessionTerminal";
 import type { Problem } from "../lib/engine";
 import {
   isProblem,
@@ -15,7 +16,6 @@ import {
   type Tone,
 } from "../lib/sessions";
 import { applyEvent, needsResnapshot } from "../lib/state";
-import { SessionTerminal } from "./SessionTerminal";
 
 function asProblem(error: unknown): Problem {
   return isProblem(error)
