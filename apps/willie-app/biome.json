@@ -23,7 +23,13 @@
         "noExplicitAny": "error"
       },
       "style": {
-        "useImportType": "error"
+        "useImportType": "error",
+        "useFilenamingConvention": {
+          "level": "error",
+          "options": {
+            "filenameCases": ["kebab-case"]
+          }
+        }
       }
     }
   },

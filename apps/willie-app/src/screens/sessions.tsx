@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SessionTerminal } from "@/screens/SessionTerminal";
+import { SessionTerminal } from "@/screens/session-terminal";
 import type { Problem } from "../lib/engine";
 import {
   isProblem,

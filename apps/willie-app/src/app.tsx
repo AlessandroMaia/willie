@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Dashboard } from "./screens/Dashboard";
-import { Projects } from "./screens/Projects";
-import { Sessions } from "./screens/Sessions";
+import { Dashboard } from "@/screens/dashboard";
+import { Projects } from "@/screens/projects";
+import { Sessions } from "@/screens/sessions";
 
 type Tab = "dashboard" | "projects" | "sessions";
 
