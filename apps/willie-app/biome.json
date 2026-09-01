@@ -65,7 +65,8 @@
                       "**/features/**",
                       "**/components/**",
                       "**/plugins/**"
-                    ]
+                    ],
+                    "message": "lib/ has no React and depends on nothing above it: not app, store, features, components or plugins. If lib needs what one of those offers, the logic belongs in lib/ itself."
                   }
                 ]
               }
@@ -93,7 +94,8 @@
                       "**/features/**",
                       "**/components/**",
                       "**/plugins/**"
-                    ]
+                    ],
+                    "message": "store/ reads only lib/ — never app, a feature, a component or a plugin. A screen depends on the store, never the other way around; move what the store needs down into lib/."
                   }
                 ]
               }
@@ -121,7 +123,8 @@
                       "**/store/**",
                       "**/features/**",
                       "**/plugins/**"
-                    ]
+                    ],
+                    "message": "components/ reads only lib/ — never app, store, a feature or a plugin. A component two features share lives here; import it from the feature, not the other way around."
                   }
                 ]
               }
@@ -149,7 +152,8 @@
                       "../health/**",
                       "**/features/sessions/**",
                       "**/features/health/**"
-                    ]
+                    ],
+                    "message": "features/projects never imports app/ or another feature (sessions, health). What projects and another feature share moves down into components/, store/ or lib/."
                   }
                 ]
               }
@@ -177,7 +181,8 @@
                       "../health/**",
                       "**/features/projects/**",
                       "**/features/health/**"
-                    ]
+                    ],
+                    "message": "features/sessions never imports app/ or another feature (projects, health). What sessions and another feature share moves down into components/, store/ or lib/."
                   }
                 ]
               }
@@ -205,7 +210,8 @@
                       "../sessions/**",
                       "**/features/projects/**",
                       "**/features/sessions/**"
-                    ]
+                    ],
+                    "message": "features/health never imports app/ or another feature (projects, sessions). What health and another feature share moves down into components/, store/ or lib/."
                   }
                 ]
               }
