@@ -1,27 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import type { Problem } from "../lib/engine";
-import {
-  isProblem,
-  onDaemonEvent,
-  projects as projectsApi,
-  sessions as sessionsApi,
-} from "../lib/engine";
-import type { Session, SessionState, Snapshot } from "../lib/proto";
+import { useState } from "react";
+import { ProblemAlert } from "@/components/problem-alert";
+import { relativeTime } from "@/components/relative-time";
+import { SessionTerminal } from "@/features/sessions/session-terminal";
 import {
   liveSessions,
   recentTerminal,
   stateChip,
   TERMINAL_HISTORY_LIMIT,
   type Tone,
-} from "../lib/sessions";
-import { applyEvent, needsResnapshot } from "../lib/state";
-import { SessionTerminal } from "./SessionTerminal";
-
-function asProblem(error: unknown): Problem {
-  return isProblem(error)
-    ? error
-    : { code: "unknown", message: String(error), remediation: "" };
-}
+} from "@/lib/domain/sessions";
+import type { Problem } from "@/lib/ipc";
+import { sessions as sessionsApi } from "@/lib/ipc";
+import { asProblem } from "@/lib/problem";
+import type { Session, SessionState, Snapshot } from "@/lib/proto";
+import { useSnapshot } from "@/store/use-snapshot";
 
 /* Every row needs the owning project's display name, but a session can
  * outlive the project it belonged to (removed while the session was
@@ -43,7 +35,7 @@ interface SessionChipProps {
   state: SessionState;
 }
 
-/* Mirrors `Projects.tsx`'s `StateChip`: a failed state carries its own
+/* Mirrors `ProjectStateChip`: a failed state carries its own
  * code, message and remediation, so it renders as the same stacked
  * chip-failed shape; every other state is a single-line pill. */
 function SessionChip({ state }: SessionChipProps) {
@@ -66,23 +58,6 @@ function SessionChip({ state }: SessionChipProps) {
       {label}
     </span>
   );
-}
-
-/* A tiny, self-contained relative-time label. `created_at`/`started_at`
- * are whole-second epoch strings (the daemon's format, same as jobs), so
- * parsing as seconds — not a calendar date — is what actually matches
- * the wire. */
-function relativeTime(epochSeconds: string): string {
-  const started = Number(epochSeconds) * 1000;
-  if (!Number.isFinite(started)) return "unknown";
-  const diffSeconds = Math.floor((Date.now() - started) / 1000);
-  if (diffSeconds < 60) return "just now";
-  const minutes = Math.floor(diffSeconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days} d ago`;
 }
 
 interface LiveRowProps {
@@ -119,14 +94,7 @@ function LiveRow({
           started {relativeTime(session.started_at ?? session.created_at)}
         </div>
       </div>
-      {problem && (
-        <div className="problem" role="alert">
-          <strong>{problem.code}</strong> — {problem.message}
-          {problem.remediation && (
-            <div className="muted">→ {problem.remediation}</div>
-          )}
-        </div>
-      )}
+      {problem && <ProblemAlert problem={problem} />}
       <div className="actions">
         <button type="button" disabled={busy} onClick={onAttach}>
           Attach
@@ -165,52 +133,15 @@ function RecentRow({ session, projectName }: RecentRowProps) {
   );
 }
 
-export function Sessions() {
-  const [snap, setSnap] = useState<Snapshot | null>(null);
-  const snapRef = useRef<Snapshot | null>(null);
-  const [problem, setProblem] = useState<Problem | null>(null);
+export function SessionsScreen() {
+  const store = useSnapshot();
+  const snap = store.snapshot;
+  const problem = store.problem;
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rowProblems, setRowProblems] = useState<Map<string, Problem>>(
     new Map(),
   );
   const [openId, setOpenId] = useState<string | null>(null);
-
-  const loadSnapshot = useCallback(() => {
-    projectsApi
-      .snapshot()
-      .then((next) => {
-        snapRef.current = next;
-        setSnap(next);
-        setProblem(null);
-      })
-      .catch((error: unknown) => setProblem(asProblem(error)));
-  }, []);
-
-  useEffect(() => {
-    loadSnapshot();
-  }, [loadSnapshot]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    onDaemonEvent((ev) => {
-      const current = snapRef.current;
-      if (current === null || needsResnapshot(current, ev)) {
-        loadSnapshot();
-        return;
-      }
-      const next = applyEvent(current, ev);
-      snapRef.current = next;
-      setSnap(next);
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [loadSnapshot]);
 
   function setRowProblem(sessionId: string, problem: Problem | null) {
     setRowProblems((prev) => {
@@ -274,14 +205,7 @@ export function Sessions() {
         <h1>Sessions</h1>
       </header>
 
-      {problem && (
-        <section className="problem" role="alert">
-          <strong>{problem.code}</strong> — {problem.message}
-          {problem.remediation && (
-            <div className="muted">→ {problem.remediation}</div>
-          )}
-        </section>
-      )}
+      {problem && <ProblemAlert problem={problem} />}
 
       {snap === null ? (
         !problem && <p className="muted">Loading sessions…</p>

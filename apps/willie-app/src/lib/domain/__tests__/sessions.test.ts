@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { Session } from "./proto";
 import {
   isLive,
   liveCount,
   liveSessions,
   recentTerminal,
   stateChip,
-} from "./sessions";
+} from "@/lib/domain/sessions";
+import type { Session } from "@/lib/proto";
 
 const s = (
   id: string,

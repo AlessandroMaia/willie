@@ -120,12 +120,3 @@ export const tools = {
 
 export const onDaemonEvent = (cb: (ev: Event) => void): Promise<UnlistenFn> =>
   listen<Event>(DAEMON_EVENT, (event) => cb(event.payload));
-
-export function isProblem(value: unknown): value is Problem {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "code" in value &&
-    "message" in value
-  );
-}

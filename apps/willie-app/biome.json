@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.10/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.11/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -19,11 +19,20 @@
     "enabled": true,
     "rules": {
       "preset": "recommended",
+      "nursery": {
+        "noFloatingPromises": "error"
+      },
       "suspicious": {
         "noExplicitAny": "error"
       },
       "style": {
-        "useImportType": "error"
+        "useImportType": "error",
+        "useFilenamingConvention": {
+          "level": "error",
+          "options": {
+            "filenameCases": ["kebab-case"]
+          }
+        }
       }
     }
   },
@@ -33,5 +42,208 @@
       "semicolons": "always",
       "trailingCommas": "all"
     }
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/lib/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/store/*",
+                      "@/features/*",
+                      "@/components/*",
+                      "@/plugins/*",
+                      "**/app/**",
+                      "**/store/**",
+                      "**/features/**",
+                      "**/components/**",
+                      "**/plugins/**"
+                    ],
+                    "message": "lib/ has no React and depends on nothing above it: not app, store, features, components or plugins. If lib needs what one of those offers, the logic belongs in lib/ itself."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/store/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/features/*",
+                      "@/components/*",
+                      "@/plugins/*",
+                      "**/app/**",
+                      "**/features/**",
+                      "**/components/**",
+                      "**/plugins/**"
+                    ],
+                    "message": "store/ reads only lib/ — never app, a feature, a component or a plugin. A screen depends on the store, never the other way around; move what the store needs down into lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/components/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/store/*",
+                      "@/features/*",
+                      "@/plugins/*",
+                      "**/app/**",
+                      "**/store/**",
+                      "**/features/**",
+                      "**/plugins/**"
+                    ],
+                    "message": "components/ reads only lib/ — never app, store, a feature or a plugin. A component two features share lives here; import it from the feature, not the other way around."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/projects/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/features/sessions/*",
+                      "@/features/health/*",
+                      "**/app/**",
+                      "../sessions/**",
+                      "../health/**",
+                      "**/features/sessions/**",
+                      "**/features/health/**"
+                    ],
+                    "message": "features/projects never imports app/ or another feature (sessions, health). What projects and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/sessions/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/features/projects/*",
+                      "@/features/health/*",
+                      "**/app/**",
+                      "../projects/**",
+                      "../health/**",
+                      "**/features/projects/**",
+                      "**/features/health/**"
+                    ],
+                    "message": "features/sessions never imports app/ or another feature (projects, health). What sessions and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/health/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/features/projects/*",
+                      "@/features/sessions/*",
+                      "**/app/**",
+                      "../projects/**",
+                      "../sessions/**",
+                      "**/features/projects/**",
+                      "**/features/sessions/**"
+                    ],
+                    "message": "features/health never imports app/ or another feature (projects, sessions). What health and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/plugins/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/features/*",
+                      "**/app/**",
+                      "**/features/**"
+                    ],
+                    "message": "plugin panels use only core RPC and events (docs/ARCHITECTURE.md §4.1): they may read lib/, store/ and components/, never app/ or a feature directly."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

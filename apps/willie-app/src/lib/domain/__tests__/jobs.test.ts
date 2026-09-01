@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { latestInstallJob, latestJobFor } from "./jobs";
-import type { Job } from "./proto";
+import { latestInstallJob, latestJobFor } from "@/lib/domain/jobs";
+import type { Job } from "@/lib/proto";
 
 /* `startedAt` mirrors the wire: the daemon stamps `started_at` as whole
  * epoch seconds in decimal, not as a calendar timestamp. */

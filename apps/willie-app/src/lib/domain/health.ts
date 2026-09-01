@@ -1,4 +1,4 @@
-import type { EngineStatus } from "./engine";
+import type { EngineStatus } from "@/lib/ipc";
 
 export type Light = "red" | "yellow" | "green";
 export type Part = "wsl" | "distro" | "daemon" | "doctor";

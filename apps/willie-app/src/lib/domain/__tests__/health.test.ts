@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { DistroStatus, EngineStatus } from "./engine";
-import { lightFor, overallHealth } from "./health";
+import { lightFor, overallHealth } from "@/lib/domain/health";
+import type { DistroStatus, EngineStatus } from "@/lib/ipc";
 
 const distro: DistroStatus = {
   registered: true,

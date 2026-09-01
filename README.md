@@ -34,12 +34,22 @@ builds and registers, its daemon answers, the app shows health and
   it is missing; only an administrator can grant it. See
   `docs/decisions/0010-wsl-stdio-transport-findings.md`.
 
-Run `just ensure` to check everything and get install hints.
+## First time
+
+```text
+just setup             prepare a fresh clone (hooks, dependencies, sources)
+```
+
+If a command in `just setup` is not found, run `just ensure` for the
+install hint for each missing tool. `just check` additionally needs the
+reference denylist described in `AGENTS.md`; without it `check-refs`
+cannot run.
 
 ## Development
 
 ```text
 just                   list recipes
+just setup             prepare a fresh clone (hooks, dependencies, sources)
 just ensure            verify the toolchain
 just hooks             install the pre-commit hook
 just check             the local quality gate (format, clippy, tests, denylist)

@@ -1,17 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { EngineStatus, Problem } from "../lib/engine";
-import {
-  engine,
-  isProblem,
-  onDaemonEvent,
-  projects,
-  tools,
-} from "../lib/engine";
-import type { Part } from "../lib/health";
-import { lightFor, overallHealth } from "../lib/health";
-import { latestInstallJob } from "../lib/jobs";
-import type { Job, Snapshot } from "../lib/proto";
-import { applyEvent, needsResnapshot } from "../lib/state";
+import { ProblemAlert } from "@/components/problem-alert";
+import type { Part } from "@/lib/domain/health";
+import { lightFor, overallHealth } from "@/lib/domain/health";
+import { latestInstallJob } from "@/lib/domain/jobs";
+import type { EngineStatus, Problem } from "@/lib/ipc";
+import { engine, tools } from "@/lib/ipc";
+import { asProblem } from "@/lib/problem";
+import type { Job } from "@/lib/proto";
+import { useSnapshot } from "@/store/use-snapshot";
 
 const PARTS: { key: Part; label: string }[] = [
   { key: "wsl", label: "WSL" },
@@ -20,20 +16,14 @@ const PARTS: { key: Part; label: string }[] = [
   { key: "doctor", label: "Doctor" },
 ];
 
-export function Dashboard() {
+export function DashboardScreen() {
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [problem, setProblem] = useState<Problem | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [snap, setSnap] = useState<Snapshot | null>(null);
-  const snapRef = useRef<Snapshot | null>(null);
   const handledInstallJobRef = useRef<string | null>(null);
 
   const report = useCallback((error: unknown) => {
-    setProblem(
-      isProblem(error)
-        ? error
-        : { code: "unknown", message: String(error), remediation: "" },
-    );
+    setProblem(asProblem(error));
   }, []);
 
   const refresh = useCallback(() => {
@@ -44,71 +34,32 @@ export function Dashboard() {
     refresh();
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    engine.onStatus(setStatus).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
+    engine
+      .onStatus(setStatus)
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch(report);
     return () => {
       cancelled = true;
       unlisten?.();
     };
-  }, [refresh]);
+  }, [refresh, report]);
 
   const daemonState = status?.daemon.state ?? null;
 
-  useEffect(() => {
-    /* `state_snapshot` starts the daemon on demand when it is not
-     * already running (booting the WSL VM, up to a 60s HELLO
-     * timeout) — opening the Dashboard must never be what boots
-     * Willie, so the snapshot (and the event subscription that keeps
-     * it live) only run once the daemon is already up, and both tear
-     * down the moment `daemonState` leaves "running". */
-    if (daemonState !== "running") {
-      snapRef.current = null;
-      setSnap(null);
-      return;
-    }
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    projects
-      .snapshot()
-      .then((next) => {
-        if (cancelled) return;
-        snapRef.current = next;
-        setSnap(next);
-      })
-      .catch(() => {
-        /* the project count and install job are a nicety; a failed
-         * snapshot just hides them */
-      });
-    onDaemonEvent((ev) => {
-      const current = snapRef.current;
-      if (current === null || needsResnapshot(current, ev)) {
-        projects
-          .snapshot()
-          .then((next) => {
-            if (!cancelled) {
-              snapRef.current = next;
-              setSnap(next);
-            }
-          })
-          .catch(() => {
-            /* same as above: keep showing the last known snapshot */
-          });
-        return;
-      }
-      const next = applyEvent(current, ev);
-      snapRef.current = next;
-      setSnap(next);
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [daemonState]);
+  /* `state_snapshot` starts the daemon on demand when it is not
+   * already running (booting the WSL VM, up to a 60s HELLO timeout) —
+   * opening the Dashboard must never be what boots Willie, so the
+   * store only acquires the snapshot once the daemon is already up,
+   * and releases it the moment `daemonState` leaves "running". A
+   * failed snapshot is a nicety here, not a page failure, and never a
+   * banner: before the first success the count and install job stay
+   * unset, and after that the store keeps the last one it had, so a
+   * later failure does not blank out either. */
+  const store = useSnapshot(daemonState === "running");
+  const snap = store.snapshot;
 
   const projectCount = snap?.projects.length ?? null;
   const installJob = latestInstallJob(snap?.jobs ?? []);
@@ -206,14 +157,7 @@ export function Dashboard() {
         {busy && <span className="muted">{busy}…</span>}
       </section>
 
-      {problem && (
-        <section className="problem" role="alert">
-          <strong>{problem.code}</strong> — {problem.message}
-          {problem.remediation && (
-            <div className="muted">→ {problem.remediation}</div>
-          )}
-        </section>
-      )}
+      {problem && <ProblemAlert problem={problem} />}
 
       {status.doctor && (
         <section className="doctor">

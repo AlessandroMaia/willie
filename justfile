@@ -6,12 +6,27 @@
 
 set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-NonInteractive", "-Command"]
 
+# A pinned `packageManager` makes corepack ask permission before it
+# downloads pnpm; the recipes below run a non-interactive shell, where
+# that question cannot be answered.
+export COREPACK_ENABLE_DOWNLOAD_PROMPT := "0"
+
 web := "apps/willie-app"
 
 default:
     @just --list --unsorted
 
 # ---------------------------------------------------------------- setup
+
+# Prepare a fresh clone: hooks, frontend dependencies, crate sources.
+# `ensure` runs last, as verification — running it first would fail on
+# the very dependencies this recipe is about to install.
+[group('setup')]
+setup:
+    just hooks
+    pnpm install --frozen-lockfile
+    cargo fetch --locked
+    just ensure
 
 # Verify the local toolchain and print install hints for what is missing.
 [group('setup')]
@@ -26,7 +41,7 @@ hooks:
 # Install frontend dependencies from the lockfile.
 [group('setup')]
 web-install:
-    pnpm -C {{web}} install --frozen-lockfile
+    pnpm install --frozen-lockfile
 
 # -------------------------------------------------------------- quality
 

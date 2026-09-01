@@ -2,8 +2,10 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
-import type { Problem } from "../lib/engine";
-import { isProblem, onSessionOutput, sessionTerminal } from "../lib/engine";
+import { ProblemAlert } from "@/components/problem-alert";
+import type { Problem } from "@/lib/ipc";
+import { onSessionOutput, sessionTerminal } from "@/lib/ipc";
+import { asProblem } from "@/lib/problem";
 
 interface SessionTerminalProps {
   id: string;
@@ -45,10 +47,14 @@ export function SessionTerminal({ id, title }: SessionTerminalProps) {
     onSessionOutput((out) => {
       if (cancelled) return;
       if (out.id === id) term.write(new Uint8Array(out.chunk));
-    }).then((fn) => {
-      if (cancelled) fn();
-      else unlisten = fn;
-    });
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setProblem(asProblem(error));
+      });
 
     term.onData((data) => {
       sessionTerminal.input(id, data).catch(() => {
@@ -64,13 +70,7 @@ export function SessionTerminal({ id, title }: SessionTerminalProps) {
         reportResize();
       })
       .catch((error: unknown) => {
-        if (!cancelled) {
-          setProblem(
-            isProblem(error)
-              ? error
-              : { code: "unknown", message: String(error), remediation: "" },
-          );
-        }
+        if (!cancelled) setProblem(asProblem(error));
       });
 
     return () => {
@@ -86,14 +86,7 @@ export function SessionTerminal({ id, title }: SessionTerminalProps) {
 
   return (
     <div className="session-terminal-body">
-      {problem && (
-        <div className="problem" role="alert">
-          <strong>{problem.code}</strong> — {problem.message}
-          {problem.remediation && (
-            <div className="muted">→ {problem.remediation}</div>
-          )}
-        </div>
-      )}
+      {problem && <ProblemAlert problem={problem} />}
       <div className="terminal-surface" ref={containerRef} title={title} />
     </div>
   );

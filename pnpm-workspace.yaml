@@ -1,0 +1,9 @@
+# The repository has one JavaScript package; the workspace lives at the
+# root so `pnpm install` works from where it is typed.
+packages:
+  - "apps/*"
+
+# Dependency build scripts are blocked unless listed. esbuild needs its
+# postinstall to place the platform binary; nothing else may run scripts.
+allowBuilds:
+  esbuild: true
