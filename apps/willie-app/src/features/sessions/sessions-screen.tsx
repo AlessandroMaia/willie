@@ -35,7 +35,7 @@ interface SessionChipProps {
   state: SessionState;
 }
 
-/* Mirrors `Projects.tsx`'s `StateChip`: a failed state carries its own
+/* Mirrors `ProjectStateChip`: a failed state carries its own
  * code, message and remediation, so it renders as the same stacked
  * chip-failed shape; every other state is a single-line pill. */
 function SessionChip({ state }: SessionChipProps) {
