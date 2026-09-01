@@ -292,7 +292,7 @@ the commit as a path nothing points at.
 | `@vitejs/plugin-react` | 4.7.0  | 6.1.1   | one block with the two below         |
 | `vite`                 | 7.3.6  | 8.2.2   | idem                                 |
 | `vitest`               | 3.2.7  | 4.1.11  | idem                                 |
-| `typescript`           | 5.8.3  | —       | deferred, see Non-goals              |
+| `typescript`           | 5.8.3  | 7.0.2   | landed on its own, right after this stage |
 
 The build toolchain moves as one block because the three majors are
 released against each other. TypeScript stays behind: it interacts with
@@ -369,8 +369,9 @@ One task, one commit:
 - Should Biome move to the root and cover the whole repository?
   Favoured: keep it in the app while there is one JS package; revisit
   when a second appears.
-- When does TypeScript 7 land? Favoured: immediately after this stage,
-  on its own.
+- When does TypeScript 7 land? Landed right after this stage, on its
+  own commit. The only change it forced was dropping `baseUrl`, which
+  7.0 removes; `paths` was already relative to the tsconfig.
 - Is a dead-code scan worth a dependency later? Favoured: no, unless
   orphaned modules actually survive a move — decide on evidence, not
   in advance.
