@@ -154,10 +154,17 @@ there, or point WILLIE_REFS_DENYLIST at it",
 
 /// The major version in `engines.node` of the root `package.json`.
 /// Hand-parsed on purpose: one field of one file does not justify a
-/// JSON dependency in a dev-only task.
+/// JSON dependency in a dev-only task. Scoped to the text of the
+/// `engines` object specifically: a naive "first line that mentions
+/// node" would just as happily match a `volta` or `nvm` pin sitting
+/// above it in the file, and silently check the wrong version.
 fn node_floor(root: &Path) -> Option<u32> {
     let text = std::fs::read_to_string(root.join("package.json")).ok()?;
-    let line = text.lines().find(|line| line.contains("\"node\""))?;
+    let engines_at = text.find("\"engines\"")?;
+    let block_start = text[engines_at..].find('{')? + engines_at;
+    let block_end = text[block_start..].find('}')? + block_start;
+    let block = text.get(block_start..=block_end)?;
+    let line = block.lines().find(|line| line.contains("\"node\""))?;
     first_number(line)
 }
 
@@ -181,6 +188,14 @@ fn first_number(text: &str) -> Option<u32> {
 pub fn run(root: &Path) -> TaskResult {
     let mut missing = Vec::new();
     let floor = node_floor(root);
+    if floor.is_none() {
+        println!(
+            "[FAIL] {:<28} could not read `engines.node` from the root \
+package.json",
+            "Node floor (engines.node)"
+        );
+        missing.push("Node floor (engines.node)");
+    }
     for check in CHECKS {
         match detect(check) {
             Some(version) => {
@@ -309,12 +324,29 @@ mod tests {
     fn the_node_floor_is_read_from_the_engines_field() {
         let dir = std::env::temp_dir().join("willie-doctor-floor");
         std::fs::create_dir_all(&dir).unwrap();
+        /* A `volta` pin sits above `engines` and names a different
+         * major. A naive "first line that mentions node" would match
+         * this one and silently check the wrong version; reading only
+         * the `engines` block must not. */
         std::fs::write(
             dir.join("package.json"),
-            "{\n  \"engines\": {\n    \"node\": \">=22.0.0\"\n  }\n}\n",
+            "{\n  \"volta\": {\n    \"node\": \"18.20.4\"\n  },\n  \
+\"engines\": {\n    \"node\": \">=22.0.0\"\n  }\n}\n",
         )
         .unwrap();
         assert_eq!(node_floor(&dir), Some(22));
+    }
+
+    #[test]
+    fn a_root_package_json_without_engines_reports_no_floor() {
+        let dir = std::env::temp_dir().join("willie-doctor-no-engines");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            "{\n  \"name\": \"willie\"\n}\n",
+        )
+        .unwrap();
+        assert_eq!(node_floor(&dir), None);
     }
 
     #[test]
