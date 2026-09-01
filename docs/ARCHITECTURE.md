@@ -541,10 +541,25 @@ Closing the window minimises to the tray; *quit* stops the daemon
 (sessions in Windows Terminal continue). One store fed only by
 `state.snapshot` + `state.events` — the UI **never computes truth**.
 
+The frontend source (`apps/willie-app/src/`) gives every kind of file
+one home: `app/` composes the shell and the route registry;
+`features/<domain>/` holds one directory per screen; `components/`
+holds what two features share; `store/` is the React binding over the
+one daemon-snapshot store; `lib/` has no React — the wire-type mirrors,
+the Tauri bridge, the pure domain modules and the store's state
+machine; `plugins/<id>/` holds the plugin panels. Imports only point
+down: `app → features → components`, `app` and `features` may read
+`store`, everything may read `lib`, and a feature never imports another
+feature. The linter fails `just check` on a violation, and filenames
+are kebab-case. Rationale and the enforcement table:
+`designs/frontend-foundations.md`.
+
 ### 5.2 Build and development (all from Windows)
 
-Rust MSVC via `rustup`, Node 22 + pnpm, Tauri CLI as a dev dependency,
-WebView2 (native on Windows 11). `willied`, `willie`, `willie-sess` are
+Rust MSVC via `rustup`, Node 22 or newer + pnpm (the pnpm workspace sits
+at the repository root), Tauri CLI as a dev dependency, WebView2 (native
+on Windows 11). `just setup` prepares a fresh clone: hooks,
+`pnpm install`, `cargo fetch`, then `just ensure` as the verification. `willied`, `willie`, `willie-sess` are
 **cross-compiled** to `x86_64-unknown-linux-musl` with `cargo-zigbuild`
 (static; no Linux toolchain on the machine). Unit tests of portable crates
 run natively on Windows; Linux integration tests run **inside the Willie
