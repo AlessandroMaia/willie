@@ -171,11 +171,11 @@ src/
   store/                  its React binding only
     use-snapshot.ts       ~23 lines: useSyncExternalStore + acquire/release
   features/               one directory per domain, each exporting a screen
-    projects/             projects-screen, project-row, roots-panel,
-                          discover-panel, remove-project-dialog,
-                          relocate-project-dialog
-    sessions/             sessions-screen, session-row, session-terminal
-    health/               dashboard-screen, health-lights, doctor-list
+    projects/             projects-screen, project-row, project-state-chip,
+                          roots-panel, discover-panel,
+                          remove-project-dialog, relocate-project-dialog
+    sessions/             sessions-screen, session-terminal
+    health/               dashboard-screen
   components/
     ui/                   empty here; the next stage fills it
     problem-alert.tsx     the one renderer of Problem
@@ -194,7 +194,8 @@ src/
 ```
 
 `components/ui/` and `plugins/` are created empty, as addresses. Every
-other file in the tree exists today and only moves.
+other file in the tree exists today and only moves, except the parts
+split out of the projects screen in step 9 of the rollout below.
 
 Two rules make the tree hold.
 
@@ -322,7 +323,7 @@ if it does not.
 
 ## Testing
 
-- `xtask` unit tests cover the two new `doctor-tools` checks, beside
+- `xtask` unit tests cover the three new `doctor-tools` checks, beside
   the existing test that every check carries a probe and a hint
   (`xtask/src/doctor.rs:192`).
 - The `lib/` tests (`state`, `jobs`, `sessions`, `health`) must pass
