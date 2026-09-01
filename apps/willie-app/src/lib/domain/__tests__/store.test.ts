@@ -38,6 +38,13 @@ function fakeSource(snapshot: Snapshot) {
   };
 }
 
+/* Flushes both the microtask queue and any pending timers, so a
+ * promise chain started before this call has had every `.then` and
+ * `.catch` handler in it actually run by the time it resolves. */
+function flush(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 describe("createStore", () => {
   it("stays idle until something acquires it", () => {
     const source = fakeSource(snapshotAt(1));
@@ -61,8 +68,9 @@ describe("createStore", () => {
     await vi.waitFor(() => expect(store.getState().status).toBe("ready"));
     source.emit(projectEvent(2, "proj_a"));
     const state = store.getState();
-    expect(state.status === "ready" && state.snapshot.seq).toBe(2);
-    expect(state.status === "ready" && state.snapshot.projects).toHaveLength(1);
+    if (state.snapshot === null) throw new Error("expected a snapshot");
+    expect(state.snapshot.seq).toBe(2);
+    expect(state.snapshot.projects).toHaveLength(1);
     expect(source.snapshot).toHaveBeenCalledTimes(1);
   });
 
@@ -75,7 +83,7 @@ describe("createStore", () => {
     await vi.waitFor(() => expect(source.snapshot).toHaveBeenCalledTimes(2));
   });
 
-  it("reports a failed snapshot as a Problem", async () => {
+  it("reports a failed snapshot as a Problem, with no snapshot yet", async () => {
     const source = fakeSource(snapshotAt(1));
     source.snapshot.mockRejectedValueOnce({
       code: "daemon_unreachable",
@@ -86,10 +94,28 @@ describe("createStore", () => {
     store.acquire();
     await vi.waitFor(() => {
       const state = store.getState();
-      expect(state.status === "failed" && state.problem.code).toBe(
-        "daemon_unreachable",
-      );
+      expect(state.status).toBe("failed");
+      expect(state.problem?.code).toBe("daemon_unreachable");
     });
+    expect(store.getState().snapshot).toBeNull();
+  });
+
+  it("keeps the last snapshot when a later refetch fails", async () => {
+    const source = fakeSource(snapshotAt(1));
+    const store = createStore(source);
+    store.acquire();
+    await vi.waitFor(() => expect(store.getState().status).toBe("ready"));
+    source.snapshot.mockRejectedValueOnce({
+      code: "daemon_unreachable",
+      message: "no",
+      remediation: "start it",
+    });
+    /* A gap forces a resnapshot, which is the rejecting call. */
+    source.emit(projectEvent(7, "proj_a"));
+    await vi.waitFor(() => expect(store.getState().status).toBe("failed"));
+    const state = store.getState();
+    expect(state.problem?.code).toBe("daemon_unreachable");
+    expect(state.snapshot?.seq).toBe(1);
   });
 
   it("keeps one subscription for many holders and drops it with the last", async () => {
@@ -103,7 +129,9 @@ describe("createStore", () => {
     expect(source.unlisten).not.toHaveBeenCalled();
     releaseB();
     await vi.waitFor(() => expect(source.unlisten).toHaveBeenCalledTimes(1));
-    expect(store.getState().status).toBe("idle");
+    const state = store.getState();
+    expect(state.status).toBe("idle");
+    expect(state.snapshot).toBeNull();
   });
 
   it("notifies subscribers on every change", async () => {
@@ -114,5 +142,42 @@ describe("createStore", () => {
     store.acquire();
     await vi.waitFor(() => expect(store.getState().status).toBe("ready"));
     expect(listener).toHaveBeenCalled();
+  });
+
+  it("does not revive if the last holder releases before an in-flight snapshot resolves", async () => {
+    const source = fakeSource(snapshotAt(1));
+    const store = createStore(source);
+    const release = store.acquire();
+    expect(source.snapshot).toHaveBeenCalledTimes(1);
+    release();
+    await flush();
+    expect(store.getState().status).toBe("idle");
+    expect(store.getState().snapshot).toBeNull();
+  });
+
+  it("acquire, release, then acquire again leaves exactly one live subscription", async () => {
+    const snapshot = snapshotAt(1);
+    const firstUnlisten = vi.fn();
+    const secondUnlisten = vi.fn();
+    let calls = 0;
+    const source = {
+      snapshot: vi.fn(async () => snapshot),
+      onEvent: vi.fn(async () => {
+        calls += 1;
+        return calls === 1 ? firstUnlisten : secondUnlisten;
+      }),
+    };
+    const store = createStore(source);
+
+    const releaseFirst = store.acquire();
+    releaseFirst();
+    store.acquire();
+
+    await vi.waitFor(() => expect(store.getState().status).toBe("ready"));
+    await flush();
+
+    expect(source.onEvent).toHaveBeenCalledTimes(2);
+    expect(firstUnlisten).toHaveBeenCalledTimes(1);
+    expect(secondUnlisten).not.toHaveBeenCalled();
   });
 });

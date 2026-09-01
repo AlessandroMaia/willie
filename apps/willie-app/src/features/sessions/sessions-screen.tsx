@@ -157,8 +157,8 @@ function RecentRow({ session, projectName }: RecentRowProps) {
 
 export function SessionsScreen() {
   const store = useSnapshot();
-  const snap = store.status === "ready" ? store.snapshot : null;
-  const problem = store.status === "failed" ? store.problem : null;
+  const snap = store.snapshot;
+  const problem = store.problem;
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rowProblems, setRowProblems] = useState<Map<string, Problem>>(
     new Map(),

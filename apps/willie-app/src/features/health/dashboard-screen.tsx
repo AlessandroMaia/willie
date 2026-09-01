@@ -53,10 +53,12 @@ export function DashboardScreen() {
    * opening the Dashboard must never be what boots Willie, so the
    * store only acquires the snapshot once the daemon is already up,
    * and releases it the moment `daemonState` leaves "running". A
-   * failed snapshot is a nicety here, not a page failure: the project
-   * count and install job just disappear, with no banner. */
+   * failed snapshot is a nicety here, not a page failure, and never a
+   * banner: before the first success the count and install job stay
+   * unset, and after that the store keeps the last one it had, so a
+   * later failure does not blank out either. */
   const store = useSnapshot(daemonState === "running");
-  const snap = store.status === "ready" ? store.snapshot : null;
+  const snap = store.snapshot;
 
   const projectCount = snap?.projects.length ?? null;
   const installJob = latestInstallJob(snap?.jobs ?? []);

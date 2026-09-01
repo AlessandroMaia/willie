@@ -56,10 +56,12 @@
                   {
                     "group": [
                       "@/app/*",
+                      "@/store/*",
                       "@/features/*",
                       "@/components/*",
                       "@/plugins/*",
                       "**/app/**",
+                      "**/store/**",
                       "**/features/**",
                       "**/components/**",
                       "**/plugins/**"
@@ -112,9 +114,11 @@
                   {
                     "group": [
                       "@/app/*",
+                      "@/store/*",
                       "@/features/*",
                       "@/plugins/*",
                       "**/app/**",
+                      "**/store/**",
                       "**/features/**",
                       "**/plugins/**"
                     ]

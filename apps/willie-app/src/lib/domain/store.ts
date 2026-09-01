@@ -4,17 +4,25 @@ import { asProblem } from "@/lib/problem";
 import type { Event, Snapshot } from "@/lib/proto";
 
 /** What the store needs from the outside. Injected so the store is
- * testable without the bridge; `app/store.ts` wires the real one. */
+ * testable without the bridge; `store/use-snapshot.ts` wires the real
+ * one. */
 export interface StoreSource {
   snapshot: () => Promise<Snapshot>;
   onEvent: (cb: (ev: Event) => void) => Promise<() => void>;
 }
 
-export type StoreState =
-  | { status: "idle" }
-  | { status: "loading" }
-  | { status: "ready"; snapshot: Snapshot }
-  | { status: "failed"; problem: Problem };
+export interface StoreState {
+  /** `idle` until something acquires it, `loading` while the first
+   * snapshot is in flight, `ready` once one has arrived, `failed`
+   * when the last fetch or subscription rejected. */
+  status: "idle" | "loading" | "ready" | "failed";
+  /** The last snapshot that arrived. Kept across a failed refetch,
+   * so a screen goes on showing rows it already had; null until the
+   * first one arrives, and cleared when the last holder leaves. */
+  snapshot: Snapshot | null;
+  /** Why the last fetch failed, cleared by the next success. */
+  problem: Problem | null;
+}
 
 export interface Store {
   getState: () => StoreState;
@@ -32,7 +40,7 @@ export interface Store {
  * snapshot, because the incremental history is no longer trustworthy.
  */
 export function createStore(source: StoreSource): Store {
-  let state: StoreState = { status: "idle" };
+  let state: StoreState = { status: "idle", snapshot: null, problem: null };
   let holders = 0;
   /* Bumped on every acquire and release so a snapshot or an event that
    * resolves after a teardown cannot revive a released store. */
@@ -45,26 +53,45 @@ export function createStore(source: StoreSource): Store {
     for (const listener of listeners) listener();
   }
 
+  /* A rejected fetch never throws away what is already on screen: it
+   * keeps the last snapshot, so a screen that already has rows keeps
+   * showing them under its own banner instead of going blank. */
+  function fail(error: unknown) {
+    set({
+      status: "failed",
+      snapshot: state.snapshot,
+      problem: asProblem(error),
+    });
+  }
+
   function load(gen: number) {
     source.snapshot().then(
       (snapshot) => {
-        if (gen === generation) set({ status: "ready", snapshot });
+        if (gen === generation) {
+          set({ status: "ready", snapshot, problem: null });
+        }
       },
       (error: unknown) => {
-        if (gen === generation) {
-          set({ status: "failed", problem: asProblem(error) });
-        }
+        if (gen === generation) fail(error);
       },
     );
   }
 
   function handle(ev: Event, gen: number) {
     if (gen !== generation) return;
-    if (state.status !== "ready" || needsResnapshot(state.snapshot, ev)) {
+    if (
+      state.status !== "ready" ||
+      state.snapshot === null ||
+      needsResnapshot(state.snapshot, ev)
+    ) {
       load(gen);
       return;
     }
-    set({ status: "ready", snapshot: applyEvent(state.snapshot, ev) });
+    set({
+      status: "ready",
+      snapshot: applyEvent(state.snapshot, ev),
+      problem: null,
+    });
   }
 
   return {
@@ -80,13 +107,16 @@ export function createStore(source: StoreSource): Store {
       if (holders === 1) {
         generation += 1;
         const gen = generation;
-        set({ status: "loading" });
+        set({ ...state, status: "loading" });
         load(gen);
         void source
           .onEvent((ev) => handle(ev, gen))
           .then((fn) => {
             if (gen === generation) unlisten = fn;
             else fn();
+          })
+          .catch((error: unknown) => {
+            if (gen === generation) fail(error);
           });
       }
       let released = false;
@@ -98,7 +128,7 @@ export function createStore(source: StoreSource): Store {
           generation += 1;
           unlisten?.();
           unlisten = undefined;
-          set({ status: "idle" });
+          set({ status: "idle", snapshot: null, problem: null });
         }
       };
     },

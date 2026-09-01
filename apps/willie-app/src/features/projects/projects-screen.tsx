@@ -93,9 +93,9 @@ function StateChip({ project, job, onRetry }: StateChipProps) {
 
 export function ProjectsScreen() {
   const store = useSnapshot();
-  const snap = store.status === "ready" ? store.snapshot : null;
+  const snap = store.snapshot;
   const [local, setLocal] = useState<Problem | null>(null);
-  const problem = local ?? (store.status === "failed" ? store.problem : null);
+  const problem = local ?? store.problem;
   const [roots, setRoots] = useState<string[]>([]);
   const [newRoot, setNewRoot] = useState("");
   const [addPath, setAddPath] = useState("");
