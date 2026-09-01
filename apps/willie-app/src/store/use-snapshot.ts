@@ -1,5 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { createStore, type StoreState } from "@/lib/domain/store";
+import { createStore, type StoreState } from "@/lib/domain/daemon-snapshot";
 import { onDaemonEvent, projects } from "@/lib/ipc";
 
 const store = createStore({

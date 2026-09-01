@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createStore } from "@/lib/domain/store";
+import { createStore } from "@/lib/domain/daemon-snapshot";
 import type { Event, Snapshot } from "@/lib/proto";
 
 function snapshotAt(seq: number): Snapshot {
