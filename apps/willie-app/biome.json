@@ -219,6 +219,31 @@
           }
         }
       }
+    },
+    {
+      "includes": ["src/plugins/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/features/*",
+                      "**/app/**",
+                      "**/features/**"
+                    ],
+                    "message": "plugin panels use only core RPC and events (docs/ARCHITECTURE.md §4.1): they may read lib/, store/ and components/, never app/ or a feature directly."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   ]
 }
