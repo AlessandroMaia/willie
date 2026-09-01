@@ -20,7 +20,10 @@ export interface StoreState {
    * so a screen goes on showing rows it already had; null until the
    * first one arrives, and cleared when the last holder leaves. */
   snapshot: Snapshot | null;
-  /** Why the last fetch failed, cleared by the next success. */
+  /** Why the last fetch or the live subscription failed. A snapshot
+   * that later resolves updates `snapshot` but never clears this on
+   * its own while the subscription itself is still dead — see
+   * `subscriptionProblem` below. */
   problem: Problem | null;
 }
 
@@ -46,6 +49,12 @@ export function createStore(source: StoreSource): Store {
    * resolves after a teardown cannot revive a released store. */
   let generation = 0;
   let unlisten: (() => void) | undefined;
+  /* Set when `onEvent` has rejected for the current generation. Tracked
+   * apart from `state.problem` so a snapshot that resolves afterward —
+   * the fetch and the subscription are independent promises racing
+   * each other — cannot silently report "ready" while the daemon
+   * subscription is actually dead. Cleared on every new generation. */
+  let subscriptionProblem: Problem | null = null;
   const listeners = new Set<() => void>();
 
   function set(next: StoreState) {
@@ -67,9 +76,16 @@ export function createStore(source: StoreSource): Store {
   function load(gen: number) {
     source.snapshot().then(
       (snapshot) => {
-        if (gen === generation) {
-          set({ status: "ready", snapshot, problem: null });
+        if (gen !== generation) return;
+        /* A dead subscription outlives a snapshot that happens to
+         * resolve later: the store stays "failed" with the snapshot
+         * refreshed underneath, rather than flipping to "ready" and
+         * erasing the only sign that daemon events stopped arriving. */
+        if (subscriptionProblem) {
+          set({ status: "failed", snapshot, problem: subscriptionProblem });
+          return;
         }
+        set({ status: "ready", snapshot, problem: null });
       },
       (error: unknown) => {
         if (gen === generation) fail(error);
@@ -107,6 +123,7 @@ export function createStore(source: StoreSource): Store {
       if (holders === 1) {
         generation += 1;
         const gen = generation;
+        subscriptionProblem = null;
         set({ ...state, status: "loading" });
         load(gen);
         void source
@@ -116,7 +133,9 @@ export function createStore(source: StoreSource): Store {
             else fn();
           })
           .catch((error: unknown) => {
-            if (gen === generation) fail(error);
+            if (gen !== generation) return;
+            subscriptionProblem = asProblem(error);
+            fail(error);
           });
       }
       let released = false;
@@ -126,6 +145,7 @@ export function createStore(source: StoreSource): Store {
         holders -= 1;
         if (holders === 0) {
           generation += 1;
+          subscriptionProblem = null;
           unlisten?.();
           unlisten = undefined;
           set({ status: "idle", snapshot: null, problem: null });

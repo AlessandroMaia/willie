@@ -155,6 +155,42 @@ describe("createStore", () => {
     expect(store.getState().snapshot).toBeNull();
   });
 
+  it("keeps a dead subscription visible even after a late snapshot resolves", async () => {
+    const snapshot = snapshotAt(1);
+    let resolveSnapshot: ((s: Snapshot) => void) | undefined;
+    const source = {
+      snapshot: vi.fn(
+        () => new Promise<Snapshot>((resolve) => (resolveSnapshot = resolve)),
+      ),
+      onEvent: vi.fn(async () => {
+        throw {
+          code: "daemon_unreachable",
+          message: "no",
+          remediation: "start it",
+        };
+      }),
+    };
+    const store = createStore(source);
+    store.acquire();
+
+    /* The subscription rejects first; the snapshot fetch is still
+     * in flight. */
+    await vi.waitFor(() => {
+      expect(store.getState().status).toBe("failed");
+      expect(store.getState().problem?.code).toBe("daemon_unreachable");
+    });
+
+    /* The in-flight snapshot resolves afterward. It must not erase
+     * the only sign that daemon events stopped arriving. */
+    resolveSnapshot?.(snapshot);
+    await flush();
+
+    const state = store.getState();
+    expect(state.status).toBe("failed");
+    expect(state.problem?.code).toBe("daemon_unreachable");
+    expect(state.snapshot?.seq).toBe(1);
+  });
+
   it("acquire, release, then acquire again leaves exactly one live subscription", async () => {
     const snapshot = snapshotAt(1);
     const firstUnlisten = vi.fn();
