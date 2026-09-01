@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ProblemAlert } from "@/components/problem-alert";
 import type { Part } from "@/lib/domain/health";
 import { lightFor, overallHealth } from "@/lib/domain/health";
 import { latestInstallJob } from "@/lib/domain/jobs";
@@ -156,14 +157,7 @@ export function DashboardScreen() {
         {busy && <span className="muted">{busy}…</span>}
       </section>
 
-      {problem && (
-        <section className="problem" role="alert">
-          <strong>{problem.code}</strong> — {problem.message}
-          {problem.remediation && (
-            <div className="muted">→ {problem.remediation}</div>
-          )}
-        </section>
-      )}
+      {problem && <ProblemAlert problem={problem} />}
 
       {status.doctor && (
         <section className="doctor">

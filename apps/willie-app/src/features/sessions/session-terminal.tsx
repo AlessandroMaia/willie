@@ -2,6 +2,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
+import { ProblemAlert } from "@/components/problem-alert";
 import type { Problem } from "@/lib/ipc";
 import { onSessionOutput, sessionTerminal } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
@@ -85,14 +86,7 @@ export function SessionTerminal({ id, title }: SessionTerminalProps) {
 
   return (
     <div className="session-terminal-body">
-      {problem && (
-        <div className="problem" role="alert">
-          <strong>{problem.code}</strong> — {problem.message}
-          {problem.remediation && (
-            <div className="muted">→ {problem.remediation}</div>
-          )}
-        </div>
-      )}
+      {problem && <ProblemAlert problem={problem} />}
       <div className="terminal-surface" ref={containerRef} title={title} />
     </div>
   );

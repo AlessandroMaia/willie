@@ -1,5 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useState } from "react";
+import { ProblemAlert } from "@/components/problem-alert";
 import { latestJobFor } from "@/lib/domain/jobs";
 import { isLive, liveCount } from "@/lib/domain/sessions";
 import type { Problem } from "@/lib/ipc";
@@ -490,14 +491,7 @@ export function ProjectsScreen() {
         <h1>Projects</h1>
       </header>
 
-      {problem && (
-        <section className="problem" role="alert">
-          <strong>{problem.code}</strong> — {problem.message}
-          {problem.remediation && (
-            <div className="muted">→ {problem.remediation}</div>
-          )}
-        </section>
-      )}
+      {problem && <ProblemAlert problem={problem} />}
 
       <section className="roots">
         <h2>Roots</h2>
@@ -683,22 +677,10 @@ export function ProjectsScreen() {
                   )}
                 </div>
 
-                {rowProblem && (
-                  <div className="problem" role="alert">
-                    <strong>{rowProblem.code}</strong> — {rowProblem.message}
-                    {rowProblem.remediation && (
-                      <div className="muted">→ {rowProblem.remediation}</div>
-                    )}
-                  </div>
-                )}
+                {rowProblem && <ProblemAlert problem={rowProblem} />}
 
                 {openNotice && (
-                  <div className="notice" role="status">
-                    <span>{openNotice.message}</span>
-                    {openNotice.remediation && (
-                      <div className="muted">→ {openNotice.remediation}</div>
-                    )}
-                  </div>
+                  <ProblemAlert problem={openNotice} tone="notice" />
                 )}
 
                 <div className="actions">
@@ -772,14 +754,7 @@ export function ProjectsScreen() {
               />
               Delete the workspace clone too
             </label>
-            {removeProblem && (
-              <div className="problem" role="alert">
-                <strong>{removeProblem.code}</strong> — {removeProblem.message}
-                {removeProblem.remediation && (
-                  <div className="muted">→ {removeProblem.remediation}</div>
-                )}
-              </div>
-            )}
+            {removeProblem && <ProblemAlert problem={removeProblem} />}
             <p className="muted">
               A workspace with uncommitted changes is refused; if that happens
               the project's row will offer a one-click "Remove anyway" once the
@@ -812,15 +787,7 @@ export function ProjectsScreen() {
                 Browse…
               </button>
             </div>
-            {relocateProblem && (
-              <div className="problem" role="alert">
-                <strong>{relocateProblem.code}</strong> —{" "}
-                {relocateProblem.message}
-                {relocateProblem.remediation && (
-                  <div className="muted">→ {relocateProblem.remediation}</div>
-                )}
-              </div>
-            )}
+            {relocateProblem && <ProblemAlert problem={relocateProblem} />}
             <div className="actions">
               <button
                 type="button"
