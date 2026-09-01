@@ -147,8 +147,8 @@ const FILES: &[FileCheck] = &[
     FileCheck {
         name: "reference denylist",
         path: "docs/blueprint/refs-denylist.txt",
-        hint: "`just check-refs` cannot run without it: place the list \
-there, or point WILLIE_REFS_DENYLIST at it",
+        hint: "`just check-refs` cannot run without it; place it there \
+or point WILLIE_REFS_DENYLIST at it",
     },
 ];
 
@@ -221,10 +221,9 @@ Node {floor} (engines.node)",
         }
     }
     for check in FILES {
-        if root.join(check.path).exists() {
-            println!("[ok ] {:<28} {}", check.name, check.path);
-        } else {
-            println!("[FAIL] {:<28} {}", check.name, check.hint);
+        let present = root.join(check.path).exists();
+        println!("{}", file_line(check, present));
+        if !present {
             missing.push(check.name);
         }
     }
@@ -232,6 +231,18 @@ Node {floor} (engines.node)",
         Ok(())
     } else {
         Err(format!("missing prerequisites: {}", missing.join(", ")))
+    }
+}
+
+/// The report line for one file prerequisite.
+fn file_line(check: &FileCheck, present: bool) -> String {
+    if present {
+        format!("[ok ] {:<28} {}", check.name, check.path)
+    } else {
+        format!(
+            "[FAIL] {:<28} missing {}: {}",
+            check.name, check.path, check.hint
+        )
     }
 }
 
@@ -347,6 +358,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(node_floor(&dir), None);
+    }
+
+    #[test]
+    fn a_missing_file_check_names_the_path_it_expected() {
+        /* "place it there" is only a remediation if the line says where
+         * "there" is: a developer on a fresh clone has never seen the
+         * path and cannot find it in any versioned file. */
+        for check in FILES {
+            let line = file_line(check, false);
+            assert!(
+                line.contains(check.path),
+                "{} does not name {}: {line:?}",
+                check.name,
+                check.path
+            );
+        }
     }
 
     #[test]
