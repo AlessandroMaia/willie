@@ -1,12 +1,12 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useState } from "react";
-import { useSnapshot } from "@/app/store";
 import { latestJobFor } from "@/lib/domain/jobs";
 import { isLive, liveCount } from "@/lib/domain/sessions";
 import type { Problem } from "@/lib/ipc";
 import { projects as projectsApi, sessions as sessionsApi } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
 import type { Candidate, Job, JobKind, Project } from "@/lib/proto";
+import { useSnapshot } from "@/store/use-snapshot";
 
 function wslPathFor(slug: string): string {
   return `\\\\wsl.localhost\\willie\\home\\willie\\projects\\${slug}`;

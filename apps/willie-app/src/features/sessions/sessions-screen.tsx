@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useSnapshot } from "@/app/store";
 import { SessionTerminal } from "@/features/sessions/session-terminal";
 import {
   liveSessions,
@@ -12,6 +11,7 @@ import type { Problem } from "@/lib/ipc";
 import { sessions as sessionsApi } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
 import type { Session, SessionState, Snapshot } from "@/lib/proto";
+import { useSnapshot } from "@/store/use-snapshot";
 
 /* Every row needs the owning project's display name, but a session can
  * outlive the project it belonged to (removed while the session was

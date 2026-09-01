@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useSnapshot } from "@/app/store";
 import type { Part } from "@/lib/domain/health";
 import { lightFor, overallHealth } from "@/lib/domain/health";
 import { latestInstallJob } from "@/lib/domain/jobs";
@@ -7,6 +6,7 @@ import type { EngineStatus, Problem } from "@/lib/ipc";
 import { engine, tools } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
 import type { Job } from "@/lib/proto";
+import { useSnapshot } from "@/store/use-snapshot";
 
 const PARTS: { key: Part; label: string }[] = [
   { key: "wsl", label: "WSL" },

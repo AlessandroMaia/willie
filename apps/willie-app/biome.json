@@ -73,6 +73,34 @@
       }
     },
     {
+      "includes": ["src/store/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/features/*",
+                      "@/components/*",
+                      "@/plugins/*",
+                      "**/app/**",
+                      "**/features/**",
+                      "**/components/**",
+                      "**/plugins/**"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["src/components/**"],
       "linter": {
         "rules": {
@@ -109,12 +137,10 @@
                 "patterns": [
                   {
                     "group": [
-                      "@/app/app",
-                      "@/app/routes",
+                      "@/app/*",
                       "@/features/sessions/*",
                       "@/features/health/*",
-                      "**/app/app",
-                      "**/app/routes",
+                      "**/app/**",
                       "../sessions/**",
                       "../health/**",
                       "**/features/sessions/**",
@@ -139,12 +165,10 @@
                 "patterns": [
                   {
                     "group": [
-                      "@/app/app",
-                      "@/app/routes",
+                      "@/app/*",
                       "@/features/projects/*",
                       "@/features/health/*",
-                      "**/app/app",
-                      "**/app/routes",
+                      "**/app/**",
                       "../projects/**",
                       "../health/**",
                       "**/features/projects/**",
@@ -169,12 +193,10 @@
                 "patterns": [
                   {
                     "group": [
-                      "@/app/app",
-                      "@/app/routes",
+                      "@/app/*",
                       "@/features/projects/*",
                       "@/features/sessions/*",
-                      "**/app/app",
-                      "**/app/routes",
+                      "**/app/**",
                       "../projects/**",
                       "../sessions/**",
                       "**/features/projects/**",
