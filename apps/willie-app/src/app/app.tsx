@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { ROUTES } from "@/app/routes";
+import { ROUTES, type Route } from "@/app/routes";
 
 export function App() {
-  const [active, setActive] = useState(ROUTES[0]?.id ?? "");
+  const [active, setActive] = useState<Route["id"]>(
+    ROUTES[0]?.id ?? "dashboard",
+  );
   const route = ROUTES.find((r) => r.id === active) ?? ROUTES[0];
   const Screen = route?.screen;
   return (
