@@ -3,7 +3,8 @@ import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import type { Problem } from "@/lib/ipc";
-import { isProblem, onSessionOutput, sessionTerminal } from "@/lib/ipc";
+import { onSessionOutput, sessionTerminal } from "@/lib/ipc";
+import { asProblem } from "@/lib/problem";
 
 interface SessionTerminalProps {
   id: string;
@@ -51,13 +52,7 @@ export function SessionTerminal({ id, title }: SessionTerminalProps) {
         else unlisten = fn;
       })
       .catch((error: unknown) => {
-        if (!cancelled) {
-          setProblem(
-            isProblem(error)
-              ? error
-              : { code: "unknown", message: String(error), remediation: "" },
-          );
-        }
+        if (!cancelled) setProblem(asProblem(error));
       });
 
     term.onData((data) => {
@@ -74,13 +69,7 @@ export function SessionTerminal({ id, title }: SessionTerminalProps) {
         reportResize();
       })
       .catch((error: unknown) => {
-        if (!cancelled) {
-          setProblem(
-            isProblem(error)
-              ? error
-              : { code: "unknown", message: String(error), remediation: "" },
-          );
-        }
+        if (!cancelled) setProblem(asProblem(error));
       });
 
     return () => {

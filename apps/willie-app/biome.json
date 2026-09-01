@@ -109,10 +109,12 @@
                 "patterns": [
                   {
                     "group": [
-                      "@/app/*",
+                      "@/app/app",
+                      "@/app/routes",
                       "@/features/sessions/*",
                       "@/features/health/*",
-                      "**/app/**",
+                      "**/app/app",
+                      "**/app/routes",
                       "../sessions/**",
                       "../health/**",
                       "**/features/sessions/**",
@@ -137,10 +139,12 @@
                 "patterns": [
                   {
                     "group": [
-                      "@/app/*",
+                      "@/app/app",
+                      "@/app/routes",
                       "@/features/projects/*",
                       "@/features/health/*",
-                      "**/app/**",
+                      "**/app/app",
+                      "**/app/routes",
                       "../projects/**",
                       "../health/**",
                       "**/features/projects/**",
@@ -165,10 +169,12 @@
                 "patterns": [
                   {
                     "group": [
-                      "@/app/*",
+                      "@/app/app",
+                      "@/app/routes",
                       "@/features/projects/*",
                       "@/features/sessions/*",
-                      "**/app/**",
+                      "**/app/app",
+                      "**/app/routes",
                       "../projects/**",
                       "../sessions/**",
                       "**/features/projects/**",

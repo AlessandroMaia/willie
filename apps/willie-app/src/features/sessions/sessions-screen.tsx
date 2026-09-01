@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
+import { useSnapshot } from "@/app/store";
 import { SessionTerminal } from "@/features/sessions/session-terminal";
 import {
   liveSessions,
@@ -7,21 +8,10 @@ import {
   TERMINAL_HISTORY_LIMIT,
   type Tone,
 } from "@/lib/domain/sessions";
-import { applyEvent, needsResnapshot } from "@/lib/domain/state";
 import type { Problem } from "@/lib/ipc";
-import {
-  isProblem,
-  onDaemonEvent,
-  projects as projectsApi,
-  sessions as sessionsApi,
-} from "@/lib/ipc";
+import { sessions as sessionsApi } from "@/lib/ipc";
+import { asProblem } from "@/lib/problem";
 import type { Session, SessionState, Snapshot } from "@/lib/proto";
-
-function asProblem(error: unknown): Problem {
-  return isProblem(error)
-    ? error
-    : { code: "unknown", message: String(error), remediation: "" };
-}
 
 /* Every row needs the owning project's display name, but a session can
  * outlive the project it belonged to (removed while the session was
@@ -166,53 +156,14 @@ function RecentRow({ session, projectName }: RecentRowProps) {
 }
 
 export function SessionsScreen() {
-  const [snap, setSnap] = useState<Snapshot | null>(null);
-  const snapRef = useRef<Snapshot | null>(null);
-  const [problem, setProblem] = useState<Problem | null>(null);
+  const store = useSnapshot();
+  const snap = store.status === "ready" ? store.snapshot : null;
+  const problem = store.status === "failed" ? store.problem : null;
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rowProblems, setRowProblems] = useState<Map<string, Problem>>(
     new Map(),
   );
   const [openId, setOpenId] = useState<string | null>(null);
-
-  const loadSnapshot = useCallback(() => {
-    projectsApi
-      .snapshot()
-      .then((next) => {
-        snapRef.current = next;
-        setSnap(next);
-        setProblem(null);
-      })
-      .catch((error: unknown) => setProblem(asProblem(error)));
-  }, []);
-
-  useEffect(() => {
-    loadSnapshot();
-  }, [loadSnapshot]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    onDaemonEvent((ev) => {
-      const current = snapRef.current;
-      if (current === null || needsResnapshot(current, ev)) {
-        loadSnapshot();
-        return;
-      }
-      const next = applyEvent(current, ev);
-      snapRef.current = next;
-      setSnap(next);
-    })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch((error: unknown) => setProblem(asProblem(error)));
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [loadSnapshot]);
 
   function setRowProblem(sessionId: string, problem: Problem | null) {
     setRowProblems((prev) => {

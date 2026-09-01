@@ -1,16 +1,12 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useSnapshot } from "@/app/store";
 import { latestJobFor } from "@/lib/domain/jobs";
 import { isLive, liveCount } from "@/lib/domain/sessions";
-import { applyEvent, needsResnapshot } from "@/lib/domain/state";
 import type { Problem } from "@/lib/ipc";
-import {
-  isProblem,
-  onDaemonEvent,
-  projects as projectsApi,
-  sessions as sessionsApi,
-} from "@/lib/ipc";
-import type { Candidate, Job, JobKind, Project, Snapshot } from "@/lib/proto";
+import { projects as projectsApi, sessions as sessionsApi } from "@/lib/ipc";
+import { asProblem } from "@/lib/problem";
+import type { Candidate, Job, JobKind, Project } from "@/lib/proto";
 
 function wslPathFor(slug: string): string {
   return `\\\\wsl.localhost\\willie\\home\\willie\\projects\\${slug}`;
@@ -39,12 +35,6 @@ function projectJobId(job: Job): string {
   const id = job.project_id;
   if (id === undefined) throw new Error(`job ${job.id} has no project_id`);
   return id;
-}
-
-function asProblem(error: unknown): Problem {
-  return isProblem(error)
-    ? error
-    : { code: "unknown", message: String(error), remediation: "" };
 }
 
 interface StateChipProps {
@@ -102,9 +92,10 @@ function StateChip({ project, job, onRetry }: StateChipProps) {
 }
 
 export function ProjectsScreen() {
-  const [snap, setSnap] = useState<Snapshot | null>(null);
-  const snapRef = useRef<Snapshot | null>(null);
-  const [problem, setProblem] = useState<Problem | null>(null);
+  const store = useSnapshot();
+  const snap = store.status === "ready" ? store.snapshot : null;
+  const [local, setLocal] = useState<Problem | null>(null);
+  const problem = local ?? (store.status === "failed" ? store.problem : null);
   const [roots, setRoots] = useState<string[]>([]);
   const [newRoot, setNewRoot] = useState("");
   const [addPath, setAddPath] = useState("");
@@ -144,91 +135,45 @@ export function ProjectsScreen() {
     new Map(),
   );
 
-  const loadSnapshot = useCallback(() => {
-    projectsApi
-      .snapshot()
-      .then((next) => {
-        snapRef.current = next;
-        setSnap(next);
-        /* A resnapshot can be the only place a removal is ever
-         * observed (a missed `project_removed` event forces a full
-         * refetch instead of an incremental apply), so prune
-         * `removeAttempts` here too, against the fresh project list. */
-        const liveIds = new Set(next.projects.map((p) => p.id));
-        setRemoveAttempts((prev) => {
-          const stale = [...prev.keys()].filter((id) => !liveIds.has(id));
-          if (stale.length === 0) return prev;
-          const pruned = new Map(prev);
-          for (const id of stale) pruned.delete(id);
-          return pruned;
-        });
-      })
-      .catch((error: unknown) => setProblem(asProblem(error)));
-  }, []);
+  /* A resnapshot can be the only place a removal is ever observed (a
+   * missed `project_removed` event forces the store to refetch instead
+   * of an incremental apply), so prune `removeAttempts` whenever the
+   * snapshot changes, against the fresh project list — not only when
+   * this component happens to see the removal event go by. */
+  useEffect(() => {
+    if (!snap) return;
+    const liveIds = new Set(snap.projects.map((p) => p.id));
+    setRemoveAttempts((prev) => {
+      const stale = [...prev.keys()].filter((id) => !liveIds.has(id));
+      if (stale.length === 0) return prev;
+      const pruned = new Map(prev);
+      for (const id of stale) pruned.delete(id);
+      return pruned;
+    });
+  }, [snap]);
 
   const loadRoots = useCallback(() => {
     projectsApi
       .roots()
       .then(setRoots)
-      .catch((error: unknown) => setProblem(asProblem(error)));
+      .catch((error: unknown) => setLocal(asProblem(error)));
   }, []);
 
   useEffect(() => {
-    loadSnapshot();
     loadRoots();
-  }, [loadSnapshot, loadRoots]);
-
-  /* `applyEvent`/`needsResnapshot` are pure, so the decision to fold an
-   * event in place versus re-fetching lives here, next to the only
-   * mutable copy of the snapshot; `snapRef` lets the handler read the
-   * latest value synchronously without re-subscribing on every apply. */
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    onDaemonEvent((ev) => {
-      const current = snapRef.current;
-      if (current === null || needsResnapshot(current, ev)) {
-        loadSnapshot();
-        return;
-      }
-      const next = applyEvent(current, ev);
-      snapRef.current = next;
-      setSnap(next);
-      /* `removeAttempts` remembers a choice per project id only for as
-       * long as `forceRemoveJob` might need it; once the project is
-       * gone there is nothing left to force-remove, so drop the entry
-       * here rather than let the map grow for the rest of the session. */
-      if (ev.kind === "project_removed") {
-        setRemoveAttempts((prev) => {
-          if (!prev.has(ev.id)) return prev;
-          const next = new Map(prev);
-          next.delete(ev.id);
-          return next;
-        });
-      }
-    })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch((error: unknown) => setProblem(asProblem(error)));
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [loadSnapshot]);
+  }, [loadRoots]);
 
   async function run(
     id: string,
     action: () => Promise<unknown>,
   ): Promise<boolean> {
     setBusyId(id);
-    setProblem(null);
+    setLocal(null);
     try {
       await action();
       return true;
     } catch (error) {
-      setProblem(asProblem(error));
+      setLocal(asProblem(error));
       return false;
     } finally {
       setBusyId(null);
@@ -293,13 +238,13 @@ export function ProjectsScreen() {
 
   async function runDiscover() {
     setDiscovering(true);
-    setProblem(null);
+    setLocal(null);
     try {
       const found = await projectsApi.discover();
       setCandidates(found);
       setSelected(new Set());
     } catch (error) {
-      setProblem(asProblem(error));
+      setLocal(asProblem(error));
     } finally {
       setDiscovering(false);
     }
@@ -318,7 +263,7 @@ export function ProjectsScreen() {
     const paths = Array.from(selected);
     if (paths.length === 0) return;
     setBusyId("add-selected");
-    setProblem(null);
+    setLocal(null);
     const failures: string[] = [];
     for (const path of paths) {
       try {
@@ -329,7 +274,7 @@ export function ProjectsScreen() {
     }
     setBusyId(null);
     if (failures.length > 0) {
-      setProblem({
+      setLocal({
         code: "add_failed",
         message: failures.join("; "),
         remediation: "",
