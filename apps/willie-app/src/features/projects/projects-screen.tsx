@@ -1,19 +1,22 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { useCallback, useEffect, useState } from "react";
 import { ProblemAlert } from "@/components/problem-alert";
+import { DiscoverPanel } from "@/features/projects/discover-panel";
+import { ProjectRow } from "@/features/projects/project-row";
+import { RelocateProjectDialog } from "@/features/projects/relocate-project-dialog";
+import { RemoveProjectDialog } from "@/features/projects/remove-project-dialog";
+import { RootsPanel } from "@/features/projects/roots-panel";
 import { latestJobFor } from "@/lib/domain/jobs";
 import { isLive, liveCount } from "@/lib/domain/sessions";
 import type { Problem } from "@/lib/ipc";
 import { projects as projectsApi, sessions as sessionsApi } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
-import type { Candidate, Job, JobKind, Project } from "@/lib/proto";
+import type { Candidate, Job, Project } from "@/lib/proto";
 import { useSnapshot } from "@/store/use-snapshot";
 
 function wslPathFor(slug: string): string {
   return `\\\\wsl.localhost\\willie\\home\\willie\\projects\\${slug}`;
 }
-
-const RETRYABLE_KINDS: JobKind[] = ["sync_to_windows", "update_from_windows"];
 
 /* A job carries no memory of the parameters that started it (a failed
  * `relocate` does not remember the path it tried), so only the kinds
@@ -38,60 +41,6 @@ function projectJobId(job: Job): string {
   return id;
 }
 
-interface StateChipProps {
-  project: Project;
-  job: Job | undefined;
-  onRetry: (job: Job) => void;
-}
-
-function StateChip({ project, job, onRetry }: StateChipProps) {
-  if (project.state.state === "failed") {
-    return (
-      <div className="chip chip-failed">
-        <code>{project.state.code}</code>
-        <span>{project.state.message}</span>
-        {project.state.remediation && (
-          <div className="muted">→ {project.state.remediation}</div>
-        )}
-      </div>
-    );
-  }
-  if (job && job.state.state === "failed") {
-    /* `workspace_dirty` only ever arrives this way: `project_remove`
-     * resolves the instant the job is queued, so the dirty-workspace
-     * refusal is never a promise rejection the confirm dialog can
-     * catch — it is a `job_changed` event, exactly like any other job
-     * outcome. The one-click "Remove anyway" re-submits with `force`,
-     * the same safe-resubmit shape as a plain retry. */
-    const forceRemove =
-      job.kind === "remove" && job.state.code === "workspace_dirty";
-    const canRetry = forceRemove || RETRYABLE_KINDS.includes(job.kind);
-    return (
-      <div className="chip chip-failed">
-        <code>{job.state.code}</code>
-        <span>{job.state.message}</span>
-        {job.state.remediation && (
-          <div className="muted">→ {job.state.remediation}</div>
-        )}
-        {canRetry && (
-          <button type="button" onClick={() => onRetry(job)}>
-            {forceRemove ? "Remove anyway" : "Retry"}
-          </button>
-        )}
-      </div>
-    );
-  }
-  if (project.state.state === "preparing" || job?.state.state === "running") {
-    return (
-      <div className="chip chip-busy">
-        <span className="spinner" aria-hidden="true" />
-        <span>{job?.log_tail || "working…"}</span>
-      </div>
-    );
-  }
-  return <span className="chip chip-ready">ready</span>;
-}
-
 export function ProjectsScreen() {
   const store = useSnapshot();
   const snap = store.snapshot;
@@ -113,7 +62,7 @@ export function ProjectsScreen() {
   /* The `deleteWorkspace` choice a remove submission used, remembered
    * per project so a later one-click "force" retry (from a
    * `workspace_dirty` job failure, surfaced only through
-   * `daemon://event` — see `StateChip`) resubmits with the same
+   * `daemon://event` — see `ProjectStateChip`) resubmits with the same
    * choice instead of asking the user again. */
   const [removeAttempts, setRemoveAttempts] = useState<Map<string, boolean>>(
     new Map(),
@@ -425,7 +374,7 @@ export function ProjectsScreen() {
    * queued, well before the daemon has actually looked at the
    * workspace. A `workspace_dirty` refusal is not a rejection this
    * `catch` will ever see: it lands later as a `job_changed` event and
-   * is surfaced on the project's row (see `StateChip` and
+   * is surfaced on the project's row (see `ProjectStateChip` and
    * `forceRemoveJob`), not here. Only a fast validation — the project
    * not existing, or a job already running for it — rejects
    * synchronously and keeps the dialog open to show it. */
@@ -467,7 +416,7 @@ export function ProjectsScreen() {
    * decided once the job diffs histories, so it is never a rejection
    * this `catch` sees — closing the dialog on synchronous acceptance
    * does not mean the relocate succeeded. That later `job_changed`
-   * failure is picked up by `latestJobFor`/`StateChip` on the row like
+   * failure is picked up by `latestJobFor`/`ProjectStateChip` on the row like
    * any other job outcome; `source_present` stays false (relocate only
    * updates it on success), so the row's "Relocate" badge is still
    * there for the user to try again — no separate one-click retry is
@@ -493,71 +442,24 @@ export function ProjectsScreen() {
 
       {problem && <ProblemAlert problem={problem} />}
 
-      <section className="roots">
-        <h2>Roots</h2>
-        <ul>
-          {roots.map((root) => (
-            <li key={root}>
-              <span>{root}</span>
-              <button type="button" onClick={() => removeRoot(root)}>
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-        <div className="actions">
-          <input
-            value={newRoot}
-            onChange={(e) => setNewRoot(e.target.value)}
-            placeholder="C:\github\..."
-            aria-label="new root"
-          />
-          <button
-            type="button"
-            disabled={newRoot.trim() === "" || busyId === "roots"}
-            onClick={addRoot}
-          >
-            Add root
-          </button>
-          <button type="button" disabled={discovering} onClick={runDiscover}>
-            {discovering ? "Discovering…" : "Discover"}
-          </button>
-        </div>
-      </section>
+      <RootsPanel
+        roots={roots}
+        newRoot={newRoot}
+        onNewRootChange={setNewRoot}
+        busy={busyId === "roots"}
+        onAdd={addRoot}
+        onRemove={removeRoot}
+        discovering={discovering}
+        onDiscover={runDiscover}
+      />
 
-      {candidates !== null && (
-        <section className="discover">
-          <h2>Discovered</h2>
-          {candidates.length === 0 ? (
-            <p className="muted">No repositories found under the roots.</p>
-          ) : (
-            <>
-              <ul>
-                {candidates.map((c) => (
-                  <li key={c.path} className="candidate">
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={selected.has(c.path)}
-                        onChange={() => toggleCandidate(c.path)}
-                      />
-                      {c.name}
-                      <span className="muted"> — {c.path}</span>
-                    </label>
-                  </li>
-                ))}
-              </ul>
-              <button
-                type="button"
-                disabled={selected.size === 0 || busyId === "add-selected"}
-                onClick={addSelected}
-              >
-                Add selected
-              </button>
-            </>
-          )}
-        </section>
-      )}
+      <DiscoverPanel
+        candidates={candidates}
+        selected={selected}
+        busy={busyId === "add-selected"}
+        onToggle={toggleCandidate}
+        onAddSelected={addSelected}
+      />
 
       <section className="add-project">
         <h2>Add by path</h2>
@@ -611,198 +513,57 @@ export function ProjectsScreen() {
             );
             const canResume = live === 0 && hasFinishedSession;
             return (
-              <div key={project.id} className="project-row">
-                <div className="project-row-main">
-                  {isEditing ? (
-                    <span className="rename">
-                      <input
-                        value={editingName}
-                        onChange={(e) => setEditingName(e.target.value)}
-                        aria-label="project name"
-                      />
-                      <button type="button" onClick={() => saveRename(project)}>
-                        Save
-                      </button>
-                      <button type="button" onClick={cancelRename}>
-                        Cancel
-                      </button>
-                    </span>
-                  ) : (
-                    <span className="project-name">
-                      <strong>{project.name}</strong>
-                      <button
-                        type="button"
-                        onClick={() => startRename(project)}
-                      >
-                        Rename
-                      </button>
-                    </span>
-                  )}
-                  <StateChip project={project} job={job} onRetry={retry} />
-                  {live > 0 && (
-                    <span
-                      className="badge badge-live"
-                      title={`${live} live session${live === 1 ? "" : "s"}`}
-                    >
-                      {live} live
-                    </span>
-                  )}
-                </div>
-
-                <div className="project-row-detail muted">
-                  <div>source: {project.source}</div>
-                  <div>
-                    workspace: <code>{path}</code>
-                    <button type="button" onClick={() => copyPath(path)}>
-                      Copy
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => openInExplorer(project, path)}
-                    >
-                      Open in Explorer
-                    </button>
-                  </div>
-                  <div>branch: {project.branch}</div>
-                  {!project.source_present && (
-                    <div className="badge badge-warning">
-                      source missing
-                      <button
-                        type="button"
-                        onClick={() => openRelocateDialog(project)}
-                      >
-                        Relocate
-                      </button>
-                    </div>
-                  )}
-                </div>
-
-                {rowProblem && <ProblemAlert problem={rowProblem} />}
-
-                {openNotice && (
-                  <ProblemAlert problem={openNotice} tone="notice" />
-                )}
-
-                <div className="actions">
-                  <button
-                    type="button"
-                    disabled={
-                      isBusy || project.state.state !== "ready" || jobRunning
-                    }
-                    onClick={() => openSession(project)}
-                  >
-                    Open session
-                  </button>
-                  <button
-                    type="button"
-                    disabled={
-                      isBusy ||
-                      project.state.state !== "ready" ||
-                      jobRunning ||
-                      !canResume
-                    }
-                    onClick={() => resumeSession(project)}
-                  >
-                    Resume
-                  </button>
-                  <button
-                    type="button"
-                    disabled={
-                      isBusy || project.state.state !== "ready" || jobRunning
-                    }
-                    onClick={() => syncToWindows(project)}
-                  >
-                    Send to Windows
-                  </button>
-                  <button
-                    type="button"
-                    disabled={
-                      isBusy || project.state.state !== "ready" || jobRunning
-                    }
-                    onClick={() => updateFromWindows(project)}
-                  >
-                    Update from Windows
-                  </button>
-                  {job && jobRunning && (
-                    <button type="button" onClick={() => cancelJobFor(job)}>
-                      Cancel
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => openRemoveDialog(project)}
-                  >
-                    Remove
-                  </button>
-                  {isBusy && <span className="muted">working…</span>}
-                </div>
-              </div>
+              <ProjectRow
+                key={project.id}
+                project={project}
+                job={job}
+                isEditing={isEditing}
+                editingName={editingName}
+                isBusy={isBusy}
+                jobRunning={jobRunning}
+                path={path}
+                rowProblem={rowProblem}
+                openNotice={openNotice}
+                live={live}
+                canResume={canResume}
+                onEditingNameChange={setEditingName}
+                onStartRename={() => startRename(project)}
+                onSaveRename={() => saveRename(project)}
+                onCancelRename={cancelRename}
+                onRetry={retry}
+                onCopyPath={() => copyPath(path)}
+                onOpenInExplorer={() => openInExplorer(project, path)}
+                onOpenRelocateDialog={() => openRelocateDialog(project)}
+                onOpenSession={() => openSession(project)}
+                onResumeSession={() => resumeSession(project)}
+                onSyncToWindows={() => syncToWindows(project)}
+                onUpdateFromWindows={() => updateFromWindows(project)}
+                onCancelJob={cancelJobFor}
+                onOpenRemoveDialog={() => openRemoveDialog(project)}
+              />
             );
           })
         )}
       </section>
 
-      {removing && (
-        <div className="modal-backdrop">
-          <div className="modal" role="dialog" aria-modal="true">
-            <h2>Remove “{removing.name}”?</h2>
-            <label>
-              <input
-                type="checkbox"
-                checked={deleteWorkspace}
-                onChange={(e) => setDeleteWorkspace(e.target.checked)}
-              />
-              Delete the workspace clone too
-            </label>
-            {removeProblem && <ProblemAlert problem={removeProblem} />}
-            <p className="muted">
-              A workspace with uncommitted changes is refused; if that happens
-              the project's row will offer a one-click "Remove anyway" once the
-              daemon reports it.
-            </p>
-            <div className="actions">
-              <button type="button" onClick={confirmRemove}>
-                Remove
-              </button>
-              <button type="button" onClick={closeRemoveDialog}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <RemoveProjectDialog
+        project={removing}
+        deleteWorkspace={deleteWorkspace}
+        problem={removeProblem}
+        onToggleWorkspace={setDeleteWorkspace}
+        onConfirm={confirmRemove}
+        onCancel={closeRemoveDialog}
+      />
 
-      {relocating && (
-        <div className="modal-backdrop">
-          <div className="modal" role="dialog" aria-modal="true">
-            <h2>Relocate “{relocating.name}”</h2>
-            <div className="actions">
-              <input
-                value={relocatePath}
-                onChange={(e) => setRelocatePath(e.target.value)}
-                placeholder="C:\github\..."
-                aria-label="new source path"
-              />
-              <button type="button" onClick={pickRelocateFolder}>
-                Browse…
-              </button>
-            </div>
-            {relocateProblem && <ProblemAlert problem={relocateProblem} />}
-            <div className="actions">
-              <button
-                type="button"
-                disabled={relocatePath.trim() === ""}
-                onClick={confirmRelocate}
-              >
-                Relocate
-              </button>
-              <button type="button" onClick={closeRelocateDialog}>
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <RelocateProjectDialog
+        project={relocating}
+        path={relocatePath}
+        problem={relocateProblem}
+        onPathChange={setRelocatePath}
+        onBrowse={pickRelocateFolder}
+        onConfirm={confirmRelocate}
+        onCancel={closeRelocateDialog}
+      />
     </main>
   );
 }
