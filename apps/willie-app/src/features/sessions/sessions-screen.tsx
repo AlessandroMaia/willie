@@ -1,18 +1,17 @@
 import { useState } from "react";
 import { ProblemAlert } from "@/components/problem-alert";
 import { relativeTime } from "@/components/relative-time";
+import { SessionStateBadge } from "@/features/sessions/session-state-badge";
 import { SessionTerminal } from "@/features/sessions/session-terminal";
 import {
   liveSessions,
   recentTerminal,
-  stateChip,
   TERMINAL_HISTORY_LIMIT,
-  type Tone,
 } from "@/lib/domain/sessions";
 import type { Problem } from "@/lib/ipc";
 import { sessions as sessionsApi } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
-import type { Session, SessionState, Snapshot } from "@/lib/proto";
+import type { Session, Snapshot } from "@/lib/proto";
 import { useSnapshot } from "@/store/use-snapshot";
 
 /* Every row needs the owning project's display name, but a session can
@@ -22,42 +21,6 @@ import { useSnapshot } from "@/store/use-snapshot";
 function projectNameFor(snap: Snapshot, projectId: string): string {
   const project = snap.projects.find((p) => p.id === projectId);
   return project ? project.name : `removed project (${projectId})`;
-}
-
-const TONE_CLASS: Record<Tone, string> = {
-  ok: "ready",
-  pending: "busy",
-  error: "failed",
-  muted: "muted",
-};
-
-interface SessionChipProps {
-  state: SessionState;
-}
-
-/* Mirrors `ProjectStateChip`: a failed state carries its own
- * code, message and remediation, so it renders as the same stacked
- * chip-failed shape; every other state is a single-line pill. */
-function SessionChip({ state }: SessionChipProps) {
-  const { label, tone } = stateChip(state);
-  const cls = `chip chip-${TONE_CLASS[tone]}`;
-  if (state.state === "failed") {
-    return (
-      <div className={cls}>
-        <code>{label}</code>
-        <span>{state.message}</span>
-        {state.remediation && (
-          <div className="muted">→ {state.remediation}</div>
-        )}
-      </div>
-    );
-  }
-  return (
-    <span className={cls}>
-      {tone === "pending" && <span className="spinner" aria-hidden="true" />}
-      {label}
-    </span>
-  );
 }
 
 interface LiveRowProps {
@@ -83,7 +46,7 @@ function LiveRow({
     <div className="session-row">
       <div className="session-row-main">
         <strong>{projectName}</strong>
-        <SessionChip state={session.state} />
+        <SessionStateBadge state={session.state} />
       </div>
       <div className="session-row-detail muted">
         <div>harness: {session.harness}</div>
@@ -121,7 +84,7 @@ function RecentRow({ session, projectName }: RecentRowProps) {
     <div className="session-row session-row-recent">
       <div className="session-row-main">
         <strong>{projectName}</strong>
-        <SessionChip state={session.state} />
+        <SessionStateBadge state={session.state} />
       </div>
       <div className="session-row-detail muted">
         <div>harness: {session.harness}</div>

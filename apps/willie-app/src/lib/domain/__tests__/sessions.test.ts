@@ -4,7 +4,6 @@ import {
   liveCount,
   liveSessions,
   recentTerminal,
-  stateChip,
 } from "@/lib/domain/sessions";
 import type { Session } from "@/lib/proto";
 
@@ -81,29 +80,5 @@ describe("session helpers", () => {
       "f-mid",
       "f-old",
     ]);
-  });
-
-  it("maps each state to a label and a tone", () => {
-    expect(stateChip({ state: "running" })).toEqual({
-      label: "running",
-      tone: "ok",
-    });
-    expect(
-      stateChip({
-        state: "failed",
-        code: "supervisor_lost",
-        message: "m",
-        remediation: "r",
-      }).tone,
-    ).toBe("error");
-    expect(
-      stateChip({ state: "exited", code: 0, signal: null }).label,
-    ).toContain("exited");
-  });
-
-  it("marks a signal-terminated exit as an error, not a clean exit", () => {
-    const chip = stateChip({ state: "exited", code: null, signal: 9 });
-    expect(chip.label).toContain("signal");
-    expect(chip.tone).toBe("error");
   });
 });

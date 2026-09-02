@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ProblemAlert } from "@/components/problem-alert";
 import type { Part } from "@/lib/domain/health";
-import { lightFor, overallHealth } from "@/lib/domain/health";
+import { type Health, healthFor, overallHealth } from "@/lib/domain/health";
 import { latestInstallJob } from "@/lib/domain/jobs";
 import type { EngineStatus, Problem } from "@/lib/ipc";
 import { engine, tools } from "@/lib/ipc";
@@ -15,6 +15,13 @@ const PARTS: { key: Part; label: string }[] = [
   { key: "daemon", label: "Daemon" },
   { key: "doctor", label: "Doctor" },
 ];
+
+/* Bridge to the old stylesheet until Task 7 rebuilds this screen. */
+const LIGHT_CLASS: Record<Health, string> = {
+  ok: "light-green",
+  degraded: "light-yellow",
+  failed: "light-red",
+};
 
 export function DashboardScreen() {
   const [status, setStatus] = useState<EngineStatus | null>(null);
@@ -102,7 +109,7 @@ export function DashboardScreen() {
       <header>
         <h1>Willie</h1>
         <span
-          className={`light light-${overall}`}
+          className={`light ${LIGHT_CLASS[overall]}`}
           role="img"
           aria-label={`overall ${overall}`}
         />
@@ -118,7 +125,7 @@ export function DashboardScreen() {
       <section className="lights">
         {PARTS.map(({ key, label }) => (
           <div key={key} className="light-row">
-            <span className={`light light-${lightFor(key, status)}`} />
+            <span className={`light ${LIGHT_CLASS[healthFor(key, status)]}`} />
             <strong>{label}</strong>
             <span className="muted">{describe(key, status)}</span>
           </div>
