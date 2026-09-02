@@ -10,6 +10,7 @@ use std::{
 
 use serde_json::Value;
 use willie_core::id::JobId;
+use willie_harness::Harness;
 use willie_proto::{
     PROTOCOL_VERSION,
     daemon::{DoctorReport, Health, Hello, HelloReply},
@@ -37,6 +38,12 @@ fn invalid_params(e: impl std::fmt::Display) -> RpcError {
 /// remediation. One place so every project method reports the same shape.
 fn op_error(e: crate::projects::OpError) -> RpcError {
     RpcError::new(&e.code, e.message).with_remediation(e.remediation)
+}
+
+/// Maps a `CapabilityError` onto the wire error, the same two codes the
+/// session-create path reports for the same two refusals.
+fn capability_error(e: willie_core::sandbox::CapabilityError) -> RpcError {
+    RpcError::new(e.code(), e.to_string()).with_remediation(e.remediation())
 }
 
 /// Recovers a poisoned lock instead of panicking: one worker's panic must
@@ -188,6 +195,34 @@ pub fn session_stop(ops: &SessionOps, p: Value) -> Result<Value, RpcError> {
 pub fn session_list(ops: &SessionOps) -> Result<Value, RpcError> {
     serde_json::to_value(willie_proto::session::SessionList {
         sessions: ops.list(),
+    })
+    .map_err(internal)
+}
+
+/// What a session for this project would run under, without starting
+/// one: the same two layers `session.create` resolves, reported row by
+/// row. Answers `project_not_found` for an unknown id, the same code
+/// every other project method uses.
+pub fn sandbox_explain(
+    state: &Mutex<State>,
+    p: Value,
+) -> Result<Value, RpcError> {
+    let willie_proto::sandbox::ExplainParams { project_id } =
+        serde_json::from_value(p).map_err(invalid_params)?;
+    let project = lock(state)
+        .projects
+        .get(&project_id)
+        .cloned()
+        .ok_or_else(|| op_error(crate::projects::not_found_err(project_id)))?;
+    let defaults = crate::harness::claude().default_capabilities();
+    let capabilities =
+        willie_core::sandbox::resolve(defaults.clone(), &project.sandbox)
+            .map_err(capability_error)?;
+    let entries = willie_core::sandbox::explain(defaults, &project.sandbox)
+        .map_err(capability_error)?;
+    serde_json::to_value(willie_proto::sandbox::ExplainResult {
+        entries,
+        capabilities,
     })
     .map_err(internal)
 }

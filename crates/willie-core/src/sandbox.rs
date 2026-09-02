@@ -83,16 +83,18 @@ impl Capability {
             Self::CachesRw => {
                 "package downloads survive between this project's sessions"
             }
-            Self::GitIdentity => "commits carry your name and address",
+            Self::GitIdentity => "commits carry the user's name and address",
             Self::ExtraPaths => {
-                "every entry is reach outside the project, and is recorded \
+                "each entry reaches outside the project, and is recorded \
                  in the session"
             }
             Self::HomePersistent => {
                 "the home directory survives the session instead of being \
                  discarded with it"
             }
-            Self::Ssh => "the agent can use your ssh keys and agent socket",
+            Self::Ssh => {
+                "the agent can use the user's ssh keys and agent socket"
+            }
             Self::MntAll => "the agent reaches every Windows drive",
             Self::WindowsInterop => {
                 "the agent runs Windows programs: towards Windows this is \
@@ -235,7 +237,8 @@ impl CapabilityError {
 /// Merges layer 1 (the harness defaults) with layer 2 (the project
 /// profile). Authority increases, so the profile wins where it speaks,
 /// with one exception: `project.rw` is the session itself and cannot be
-/// taken away.
+/// taken away. `extra_paths` does not merge at all: it comes from the
+/// profile alone and is never inherited from layer 1, which has none.
 ///
 /// Every refusal happens here, in the daemon, before any process
 /// exists: a policy that cannot be applied must not become a session
@@ -273,6 +276,81 @@ pub fn resolve(
     })
 }
 
+/// Where a capability's value came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    /// The harness decided it.
+    Default,
+    /// The project's profile spoke.
+    Profile,
+    /// This version cannot apply it at all.
+    Unavailable,
+}
+
+/// One row of `sandbox explain`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Explained {
+    pub capability: Capability,
+    pub enabled: bool,
+    pub source: Source,
+}
+
+/// What a session for this project would run under, capability by
+/// capability, in the order the UI lists them. Resolves first, so a
+/// profile that cannot be applied is refused here exactly as it is at
+/// `session.create`.
+pub fn explain(
+    defaults: CapabilitySet,
+    profile: &SandboxProfile,
+) -> Result<Vec<Explained>, CapabilityError> {
+    let resolved = resolve(defaults, profile)?;
+
+    Ok(Capability::ALL
+        .iter()
+        .map(|&capability| {
+            let (enabled, spoken) = match capability {
+                Capability::ProjectRw => (resolved.project_rw, false),
+                Capability::AgentState => {
+                    (resolved.agent_state, profile.agent_state.is_some())
+                }
+                Capability::ToolsRo => {
+                    (resolved.tools_ro, profile.tools_ro.is_some())
+                }
+                Capability::CachesRw => {
+                    (resolved.caches_rw, profile.caches_rw.is_some())
+                }
+                Capability::GitIdentity => {
+                    (resolved.git_identity, profile.git_identity.is_some())
+                }
+                Capability::ExtraPaths => (
+                    !resolved.extra_paths.is_empty(),
+                    !profile.extra_paths.is_empty(),
+                ),
+                Capability::HomePersistent
+                | Capability::Ssh
+                | Capability::MntAll
+                | Capability::WindowsInterop => (false, false),
+            };
+            let source = if capability.is_implemented() {
+                if spoken {
+                    Source::Profile
+                } else {
+                    Source::Default
+                }
+            } else {
+                Source::Unavailable
+            };
+
+            Explained {
+                capability,
+                enabled,
+                source,
+            }
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,6 +364,66 @@ mod tests {
             git_identity: true,
             extra_paths: Vec::new(),
         }
+    }
+
+    fn row(rows: &[Explained], c: Capability) -> &Explained {
+        rows.iter()
+            .find(|r| r.capability == c)
+            .unwrap_or_else(|| panic!("{} missing", c.display_name()))
+    }
+
+    #[test]
+    fn explain_reports_a_default_and_an_override_apart() {
+        let profile = SandboxProfile {
+            agent_state: Some(false),
+            ..SandboxProfile::default()
+        };
+
+        let rows = explain(defaults(), &profile).unwrap();
+
+        let credential = row(&rows, Capability::AgentState);
+        assert!(!credential.enabled);
+        assert_eq!(credential.source, Source::Profile);
+
+        let tools = row(&rows, Capability::ToolsRo);
+        assert!(tools.enabled);
+        assert_eq!(tools.source, Source::Default);
+    }
+
+    /// A capability this version cannot apply is not "off": off invites
+    /// switching it on. It is unavailable, and it is listed so that what
+    /// is coming is visible without being offered.
+    #[test]
+    fn explain_lists_a_deferred_capability_as_unavailable() {
+        let rows = explain(defaults(), &SandboxProfile::default()).unwrap();
+
+        let ssh = row(&rows, Capability::Ssh);
+        assert!(!ssh.enabled);
+        assert_eq!(ssh.source, Source::Unavailable);
+    }
+
+    #[test]
+    fn explain_reports_every_capability_once_in_declaration_order() {
+        let rows = explain(defaults(), &SandboxProfile::default()).unwrap();
+
+        let listed: Vec<Capability> =
+            rows.iter().map(|r| r.capability).collect();
+
+        assert_eq!(listed, Capability::ALL);
+    }
+
+    /// The same refusal the create path gives: one condition, one code.
+    #[test]
+    fn explain_refuses_a_profile_that_cannot_resolve() {
+        let profile = SandboxProfile {
+            ssh: Some(true),
+            ..SandboxProfile::default()
+        };
+
+        assert_eq!(
+            explain(defaults(), &profile).unwrap_err(),
+            CapabilityError::Unsupported(Capability::Ssh)
+        );
     }
 
     #[test]

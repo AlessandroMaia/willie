@@ -13,6 +13,7 @@ pub mod hostterm;
 pub mod job;
 pub mod project;
 pub mod rpc;
+pub mod sandbox;
 pub mod session;
 pub mod state;
 pub mod supervisor;

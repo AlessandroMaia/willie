@@ -124,6 +124,24 @@ guards; the existing `project_not_found`/`project_not_ready`/
 `project_busy`/`harness_not_installed` guards apply to a resume request
 unchanged.
 
+## `sandbox.*`
+| Method | Params | Result |
+| --- | --- | --- |
+| `sandbox.explain` | `ExplainParams { project_id }` | `ExplainResult { entries: [Explained], capabilities }` |
+
+Reports what a session for `project_id` would run under, without
+starting one: the same two layers `session.create` resolves
+(`willie_core::sandbox::resolve`), reported row by row. `entries` is
+one `Explained { capability, enabled, source }` per `Capability`, in
+`Capability::ALL` order; `source` is `default` (the harness decided
+it), `profile` (the project's profile spoke) or `unavailable` (this
+version cannot apply it at all). `capabilities` is the same resolved
+`CapabilitySet` `session.create` would write into the spec. An unknown
+`project_id` fails with `project_not_found`; a profile that cannot
+resolve fails with the same `sandbox_capability_unsupported` /
+`sandbox_profile_invalid` codes `session.create` uses (see Session and
+tool codes below).
+
 ## `tool.*`
 | Method | Params | Result |
 | --- | --- | --- |
@@ -206,7 +224,7 @@ to the same add/relocate flow as the codes around it.
 | `source_detached_head` | `project.add`'s fast validation reads the source's current branch and finds `HEAD` itself, no branch checked out | the source is on a branch that later turns out to differ from the workspace's — that is `windows_branch_mismatch`, only seen at sync time | check out a branch in the Windows checkout, then add again |
 | `project_exists` | `project.add`'s source matches an already-registered project's source, compared case-insensitively with a trailing separator ignored | the *workspace directory* for the derived slug already exists but no project references it — that is `workspace_exists` | this checkout is already registered; use its existing row instead of adding it again |
 | `workspace_exists` | `project.add` derives a slug for the workspace and a directory of that name already exists under `/home/willie/projects/` | the same checkout is already a registered project — that is `project_exists`, checked first | delete the kept workspace directory the message names (`rm -rf` inside the distribution), moving it aside first if it still holds work you want, then add the checkout again |
-| `project_not_found` | any `project.*` method (`remove`, `sync_to_windows`, `update_from_windows`, `relocate`, `rename`), or `session.create`, names an id no longer in the daemon's state | the id is valid but a job is already running for it — that is `project_busy` | check the project id and try again; a stale UI should re-snapshot first |
+| `project_not_found` | any `project.*` method (`remove`, `sync_to_windows`, `update_from_windows`, `relocate`, `rename`), or `session.create`/`sandbox.explain`, names an id no longer in the daemon's state | the id is valid but a job is already running for it — that is `project_busy` | check the project id and try again; a stale UI should re-snapshot first |
 | `project_busy` | a `project.*` operation that starts a job is called while that project already has one job running — one job per project at a time | the daemon's 3-job pool is full but this project is idle — that job is queued, not refused; `project_busy` is per project | wait for the current job to finish, or cancel it with `job.cancel` |
 | `sessions_running` | `project.remove` is called while the project has at least one session in `running` or `stopping` | no session of the project is live — the remove job is submitted as usual | stop the project's sessions first |
 | `source_missing` | `sync_to_windows` or `update_from_windows` runs and the project's Windows source is gone — the directory no longer exists, or it exists but its `.git` does not (the same `source_present` check the project row uses) | the source exists but is dirty or on the wrong branch — that is `windows_tree_dirty`/`windows_branch_mismatch`, only checked once the source is confirmed present | relocate the project to a checkout that still exists |
@@ -233,7 +251,9 @@ whose supervisor cannot be reached, so `session.stop` reports
 reads from (and the app will, once its Plan B session UI lands). The
 two sandbox codes are the exception: theirs are built by
 `willie_core::sandbox::CapabilityError` so the text can name the
-capability or the path at fault, which a static table cannot.
+capability or the path at fault, which a static table cannot;
+`sandbox.explain` reports the same two, for the same reason, since it
+resolves the same policy without starting a session.
 
 | Code | When | Remediation |
 | --- | --- | --- |

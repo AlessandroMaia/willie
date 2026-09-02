@@ -15,6 +15,7 @@ use willie_proto::{
     job::method as job,
     project::method as project,
     rpc::{Request, Response, RpcError},
+    sandbox::method as sandbox,
     session::method as session,
     state::method as state_method,
     tool::method as tool,
@@ -107,6 +108,9 @@ impl Server {
             }
             session::STOP => handlers::session_stop(&self.sessions, req.params),
             session::LIST => handlers::session_list(&self.sessions),
+            sandbox::EXPLAIN => {
+                handlers::sandbox_explain(&self.state, req.params)
+            }
             state_method::SNAPSHOT => {
                 handlers::state_snapshot(&self.ops, &self.state)
             }
@@ -327,6 +331,22 @@ mod tests {
             serde_json::json!({
                 "id": "proj_00000000000000000000000000",
                 "name": "x"
+            }),
+        ));
+        assert_eq!(
+            resp[0].clone().into_result().unwrap_err().code,
+            "project_not_found"
+        );
+    }
+
+    /// `sandbox.explain` answers the same not-found code its neighbours
+    /// use for an id the daemon has never seen.
+    #[test]
+    fn sandbox_explain_of_an_unknown_project_is_project_not_found() {
+        let (_, resp) = roundtrip(&line(
+            sandbox::EXPLAIN,
+            serde_json::json!({
+                "project_id": "proj_00000000000000000000000000"
             }),
         ));
         assert_eq!(
