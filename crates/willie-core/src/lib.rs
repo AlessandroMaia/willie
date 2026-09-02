@@ -7,6 +7,7 @@
 pub mod id;
 pub mod paths;
 pub mod project;
+pub mod sandbox;
 pub mod session;
 
 /// Version of the Willie workspace this crate was built from.
