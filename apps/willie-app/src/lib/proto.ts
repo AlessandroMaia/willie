@@ -8,6 +8,29 @@ export type ProjectState =
   | { state: "ready" }
   | { state: "failed"; code: string; message: string; remediation: string };
 
+export type PathMode = "ro" | "rw";
+
+export interface ExtraPath {
+  path: string;
+  mode: PathMode;
+}
+
+/* An absent override means "whatever the harness decided". Rust omits
+ * those keys rather than writing null, because the profile is also a
+ * TOML file and TOML has no null. */
+export interface SandboxProfile {
+  project_rw?: boolean;
+  agent_state?: boolean;
+  tools_ro?: boolean;
+  caches_rw?: boolean;
+  git_identity?: boolean;
+  extra_paths?: ExtraPath[];
+  home_persistent?: boolean;
+  ssh?: boolean;
+  mnt_all?: boolean;
+  windows_interop?: boolean;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -18,6 +41,30 @@ export interface Project {
   state: ProjectState;
   source_present: boolean;
   created_at: string;
+  sandbox: SandboxProfile;
+}
+
+/* Mirrors `willie_core::sandbox::Capability`: the dotted name and the
+ * consequence sentence live in Rust (`display_name()`, `consequence()`)
+ * and reach the app only through `sandbox.catalogue()`, never
+ * duplicated here as prose. */
+export type Capability =
+  | "project_rw"
+  | "agent_state"
+  | "tools_ro"
+  | "caches_rw"
+  | "git_identity"
+  | "extra_paths"
+  | "home_persistent"
+  | "ssh"
+  | "mnt_all"
+  | "windows_interop";
+
+export interface CapabilityInfo {
+  capability: Capability;
+  display_name: string;
+  consequence: string;
+  implemented: boolean;
 }
 
 export type JobKind =

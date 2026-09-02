@@ -12,6 +12,7 @@ const proj = (id: string, name: string): Project => ({
   state: { state: "ready" },
   source_present: true,
   created_at: "t",
+  sandbox: {},
 });
 
 const sess = (

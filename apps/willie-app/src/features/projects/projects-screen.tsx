@@ -18,16 +18,24 @@ import { ProjectRow } from "@/features/projects/project-row";
 import { RelocateProjectDialog } from "@/features/projects/relocate-project-dialog";
 import { RemoveProjectDialog } from "@/features/projects/remove-project-dialog";
 import { RootsPanel } from "@/features/projects/roots-panel";
+import { SandboxDialog } from "@/features/projects/sandbox-dialog";
 import { latestJobFor } from "@/lib/domain/jobs";
 import { isLive, liveCount } from "@/lib/domain/sessions";
 import type { Problem } from "@/lib/ipc";
 import {
   dialogs,
   projects as projectsApi,
+  sandbox as sandboxApi,
   sessions as sessionsApi,
 } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
-import type { Candidate, Job, Project } from "@/lib/proto";
+import type {
+  Candidate,
+  CapabilityInfo,
+  Job,
+  Project,
+  SandboxProfile,
+} from "@/lib/proto";
 import { useSnapshot } from "@/store/use-snapshot";
 
 function wslPathFor(slug: string): string {
@@ -86,6 +94,13 @@ export function ProjectsScreen() {
   const [relocating, setRelocating] = useState<Project | null>(null);
   const [relocatePath, setRelocatePath] = useState("");
   const [relocateProblem, setRelocateProblem] = useState<Problem | null>(null);
+  const [sandboxTarget, setSandboxTarget] = useState<Project | null>(null);
+  const [sandboxProblem, setSandboxProblem] = useState<Problem | null>(null);
+  /* Static domain data, fetched once on mount: `sandbox-dialog.tsx`
+   * renders one row per catalogue entry, so an empty catalogue is an
+   * empty dialog, not a fallback — a fetch failure is surfaced below,
+   * not swallowed. */
+  const [catalogue, setCatalogue] = useState<CapabilityInfo[]>([]);
   /* Synchronous RPC-level rejects that belong to one project (a job
    * already running, a cancel or retry that failed) — shown on that
    * project's row, never in the page-level banner below, which is
@@ -128,6 +143,16 @@ export function ProjectsScreen() {
   useEffect(() => {
     loadRoots();
   }, [loadRoots]);
+
+  /* Same page-level banner `loadRoots` uses: a failure here is not
+   * silent — without the catalogue the Sandbox dialog has nothing to
+   * render, so the failure belongs where the user is looking. */
+  useEffect(() => {
+    sandboxApi
+      .catalogue()
+      .then(setCatalogue)
+      .catch((error: unknown) => setLocal(asProblem(error)));
+  }, []);
 
   async function run(
     id: string,
@@ -461,6 +486,34 @@ export function ProjectsScreen() {
     }
   }
 
+  function openSandboxDialog(project: Project) {
+    setSandboxTarget(project);
+    setSandboxProblem(null);
+  }
+
+  function closeSandboxDialog() {
+    setSandboxTarget(null);
+    setSandboxProblem(null);
+  }
+
+  /* `project.set_sandbox` validates by resolving before it persists,
+   * so the one rejection this ever sees is a policy the daemon
+   * refuses outright (`sandbox_capability_unsupported`,
+   * `sandbox_profile_invalid`) — kept visible inside the still-open
+   * dialog, the same shape as `confirmRelocate`. A successful save
+   * closes the dialog; the fresh profile reaches it again only through
+   * the `project_changed` event `set_sandbox` emits into the snapshot. */
+  async function saveSandbox(profile: SandboxProfile) {
+    if (!sandboxTarget) return;
+    setSandboxProblem(null);
+    try {
+      await projectsApi.setSandbox(sandboxTarget.id, profile);
+      setSandboxTarget(null);
+    } catch (error) {
+      setSandboxProblem(asProblem(error));
+    }
+  }
+
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
       <header>
@@ -584,6 +637,7 @@ export function ProjectsScreen() {
                   onCopyPath={() => copyPath(path)}
                   onOpenInExplorer={() => openInExplorer(project, path)}
                   onOpenRelocateDialog={() => openRelocateDialog(project)}
+                  onOpenSandboxDialog={() => openSandboxDialog(project)}
                   onOpenSession={() => openSession(project)}
                   onResumeSession={() => resumeSession(project)}
                   onSyncToWindows={() => syncToWindows(project)}
@@ -614,6 +668,19 @@ export function ProjectsScreen() {
         onBrowse={pickRelocateFolder}
         onConfirm={confirmRelocate}
         onCancel={closeRelocateDialog}
+      />
+
+      <SandboxDialog
+        /* Remounts on every open (including reopening the same
+         * project), so the dialog's local edits always seed from the
+         * project prop's current `sandbox` — never from whatever an
+         * earlier open left behind. */
+        key={sandboxTarget?.id ?? "sandbox-dialog-closed"}
+        project={sandboxTarget}
+        catalogue={catalogue}
+        problem={sandboxProblem}
+        onSave={saveSandbox}
+        onCancel={closeSandboxDialog}
       />
     </div>
   );

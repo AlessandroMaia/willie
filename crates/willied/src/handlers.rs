@@ -17,7 +17,7 @@ use willie_proto::{
     job::Job,
     project::{
         self, AddParams, ProjectList, RelocateParams, RemoveParams,
-        RenameParams,
+        RenameParams, SetSandboxParams,
     },
     rpc::RpcError,
     state::Snapshot,
@@ -143,6 +143,13 @@ pub fn project_relocate(ops: &Ops, p: Value) -> Result<Value, RpcError> {
 pub fn project_rename(ops: &Ops, p: Value) -> Result<Value, RpcError> {
     let p: RenameParams = serde_json::from_value(p).map_err(invalid_params)?;
     let res = ops.rename(p).map_err(op_error)?;
+    serde_json::to_value(res).map_err(internal)
+}
+
+pub fn project_set_sandbox(ops: &Ops, p: Value) -> Result<Value, RpcError> {
+    let p: SetSandboxParams =
+        serde_json::from_value(p).map_err(invalid_params)?;
+    let res = ops.set_sandbox(p).map_err(op_error)?;
     serde_json::to_value(res).map_err(internal)
 }
 

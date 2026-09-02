@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use willie_core::{
     id::{JobId, ProjectId},
     project::Project,
+    sandbox::SandboxProfile,
 };
 
 pub mod method {
@@ -14,6 +15,7 @@ pub mod method {
     pub const UPDATE_FROM_WINDOWS: &str = "project.update_from_windows";
     pub const RELOCATE: &str = "project.relocate";
     pub const RENAME: &str = "project.rename";
+    pub const SET_SANDBOX: &str = "project.set_sandbox";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +60,16 @@ pub struct RelocateParams {
 pub struct RenameParams {
     pub id: ProjectId,
     pub name: String,
+}
+
+/// Layer 2 in full: `set_sandbox` replaces the project's profile with
+/// `profile` rather than merging onto the stored one, so the caller
+/// (the dialog, via the screen) always sends the whole edited profile,
+/// not just the keys touched in this one save.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetSandboxParams {
+    pub project_id: ProjectId,
+    pub profile: SandboxProfile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

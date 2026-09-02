@@ -20,6 +20,7 @@ function projectEvent(seq: number, id: string): Event {
       state: { state: "ready" },
       source_present: true,
       created_at: "1",
+      sandbox: {},
     },
   };
 }

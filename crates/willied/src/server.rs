@@ -98,6 +98,9 @@ impl Server {
                 handlers::project_relocate(&self.ops, req.params)
             }
             project::RENAME => handlers::project_rename(&self.ops, req.params),
+            project::SET_SANDBOX => {
+                handlers::project_set_sandbox(&self.ops, req.params)
+            }
             project::LIST => handlers::project_list(&self.state),
             job::LIST => handlers::job_list(&self.state),
             job::GET => handlers::job_get(&self.state, req.params),
@@ -347,6 +350,23 @@ mod tests {
             sandbox::EXPLAIN,
             serde_json::json!({
                 "project_id": "proj_00000000000000000000000000"
+            }),
+        ));
+        assert_eq!(
+            resp[0].clone().into_result().unwrap_err().code,
+            "project_not_found"
+        );
+    }
+
+    /// `project.set_sandbox` is dispatched and answers the same
+    /// not-found code every other `project.*` method uses.
+    #[test]
+    fn set_sandbox_of_an_unknown_project_is_project_not_found() {
+        let (_, resp) = roundtrip(&line(
+            project::SET_SANDBOX,
+            serde_json::json!({
+                "project_id": "proj_00000000000000000000000000",
+                "profile": {}
             }),
         ));
         assert_eq!(
