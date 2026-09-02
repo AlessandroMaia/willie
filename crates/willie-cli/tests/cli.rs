@@ -51,3 +51,17 @@ fn doctor_json_prints_a_report() {
     let report: DoctorReport = serde_json::from_slice(&out.stdout).unwrap();
     assert!(!report.checks.is_empty());
 }
+
+/// `sandbox explain` has no transport to the daemon yet (see
+/// `fetch_explain`'s doc comment in `src/main.rs`), so this is the only
+/// behaviour the subcommand ships with today: it fails closed with a
+/// coded, remediated error on stderr and prints nothing on stdout.
+#[cfg(target_os = "linux")]
+#[test]
+fn sandbox_explain_fails_closed_with_no_daemon_to_ask() {
+    let out = run(&["sandbox", "explain", "proj_x"]).unwrap();
+    assert_ne!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("daemon_unreachable"), "{stderr}");
+}

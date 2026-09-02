@@ -51,6 +51,34 @@ One line per check, machine-readable prefix, then the human part:
 
 Exit 3 when a required check fails, 0 otherwise.
 
+## Sandbox policy (`sandbox explain`)
+
+`willie sandbox explain <project>` prints one line per capability to
+**stdout**, tab-separated — display name, `on`/`off`, source
+(`default`, `profile` or `unavailable`):
+
+```text
+project.rw	on	default
+ssh	off	unavailable
+```
+
+The heading and each capability's consequence sentence go to
+**stderr**. `--json` prints the `sandbox.explain` reply verbatim
+(`{"entries": [...], "capabilities": {...}}`).
+
+The argument vector, the filter summary and the path rules that
+`docs/ARCHITECTURE.md` §3.3 also promises for this command arrive with
+the enforcement plan: this slice only resolves and reports the policy,
+it does not yet apply one.
+
+The subcommand needs the daemon's local socket — `docs/ARCHITECTURE.md`
+describes `/run/willie/willied.sock` for local clients, and no release
+builds it yet, so `willied` today answers only the engine's stdio pipe.
+Until that socket exists, every invocation fails closed with
+`daemon_unreachable` and names what to check instead. The parsing and
+the rendering are already complete: the command works unchanged, with
+no further CLI change, once the socket lands.
+
 ## Adding a command — checklist
 
 1. Data to stdout, everything else to stderr.

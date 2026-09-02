@@ -66,7 +66,8 @@ Notification (daemon → client), recognised by having no `id`:
 Long operations (`add`, `remove`, `sync_to_windows`, `update_from_windows`,
 `relocate`) validate on the calling thread, then run their git work as a
 background job: the reply carries a `JobRef`/`AddResult` and the outcome
-arrives later as a `state.event`. `rename` is synchronous.
+arrives later as a `state.event`. `rename` and `set_sandbox` are
+synchronous.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -77,11 +78,17 @@ arrives later as a `state.event`. `rename` is synchronous.
 | `project.update_from_windows` | `{ id }` | `JobRef { job_id }` |
 | `project.relocate` | `RelocateParams { id, windows_path }` | `JobRef { job_id }` |
 | `project.rename` | `RenameParams { id, name }` | `Project` |
+| `project.set_sandbox` | `SetSandboxParams { project_id, profile }` | `Project` |
 
 A `Project` is `{ id, name, slug, source, workspace, branch, state,
-source_present, created_at }`; `state` is `preparing`, `ready` or `failed
-{ code, message, remediation }`. `source_present` is recomputed from the
-filesystem on every `state.snapshot`, never trusted from disk.
+source_present, created_at, sandbox }`; `state` is `preparing`, `ready`
+or `failed { code, message, remediation }`. `source_present` is
+recomputed from the filesystem on every `state.snapshot`, never trusted
+from disk. `sandbox` is layer 2 of the sandbox policy (a `SandboxProfile`
+— see `sandbox.*` below); `set_sandbox` replaces it outright rather than
+merging onto the stored one, resolving the replacement against the
+harness defaults before persisting it, the same fail-closed check
+`session.create` and `sandbox.explain` apply.
 
 ## `job.*`
 | Method | Params | Result |
@@ -123,6 +130,24 @@ specific older session by id. See `harness_cannot_resume` and
 guards; the existing `project_not_found`/`project_not_ready`/
 `project_busy`/`harness_not_installed` guards apply to a resume request
 unchanged.
+
+## `sandbox.*`
+| Method | Params | Result |
+| --- | --- | --- |
+| `sandbox.explain` | `ExplainParams { project_id }` | `ExplainResult { entries: [Explained], capabilities }` |
+
+Reports what a session for `project_id` would run under, without
+starting one: the same two layers `session.create` resolves
+(`willie_core::sandbox::resolve`), reported row by row. `entries` is
+one `Explained { capability, enabled, source }` per `Capability`, in
+`Capability::ALL` order; `source` is `default` (the harness decided
+it), `profile` (the project's profile spoke) or `unavailable` (this
+version cannot apply it at all). `capabilities` is the same resolved
+`CapabilitySet` `session.create` would write into the spec. An unknown
+`project_id` fails with `project_not_found`; a profile that cannot
+resolve fails with the same `sandbox_capability_unsupported` /
+`sandbox_profile_invalid` codes `session.create` uses (see Session and
+tool codes below).
 
 ## `tool.*`
 | Method | Params | Result |
@@ -206,7 +231,7 @@ to the same add/relocate flow as the codes around it.
 | `source_detached_head` | `project.add`'s fast validation reads the source's current branch and finds `HEAD` itself, no branch checked out | the source is on a branch that later turns out to differ from the workspace's — that is `windows_branch_mismatch`, only seen at sync time | check out a branch in the Windows checkout, then add again |
 | `project_exists` | `project.add`'s source matches an already-registered project's source, compared case-insensitively with a trailing separator ignored | the *workspace directory* for the derived slug already exists but no project references it — that is `workspace_exists` | this checkout is already registered; use its existing row instead of adding it again |
 | `workspace_exists` | `project.add` derives a slug for the workspace and a directory of that name already exists under `/home/willie/projects/` | the same checkout is already a registered project — that is `project_exists`, checked first | delete the kept workspace directory the message names (`rm -rf` inside the distribution), moving it aside first if it still holds work you want, then add the checkout again |
-| `project_not_found` | any `project.*` method (`remove`, `sync_to_windows`, `update_from_windows`, `relocate`, `rename`), or `session.create`, names an id no longer in the daemon's state | the id is valid but a job is already running for it — that is `project_busy` | check the project id and try again; a stale UI should re-snapshot first |
+| `project_not_found` | any `project.*` method (`remove`, `sync_to_windows`, `update_from_windows`, `relocate`, `rename`, `set_sandbox`), or `session.create`/`sandbox.explain`, names an id no longer in the daemon's state | the id is valid but a job is already running for it — that is `project_busy` | check the project id and try again; a stale UI should re-snapshot first |
 | `project_busy` | a `project.*` operation that starts a job is called while that project already has one job running — one job per project at a time | the daemon's 3-job pool is full but this project is idle — that job is queued, not refused; `project_busy` is per project | wait for the current job to finish, or cancel it with `job.cancel` |
 | `sessions_running` | `project.remove` is called while the project has at least one session in `running` or `stopping` | no session of the project is live — the remove job is submitted as usual | stop the project's sessions first |
 | `source_missing` | `sync_to_windows` or `update_from_windows` runs and the project's Windows source is gone — the directory no longer exists, or it exists but its `.git` does not (the same `source_present` check the project row uses) | the source exists but is dirty or on the wrong branch — that is `windows_tree_dirty`/`windows_branch_mismatch`, only checked once the source is confirmed present | relocate the project to a checkout that still exists |
@@ -230,7 +255,14 @@ reserved: no session method today distinguishes an unknown id from one
 whose supervisor cannot be reached, so `session.stop` reports
 `session_not_running` for both. Remediations match
 `willie_core::session::remediation_for`, the one table the daemon
-reads from (and the app will, once its Plan B session UI lands).
+reads from (and the app will, once its Plan B session UI lands). The
+two sandbox codes are the exception: theirs are built by
+`willie_core::sandbox::CapabilityError` so the text can name the
+capability or the path at fault, which a static table cannot;
+`sandbox.explain` reports the same two, for the same reason, since it
+resolves the same policy without starting a session, and so does
+`project.set_sandbox`, which validates by resolving before it persists
+a profile the UI edits.
 
 | Code | When | Remediation |
 | --- | --- | --- |
@@ -239,6 +271,8 @@ reads from (and the app will, once its Plan B session UI lands).
 | `session_already_live` | `session.create { resume: true }` while the project already has a live session | use the running session, or stop it first, then resume |
 | `harness_not_installed` | no harness binary on the session `PATH` (or `--version` fails) | click Install on the Dashboard |
 | `git_identity_missing` | none of the identity sources — an existing `~/.gitconfig`, the Windows identity, the source checkout's — yields a name and e-mail | set `git config --global user.name` and `user.email` on Windows, then open the session again |
+| `sandbox_capability_unsupported` | `session.create` on a project whose sandbox profile enables a capability this version cannot apply | remove it from the project's sandbox settings; the message names it |
+| `sandbox_profile_invalid` | `session.create` on a project whose sandbox profile lists an `extra_paths` entry that is not absolute — the only condition that produces this code today. An unknown key or a wrong type never reaches it: the profile is a section of the project's own record, so `toml` refuses the whole record and the daemon skips it at start-up (`willied: skipping unreadable project …` on stderr); the project is then absent from the Projects screen with no coded error at all | the message names the path; correct it in the project's sandbox settings |
 | `supervisor_spawn_failed` | `willie-sess` could not be executed, or its launcher's readiness line could not be parsed | run `willie doctor`; reinstall the distribution if the supervisor binary is missing |
 | `supervisor_timeout` | no readiness reply from the supervisor within ten seconds | open the session again; run `willie doctor` if it repeats |
 | `harness_exec_failed` | the harness child's `chdir` or `execve` failed (binary gone, workspace deleted by hand) | reinstall Claude Code, or remove the project and add it again |

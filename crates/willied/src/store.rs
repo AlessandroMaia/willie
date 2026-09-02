@@ -88,7 +88,7 @@ pub(crate) fn delete_or_log(state_dir: &Path, p: &Project) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use willie_core::project::ProjectState;
+    use willie_core::{project::ProjectState, sandbox::SandboxProfile};
 
     fn sample(slug: &str) -> Project {
         Project {
@@ -101,6 +101,7 @@ mod tests {
             state: ProjectState::Ready,
             source_present: true,
             created_at: "t".into(),
+            sandbox: SandboxProfile::default(),
         }
     }
 

@@ -1,7 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import type { Candidate, Event, Session, Snapshot } from "./proto";
+import type {
+  Candidate,
+  CapabilityInfo,
+  Event,
+  Project,
+  SandboxProfile,
+  Session,
+  Snapshot,
+} from "./proto";
 
 /* Mirrors of crates/willie-engine (EngineStatus) and willie-proto. */
 export type CheckStatus = "ok" | "fail" | "skip";
@@ -76,6 +84,8 @@ export const projects = {
   relocate: (id: string, windowsPath: string) =>
     invoke("project_relocate", { id, windowsPath }),
   rename: (id: string, name: string) => invoke("project_rename", { id, name }),
+  setSandbox: (id: string, profile: SandboxProfile) =>
+    invoke<Project>("project_set_sandbox", { id, profile }),
   cancelJob: (id: string) => invoke("job_cancel", { id }),
   roots: () => invoke<string[]>("projects_roots"),
   setRoots: (roots: string[]) => invoke("set_projects_roots", { roots }),
@@ -118,6 +128,12 @@ export const onSessionOutput = (
 
 export const tools = {
   install: (harness: string) => invoke("tool_install", { harness }),
+};
+
+/* Static domain data (`willie_core::sandbox::Capability`), not a
+ * daemon RPC: no project id, no engine lock, safe to fetch once. */
+export const sandbox = {
+  catalogue: () => invoke<CapabilityInfo[]>("sandbox_catalogue"),
 };
 
 /* The folder picker is I/O like every `invoke`, so it lives here and

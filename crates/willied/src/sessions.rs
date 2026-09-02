@@ -14,6 +14,7 @@ use std::{
 use willie_core::{
     id::SessionId,
     project::ProjectState,
+    sandbox::{CapabilitySet, SandboxProfile},
     session::{
         Session, SessionEvent, SessionEventKind, SessionSpec, apply_event,
         from_log,
@@ -111,6 +112,15 @@ impl SessionOps {
         if self.runner.is_busy(&params.project_id) {
             return Err(crate::projects::busy_err());
         }
+        // Fail closed means fail before anything happens: resolution
+        // needs only the profile already in hand, so it runs before
+        // `--version` is spawned and before `identity::ensure` may write
+        // `~/.gitconfig`. A refusal after a filesystem side effect is
+        // not the daemon refusing early, it is the daemon refusing late.
+        let capabilities = session_capabilities(
+            harness::claude().default_capabilities(),
+            &project.sandbox,
+        )?;
         let (mode, resumed_from) = resume_decision(
             params.resume,
             harness::claude().capabilities().resume,
@@ -151,6 +161,7 @@ impl SessionOps {
             created_at: (self.clock)(),
             willie_version: willie_core::VERSION.to_owned(),
             resumed_from,
+            capabilities,
         };
         let dir =
             session_store::write_spec(&self.state_dir, &spec).map_err(|e| {
@@ -434,6 +445,16 @@ fn resume_decision(
     Ok((LaunchMode::Continue, latest_terminal))
 }
 
+/// Layer 1 from the harness, layer 2 from the project record. A policy
+/// that cannot be applied must not become a session that pretends it
+/// was, so both refusals happen here, before anything is spawned.
+fn session_capabilities(
+    defaults: CapabilitySet,
+    profile: &SandboxProfile,
+) -> Result<CapabilitySet, OpError> {
+    Ok(willie_core::sandbox::resolve(defaults, profile)?)
+}
+
 #[derive(Debug)]
 enum Ready {
     Ok(u32),
@@ -514,6 +535,7 @@ fn finalise_lost(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use willie_core::sandbox::{ExtraPath, PathMode};
 
     #[test]
     fn ok_line_parses_to_a_pid() {
@@ -583,6 +605,68 @@ mod tests {
         assert_eq!(mode, LaunchMode::Continue);
         assert_eq!(resumed_from, None);
     }
+
+    /// The real harness defaults, so a change to layer 1 is caught
+    /// here and not only where it is declared.
+    fn claude_defaults() -> CapabilitySet {
+        harness::claude().default_capabilities()
+    }
+
+    #[test]
+    fn a_resolved_policy_keeps_the_project_and_the_harness_defaults() {
+        let set =
+            session_capabilities(claude_defaults(), &SandboxProfile::default())
+                .unwrap();
+
+        assert!(set.project_rw);
+        assert!(set.agent_state);
+        assert!(set.tools_ro);
+    }
+
+    #[test]
+    fn a_profile_that_disables_the_credential_reaches_the_policy() {
+        let profile = SandboxProfile {
+            agent_state: Some(false),
+            ..SandboxProfile::default()
+        };
+
+        let set = session_capabilities(claude_defaults(), &profile).unwrap();
+
+        assert!(!set.agent_state);
+        assert!(set.tools_ro);
+    }
+
+    #[test]
+    fn a_deferred_capability_refuses_the_session_with_its_own_code() {
+        let profile = SandboxProfile {
+            ssh: Some(true),
+            ..SandboxProfile::default()
+        };
+
+        let err =
+            session_capabilities(claude_defaults(), &profile).unwrap_err();
+
+        assert_eq!(err.code, "sandbox_capability_unsupported");
+        assert!(err.message.contains("ssh"), "{}", err.message);
+        assert!(err.remediation.contains("ssh"), "{}", err.remediation);
+    }
+
+    #[test]
+    fn a_relative_extra_path_refuses_the_session() {
+        let profile = SandboxProfile {
+            extra_paths: vec![ExtraPath {
+                path: "srv/shared".into(),
+                mode: PathMode::Ro,
+            }],
+            ..SandboxProfile::default()
+        };
+
+        let err =
+            session_capabilities(claude_defaults(), &profile).unwrap_err();
+
+        assert_eq!(err.code, "sandbox_profile_invalid");
+        assert!(err.remediation.contains("absolute"), "{}", err.remediation);
+    }
 }
 
 #[cfg(test)]
@@ -593,6 +677,7 @@ mod create_tests {
     use willie_core::{
         id::ProjectId,
         project::{Project, ProjectState},
+        sandbox::SandboxProfile,
     };
     use willie_proto::{job::JobKind, session::CreateParams};
 
@@ -614,6 +699,7 @@ mod create_tests {
             state: ProjectState::Ready,
             source_present: true,
             created_at: clock(),
+            sandbox: SandboxProfile::default(),
         }
     }
 
@@ -717,5 +803,50 @@ mod create_tests {
             })
             .unwrap_err();
         assert_eq!(err.code, "session_already_live");
+    }
+
+    /// The policy is resolved before the harness is detected and before
+    /// `identity::ensure` may write `~/.gitconfig`, so this refusal
+    /// needs no `claude` binary on the host — which is exactly the
+    /// property being asserted: nothing has happened yet when the
+    /// daemon says no.
+    #[test]
+    fn create_refuses_a_deferred_capability_before_anything_is_touched() {
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+        let mut project = ready_project();
+        project.sandbox = SandboxProfile {
+            ssh: Some(true),
+            ..SandboxProfile::default()
+        };
+        let pid = project.id;
+        crate::lock(&state).projects.insert(pid, project);
+
+        let home = std::env::temp_dir().join("willie-sess-sandbox-home");
+        let identity = home.join(".gitconfig");
+        let _ = std::fs::remove_file(&identity);
+
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            std::env::temp_dir().join("willie-sess-sandbox-state"),
+            std::env::temp_dir().join("willie-sess-sandbox-run"),
+            home,
+            clock,
+            Arc::clone(&runner),
+        );
+        let err = ops
+            .create(CreateParams {
+                project_id: pid,
+                git_identity: None,
+                resume: false,
+            })
+            .unwrap_err();
+
+        assert_eq!(err.code, "sandbox_capability_unsupported");
+        assert!(err.message.contains("ssh"), "{}", err.message);
+        assert!(!identity.exists());
     }
 }

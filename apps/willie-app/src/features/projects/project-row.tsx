@@ -42,6 +42,7 @@ interface ProjectRowProps {
   onCopyPath: () => void;
   onOpenInExplorer: () => void;
   onOpenRelocateDialog: () => void;
+  onOpenSandboxDialog: () => void;
   onOpenSession: () => void;
   onResumeSession: () => void;
   onSyncToWindows: () => void;
@@ -70,6 +71,7 @@ export function ProjectRow({
   onCopyPath,
   onOpenInExplorer,
   onOpenRelocateDialog,
+  onOpenSandboxDialog,
   onOpenSession,
   onResumeSession,
   onSyncToWindows,
@@ -138,6 +140,9 @@ export function ProjectRow({
                 Relocate source…
               </DropdownMenuItem>
             )}
+            <DropdownMenuItem onClick={onOpenSandboxDialog}>
+              Sandbox…
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               variant="destructive"

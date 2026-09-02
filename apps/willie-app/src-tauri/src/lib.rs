@@ -13,11 +13,14 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, State};
 use willie_core::id::{JobId, ProjectId, SessionId};
 use willie_core::project::Project;
+use willie_core::sandbox::SandboxProfile;
 use willie_engine::discover::Candidate;
 use willie_engine::error::EngineError;
 use willie_engine::{Engine, EngineStatus, Problem, SessionOpened};
+use willie_harness::{ClaudeCode, Harness};
 use willie_proto::daemon::DoctorReport;
 use willie_proto::project::{AddResult, JobRef, ProjectList};
+use willie_proto::sandbox::CapabilityInfo;
 use willie_proto::state::Snapshot;
 
 use crate::events::EventPump;
@@ -243,6 +246,40 @@ fn project_rename(
 }
 
 #[tauri::command(async)]
+fn project_set_sandbox(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: ProjectId,
+    profile: SandboxProfile,
+) -> Result<Project, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.project_set_sandbox(id, profile)
+    })
+}
+
+/// The capability catalogue: static domain data, so no engine lock and
+/// no daemon. The app renders this copy verbatim rather than keeping a
+/// second copy of ten user-facing sentences in TypeScript — and, since
+/// each row carries layer 1's answer, without restating the harness
+/// defaults either: a row the project's profile says nothing about
+/// shows what the harness decided, whichever harness that is.
+#[tauri::command]
+fn sandbox_catalogue() -> Vec<CapabilityInfo> {
+    let defaults = ClaudeCode.default_capabilities();
+    willie_core::sandbox::Capability::ALL
+        .iter()
+        .map(|&c| CapabilityInfo {
+            capability: c,
+            display_name: c.display_name().to_owned(),
+            consequence: c.consequence().to_owned(),
+            implemented: c.is_implemented(),
+            default_enabled: defaults.enabled(c),
+        })
+        .collect()
+}
+
+#[tauri::command(async)]
 fn job_cancel(
     app: AppHandle,
     state: State<'_, EngineState>,
@@ -441,6 +478,8 @@ pub fn run() {
             project_update_from_windows,
             project_relocate,
             project_rename,
+            project_set_sandbox,
+            sandbox_catalogue,
             job_cancel,
             state_snapshot,
             projects_roots,

@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use willie_core::{
     id::{JobId, ProjectId, SessionId},
     project::Project,
+    sandbox::SandboxProfile,
     session::Session,
 };
 use willie_proto::session::{
@@ -20,7 +21,7 @@ use willie_proto::{
     job::method as job,
     project::{
         AddParams, AddResult, IdParams, JobRef, ProjectList, RelocateParams,
-        RemoveParams, RenameParams, method as project,
+        RemoveParams, RenameParams, SetSandboxParams, method as project,
     },
     rpc::Notification,
     state::{Snapshot, method as state},
@@ -247,6 +248,20 @@ impl Engine {
         name: String,
     ) -> Result<Project, EngineError> {
         self.daemon_call(project::RENAME, RenameParams { id, name })
+    }
+
+    pub fn project_set_sandbox(
+        &mut self,
+        id: ProjectId,
+        profile: SandboxProfile,
+    ) -> Result<Project, EngineError> {
+        self.daemon_call(
+            project::SET_SANDBOX,
+            SetSandboxParams {
+                project_id: id,
+                profile,
+            },
+        )
     }
 
     pub fn session_create(

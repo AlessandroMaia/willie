@@ -7,7 +7,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::{ProjectId, SessionId};
+use crate::{
+    id::{ProjectId, SessionId},
+    sandbox::CapabilitySet,
+};
 
 /// `Failed` has the shape of `ProjectState::Failed` so the app reuses
 /// the same chip and inline remediation.
@@ -85,6 +88,11 @@ pub struct SessionSpec {
     /// Persisted so a re-adopted session keeps its lineage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_from: Option<SessionId>,
+    /// The policy this session runs under, resolved once by the daemon
+    /// before anything is spawned. Defaulted so a spec written before
+    /// sandboxing is re-adopted rather than rejected.
+    #[serde(default)]
+    pub capabilities: CapabilitySet,
 }
 
 /// One line of `events.jsonl`.
@@ -255,6 +263,7 @@ mod tests {
             created_at: "1".into(),
             willie_version: "0.1.0".into(),
             resumed_from: None,
+            capabilities: CapabilitySet::default(),
         }
     }
 

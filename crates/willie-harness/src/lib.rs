@@ -43,6 +43,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use willie_core::sandbox::CapabilitySet;
+
 /// A harness binary found on disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
@@ -69,6 +71,21 @@ pub trait Harness: std::fmt::Debug {
     fn binary_name(&self) -> &'static str;
     /// Capability matrix.
     fn capabilities(&self) -> HarnessCapabilities;
+
+    /// Layer 1 of the sandbox policy: what a session with this harness
+    /// gets before the project has its say. The default is the set that
+    /// carries no credential, so a new harness has to ask for
+    /// `agent.state` rather than inherit it.
+    fn default_capabilities(&self) -> CapabilitySet {
+        CapabilitySet {
+            project_rw: true,
+            agent_state: false,
+            tools_ro: true,
+            caches_rw: true,
+            git_identity: true,
+            extra_paths: Vec::new(),
+        }
+    }
 
     /// The version in the binary's `--version` output: the first
     /// whitespace-separated token shaped `N.N.N`.
@@ -218,6 +235,24 @@ impl Harness for ClaudeCode {
     fn installer(&self) -> &'static str {
         "curl -fsSL https://claude.ai/install.sh | bash"
     }
+
+    /// Without its state directory the CLI cannot log in, so the
+    /// session would start and be useless. `agent_state` is the only
+    /// field that differs from the trait's default; the rest are
+    /// repeated here rather than delegated, because `Self` in a unit
+    /// struct's expression position names the struct's own value, so
+    /// `Harness::default_capabilities(&Self)` would dispatch back to
+    /// this override instead of the trait's default body.
+    fn default_capabilities(&self) -> CapabilitySet {
+        CapabilitySet {
+            project_rw: true,
+            agent_state: true,
+            tools_ro: true,
+            caches_rw: true,
+            git_identity: true,
+            extra_paths: Vec::new(),
+        }
+    }
 }
 
 /// All harnesses compiled into this build.
@@ -361,5 +396,54 @@ mod tests {
     fn the_installer_is_a_shell_command_naming_the_official_source() {
         assert!(ClaudeCode.installer().starts_with("curl "));
         assert!(ClaudeCode.installer().ends_with("| bash"));
+    }
+
+    /// Claude Code cannot log in without its state directory, so the
+    /// one capability that carries a credential is on by default for
+    /// it, and the design says so out loud rather than pretending the
+    /// session is cheaper than it is.
+    #[test]
+    fn claude_code_gets_its_login_and_the_ordinary_binds() {
+        let set = ClaudeCode.default_capabilities();
+
+        assert!(set.project_rw);
+        assert!(set.agent_state);
+        assert!(set.tools_ro);
+        assert!(set.caches_rw);
+        assert!(set.git_identity);
+        assert!(set.extra_paths.is_empty());
+    }
+
+    /// A harness that says nothing gets no credential: a new harness
+    /// must ask for the risky bind, never inherit it.
+    #[test]
+    fn a_harness_that_overrides_nothing_gets_no_credential() {
+        #[derive(Debug)]
+        struct Quiet;
+
+        impl Harness for Quiet {
+            fn id(&self) -> &'static str {
+                "quiet"
+            }
+            fn binary_name(&self) -> &'static str {
+                "quiet"
+            }
+            fn capabilities(&self) -> HarnessCapabilities {
+                HarnessCapabilities {
+                    interactive_tui: false,
+                    resume: Resume::None,
+                    headless_stream: false,
+                }
+            }
+            fn installer(&self) -> &'static str {
+                "true"
+            }
+        }
+
+        let set = Quiet.default_capabilities();
+
+        assert!(set.project_rw);
+        assert!(!set.agent_state);
+        assert!(set.tools_ro);
     }
 }

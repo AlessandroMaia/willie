@@ -12,10 +12,15 @@ use willie_core::{
     id::{JobId, ProjectId},
     paths::windows_to_drvfs,
     project::{Project, ProjectState, slug_for, source_key},
+    sandbox::SandboxProfile,
 };
+use willie_harness::Harness;
 use willie_proto::{
     job::JobKind,
-    project::{AddParams, AddResult, JobRef, RelocateParams, RenameParams},
+    project::{
+        AddParams, AddResult, JobRef, RelocateParams, RenameParams,
+        SetSandboxParams,
+    },
 };
 
 use crate::{
@@ -65,6 +70,22 @@ impl OpError {
             code,
             message,
             remediation,
+        }
+    }
+}
+
+/// A sandbox refusal is already a code, a sentence naming the
+/// capability or the path at fault, and a remediation, so it is not
+/// looked up in the static session table like the other codes: it is
+/// carried across as it stands. Every path that resolves a policy —
+/// `session.create`, `project.set_sandbox`, `sandbox.explain` — reports
+/// the same shape because they all come through here.
+impl From<willie_core::sandbox::CapabilityError> for OpError {
+    fn from(e: willie_core::sandbox::CapabilityError) -> Self {
+        Self {
+            code: e.code().to_owned(),
+            message: e.to_string(),
+            remediation: e.remediation(),
         }
     }
 }
@@ -646,6 +667,7 @@ impl Ops {
             state: ProjectState::Preparing,
             source_present: true,
             created_at: (self.clock)(),
+            sandbox: SandboxProfile::default(),
         };
         store::save_or_log(&self.state_dir, &project);
         state::emit(&self.state, &self.out, |s| {
@@ -831,6 +853,38 @@ impl Ops {
         Ok(project)
     }
 
+    /// Validates by resolving before it persists: a profile this
+    /// version cannot apply, or an extra path that is not absolute,
+    /// must never reach disk, because every future `session.create`
+    /// for this project would refuse it the same way. `set_sandbox`
+    /// replaces the stored profile with `profile` outright, so the
+    /// caller always sends the full edited profile, not a diff.
+    pub fn set_sandbox(
+        &self,
+        params: SetSandboxParams,
+    ) -> Result<Project, OpError> {
+        let SetSandboxParams {
+            project_id,
+            profile,
+        } = params;
+        let mut project = self.get_project(project_id)?;
+        let defaults = crate::harness::claude().default_capabilities();
+        willie_core::sandbox::resolve(defaults, &profile)?;
+        project.sandbox = profile;
+        store::save(&self.state_dir, &project).map_err(|e| {
+            OpError::new(
+                "git_failed",
+                e.to_string(),
+                "check the daemon's state directory permissions and \
+                 try again",
+            )
+        })?;
+        state::emit(&self.state, &self.out, |s| {
+            s.upsert_project(project.clone())
+        });
+        Ok(project)
+    }
+
     /// Recomputes `source_present` for every project from the
     /// filesystem. Called before a snapshot so the flag is always
     /// fresh, never trusted from disk or from a job that ran earlier.
@@ -959,6 +1013,7 @@ mod tests {
             state: ProjectState::Preparing,
             source_present: true,
             created_at: clock(),
+            sandbox: SandboxProfile::default(),
         }
     }
 
@@ -1513,6 +1568,86 @@ mod tests {
             })
             .unwrap_err();
         assert_eq!(err.code, "project_not_found");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn set_sandbox_persists_the_profile_and_is_synchronous() {
+        let root = scratch("set-sandbox-ok");
+        let src = root.join("src");
+        init_repo(&src);
+        let (ops, state) = ops(&root);
+        let res = ops
+            .add(AddParams {
+                windows_path: src.to_string_lossy().into_owned(),
+                name: None,
+            })
+            .unwrap();
+        wait_job_done(&state);
+        let profile = SandboxProfile {
+            agent_state: Some(false),
+            ..SandboxProfile::default()
+        };
+        let updated = ops
+            .set_sandbox(SetSandboxParams {
+                project_id: res.project_id,
+                profile: profile.clone(),
+            })
+            .unwrap();
+        assert_eq!(updated.sandbox, profile);
+        assert_eq!(
+            state.lock().unwrap().projects[&res.project_id].sandbox,
+            profile
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn set_sandbox_refuses_an_unknown_project() {
+        let root = scratch("set-sandbox-missing");
+        let (ops, _state) = ops(&root);
+        let err = ops
+            .set_sandbox(SetSandboxParams {
+                project_id: ProjectId::new(),
+                profile: SandboxProfile::default(),
+            })
+            .unwrap_err();
+        assert_eq!(err.code, "project_not_found");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A policy that cannot be applied must never reach disk: the next
+    /// `session.create` for this project would refuse it identically,
+    /// so persisting it first would only move the failure later.
+    #[test]
+    fn set_sandbox_refuses_a_profile_that_cannot_resolve_without_persisting_it()
+    {
+        let root = scratch("set-sandbox-invalid");
+        let src = root.join("src");
+        init_repo(&src);
+        let (ops, state) = ops(&root);
+        let res = ops
+            .add(AddParams {
+                windows_path: src.to_string_lossy().into_owned(),
+                name: None,
+            })
+            .unwrap();
+        wait_job_done(&state);
+        let profile = SandboxProfile {
+            ssh: Some(true),
+            ..SandboxProfile::default()
+        };
+        let err = ops
+            .set_sandbox(SetSandboxParams {
+                project_id: res.project_id,
+                profile,
+            })
+            .unwrap_err();
+        assert_eq!(err.code, "sandbox_capability_unsupported");
+        assert_eq!(
+            state.lock().unwrap().projects[&res.project_id].sandbox,
+            SandboxProfile::default()
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

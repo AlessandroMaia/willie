@@ -10,7 +10,12 @@ use std::process::ExitCode;
 #[cfg(target_os = "linux")]
 mod attach;
 
-use willie_proto::daemon::{CheckStatus, DoctorReport};
+use willie_core::sandbox::{Explained, Source};
+use willie_proto::{
+    daemon::{CheckStatus, DoctorReport},
+    rpc::RpcError,
+    sandbox::ExplainResult,
+};
 
 const EXIT_FAILURE: u8 = 1;
 const EXIT_USAGE: u8 = 2;
@@ -39,6 +44,12 @@ enum Command {
         /// stdout carries only session bytes. For the desktop app.
         host: bool,
     },
+    /// What a session for `project` would run under, without starting
+    /// one.
+    SandboxExplain {
+        project: String,
+        json: bool,
+    },
     Usage,
 }
 
@@ -47,6 +58,14 @@ fn parse(args: &[&str]) -> Command {
         ["--version"] => Command::Version,
         ["doctor"] => Command::Doctor { json: false },
         ["doctor", "--json"] => Command::Doctor { json: true },
+        ["sandbox", "explain", project] => Command::SandboxExplain {
+            project: (*project).to_owned(),
+            json: false,
+        },
+        ["sandbox", "explain", project, "--json"] => Command::SandboxExplain {
+            project: (*project).to_owned(),
+            json: true,
+        },
         ["attach", rest @ ..] => parse_attach(rest),
         _ => Command::Usage,
     }
@@ -153,10 +172,115 @@ fn doctor(json: bool) -> ExitCode {
     ExitCode::from(exit_code(&report))
 }
 
+/// One line per capability: name, state, source. Data on stdout, so no
+/// heading and no consequence text here. Named apart from `render`
+/// (doctor's report renderer already owns that name in this file).
+fn render_capabilities(entries: &[Explained]) -> String {
+    entries
+        .iter()
+        .map(|e| {
+            format!(
+                "{}\t{}\t{}",
+                e.capability.display_name(),
+                if e.enabled { "on" } else { "off" },
+                match e.source {
+                    Source::Default => "default",
+                    Source::Profile => "profile",
+                    Source::Unavailable => "unavailable",
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The stderr line a failed command ends with: the command's own
+/// prefix, the stable code, the message, then the remediation when the
+/// error carries one. The code belongs on this line because
+/// docs/CLI_CONTRACT.md makes it part of every error, not only of the
+/// `--json` object: without it the only way to tell one refusal from
+/// another is to match the prose.
+fn error_line(command: &str, err: &RpcError) -> String {
+    let mut line = format!("{command}: {}: {}", err.code, err.message);
+    if let Some(hint) = &err.remediation {
+        line.push_str(&format!(" → {hint}"));
+    }
+    line
+}
+
+/// `willie sandbox explain` has nowhere to send this yet: `willied`
+/// speaks JSON-RPC only over the engine's stdio pipe
+/// (`crates/willied/src/main.rs`'s `run_stdio`), and the local socket
+/// docs/ARCHITECTURE.md promises for CLI clients (`/run/willie/willied.sock`)
+/// is not built by any task in the sandbox-policy plan. Reading the
+/// project's record off disk here instead would duplicate `willied`'s
+/// private file layout, and spawning a second daemon process would run
+/// its startup side effects (interrupted-project recovery, live-session
+/// re-adoption) for what should be a read-only query. Fails closed with
+/// a coded error rather than either.
+fn fetch_explain(project: &str) -> Result<ExplainResult, RpcError> {
+    let _ = project;
+    Err(RpcError::new(
+        "daemon_unreachable",
+        "willie has no way to reach the daemon's project registry yet",
+    )
+    .with_remediation(
+        "inspect the project's sandbox policy from the desktop app, or \
+         read the project's record under /var/lib/willie/projects/ \
+         directly",
+    ))
+}
+
+/// `willie sandbox explain <project>`: data on stdout, prose on stderr,
+/// `--json` prints the reply verbatim. See `fetch_explain` for why every
+/// call takes the error path today.
+fn sandbox_explain(project: &str, json: bool) -> ExitCode {
+    match fetch_explain(project) {
+        Ok(reply) => {
+            if json {
+                match serde_json::to_string_pretty(&reply) {
+                    Ok(text) => println!("{text}"),
+                    Err(e) => {
+                        eprintln!(
+                            "willie sandbox explain: cannot encode reply: {e}"
+                        );
+                        return ExitCode::from(EXIT_FAILURE);
+                    }
+                }
+            } else {
+                eprintln!("capability\tstate\tsource");
+                println!("{}", render_capabilities(&reply.entries));
+                for entry in &reply.entries {
+                    eprintln!(
+                        "  {}: {}",
+                        entry.capability.display_name(),
+                        entry.capability.consequence()
+                    );
+                }
+            }
+            ExitCode::SUCCESS
+        }
+        Err(err) => {
+            if json {
+                match serde_json::to_string_pretty(&err) {
+                    Ok(text) => eprintln!("{text}"),
+                    Err(e) => eprintln!(
+                        "willie sandbox explain: cannot encode error: {e}"
+                    ),
+                }
+            } else {
+                eprintln!("{}", error_line("willie sandbox explain", &err));
+            }
+            ExitCode::from(EXIT_FAILURE)
+        }
+    }
+}
+
 fn usage() -> ExitCode {
     eprintln!(
         "usage: willie attach [--no-raw] [--size ROWSxCOLS] [--host] \
-         <session-id|socket> | willie doctor [--json] | willie --version"
+         <session-id|socket> | willie doctor [--json] | willie sandbox \
+         explain <project> [--json] | willie --version"
     );
     ExitCode::from(EXIT_USAGE)
 }
@@ -177,6 +301,9 @@ fn main() -> ExitCode {
             raw,
             host,
         } => attach::run(&socket_for(&target), size, raw, host),
+        Command::SandboxExplain { project, json } => {
+            sandbox_explain(&project, json)
+        }
         Command::Usage => usage(),
     }
 }
@@ -192,6 +319,9 @@ fn main() -> ExitCode {
         parse_attach,
         parse_size,
         socket_for,
+        render_capabilities,
+        fetch_explain,
+        sandbox_explain,
     );
     eprintln!(
         "{} runs only inside the Willie Linux distribution",
@@ -333,5 +463,101 @@ mod tests {
             }),
             3
         );
+    }
+
+    #[test]
+    fn sandbox_explain_parses_with_and_without_json() {
+        assert_eq!(
+            parse(&["sandbox", "explain", "proj_1"]),
+            Command::SandboxExplain {
+                project: "proj_1".into(),
+                json: false,
+            }
+        );
+        assert_eq!(
+            parse(&["sandbox", "explain", "proj_1", "--json"]),
+            Command::SandboxExplain {
+                project: "proj_1".into(),
+                json: true,
+            }
+        );
+        assert_eq!(parse(&["sandbox", "explain"]), Command::Usage);
+        assert_eq!(parse(&["sandbox"]), Command::Usage);
+    }
+
+    #[test]
+    fn render_capabilities_prints_name_state_and_source_tab_separated() {
+        use willie_core::sandbox::Capability;
+
+        let entries = vec![
+            Explained {
+                capability: Capability::ProjectRw,
+                enabled: true,
+                source: Source::Default,
+            },
+            Explained {
+                capability: Capability::AgentState,
+                enabled: false,
+                source: Source::Profile,
+            },
+            Explained {
+                capability: Capability::Ssh,
+                enabled: false,
+                source: Source::Unavailable,
+            },
+        ];
+
+        let text = render_capabilities(&entries);
+
+        assert_eq!(
+            text.lines().collect::<Vec<_>>(),
+            [
+                "project.rw\ton\tdefault",
+                "agent.state\toff\tprofile",
+                "ssh\toff\tunavailable"
+            ]
+        );
+    }
+
+    /// `fetch_explain` performs no transport call today (see its doc
+    /// comment): it is already a pure function of its argument, so its
+    /// error shape is asserted directly, with no extraction needed.
+    #[test]
+    fn fetch_explain_reports_daemon_unreachable_with_a_remediation() {
+        let err = fetch_explain("proj_x").unwrap_err();
+
+        assert_eq!(err.code, "daemon_unreachable");
+        assert!(err.message.contains("daemon"), "{}", err.message);
+        assert!(err.remediation.is_some());
+    }
+
+    #[test]
+    fn a_text_mode_error_names_the_code_then_the_message_then_the_hint() {
+        let err = RpcError::new("daemon_unreachable", "nothing to ask")
+            .with_remediation("read the record");
+
+        assert_eq!(
+            error_line("willie sandbox explain", &err),
+            "willie sandbox explain: daemon_unreachable: nothing to ask \
+             → read the record"
+        );
+        assert_eq!(
+            error_line("willie sandbox explain", &RpcError::new("x", "no")),
+            "willie sandbox explain: x: no"
+        );
+    }
+
+    /// The portable half of `tests/cli.rs`'s
+    /// `sandbox_explain_fails_closed_with_no_daemon_to_ask`, which only
+    /// runs inside the distribution: whatever the subcommand refuses
+    /// with, the line a human reads names the code.
+    #[test]
+    fn the_text_line_of_a_failed_explain_carries_its_code() {
+        let line = error_line(
+            "willie sandbox explain",
+            &fetch_explain("p").unwrap_err(),
+        );
+
+        assert!(line.contains("daemon_unreachable"), "{line}");
     }
 }
