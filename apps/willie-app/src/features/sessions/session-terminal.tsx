@@ -24,14 +24,16 @@ function terminalTheme(): ITheme {
   };
 }
 
-/* The shell's shortcuts must work while the terminal has focus: Ctrl
- * with a digit or B goes back to the document; every other key is the
- * session's. */
-function isShellShortcut(event: KeyboardEvent): boolean {
+/* The shell's screen shortcuts must work while the terminal has focus,
+ * so Ctrl with a digit goes back to the document; every other chord —
+ * Ctrl+B included, which the hosted agent and terminal programs bind —
+ * stays with the session. */
+export function isShellShortcut(event: KeyboardEvent): boolean {
   return (
     event.ctrlKey &&
     !event.altKey &&
-    (/^[1-9]$/.test(event.key) || event.key.toLowerCase() === "b")
+    !event.shiftKey &&
+    /^[1-9]$/.test(event.key)
   );
 }
 

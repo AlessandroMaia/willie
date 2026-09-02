@@ -261,10 +261,11 @@ import `app/`.
 **Shortcuts** (`app/hotkeys.ts`). `HotkeysProvider` wraps the tree.
 `useShellHotkeys()` registers `Mod+1`…`Mod+N` for the available rows in
 registry order and `Mod+B` for the sidebar, with `preventDefault`. The
-terminal's custom key handler lets `Mod+digit` and `Mod+B` through so
-the shortcuts work while it has focus. A feature that needs a shortcut
-calls `useHotkey` itself; the package import crosses no fence. The shell
-is the only consumer in this stage.
+terminal's custom key handler lets `Mod+digit` through so the screen
+shortcuts work while it has focus; `Mod+B` stays with the session,
+because the agent it hosts and ordinary terminal programs bind it. A
+feature that needs a shortcut calls `useHotkey` itself; the package
+import crosses no fence. The shell is the only consumer in this stage.
 
 ### Screens — `features/health/`, `features/projects/`, `features/sessions/`
 
@@ -312,8 +313,10 @@ the compact register this tool wants.
 - **Stale hash** (`#/tools`, an old bookmark): `notFoundComponent`
   redirects to `/dashboard`.
 - **Shortcut while the terminal has focus.** xterm's key handler
-  returns `false` for `Mod+digit` and `Mod+B`, letting the shell handle
-  them; every other key stays with the terminal.
+  returns `false` only for `Mod+digit`, letting the shell switch
+  screens; every other chord, `Mod+B` included, stays with the terminal,
+  so collapsing the sidebar needs the pointer or focus outside the
+  terminal.
 - **`matchMedia` absent** (jsdom): the theme effect treats it as light;
   tests install a stub with a controllable `change`.
 - **Regenerating a primitive** overwrites the file. Nothing is lost

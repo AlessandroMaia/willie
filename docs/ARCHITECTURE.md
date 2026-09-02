@@ -540,7 +540,8 @@ window's percentage.
 The shell is a collapsible sidebar with the six screens (Tools,
 Plugins and Settings disabled until they exist), a status bar with
 engine health, the daemon version and the live session count, and
-`Ctrl+1..3` / `Ctrl+B` shortcuts.
+`Ctrl+1..3` / `Ctrl+B` shortcuts (inside the embedded terminal only
+`Ctrl+1..3` reach the shell; `Ctrl+B` stays with the session).
 
 Closing the window minimises to the tray; *quit* stops the daemon
 (sessions in Windows Terminal continue). One store fed only by
