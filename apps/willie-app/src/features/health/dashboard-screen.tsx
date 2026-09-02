@@ -1,7 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { FailureChip } from "@/components/failure-chip";
 import { ProblemAlert } from "@/components/problem-alert";
-import type { Part } from "@/lib/domain/health";
-import { type Health, healthFor, overallHealth } from "@/lib/domain/health";
+import { StatusDot } from "@/components/status-dot";
+import { type Tone, toneForHealth } from "@/components/tone";
+import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
+import { healthFor, overallHealth, type Part } from "@/lib/domain/health";
 import { latestInstallJob } from "@/lib/domain/jobs";
 import type { EngineStatus, Problem } from "@/lib/ipc";
 import { engine, tools } from "@/lib/ipc";
@@ -17,11 +31,10 @@ const PARTS: { key: Part; label: string }[] = [
   { key: "doctor", label: "Doctor" },
 ];
 
-/* Bridge to the old stylesheet until Task 7 rebuilds this screen. */
-const LIGHT_CLASS: Record<Health, string> = {
-  ok: "light-green",
-  degraded: "light-yellow",
-  failed: "light-red",
+const CHECK_TONE: Record<"ok" | "fail" | "skip", Tone> = {
+  ok: "ok",
+  fail: "error",
+  skip: "muted",
 };
 
 export function DashboardScreen() {
@@ -81,7 +94,11 @@ export function DashboardScreen() {
   }
 
   if (status === null) {
-    return <main className="shell">Loading engine status…</main>;
+    return (
+      <div className="flex items-center gap-2 text-muted-foreground text-sm">
+        <Spinner /> Loading engine status…
+      </div>
+    );
   }
 
   const overall = overallHealth(status);
@@ -89,45 +106,46 @@ export function DashboardScreen() {
   const shown = problem ?? statusProblem;
 
   return (
-    <main className="dashboard">
-      <header>
-        <h1>Willie</h1>
-        <span
-          className={`light ${LIGHT_CLASS[overall]}`}
-          role="img"
-          aria-label={`overall ${overall}`}
-        />
-        <span className="muted">engine v{status.engine_version}</span>
+    <div className="mx-auto flex max-w-3xl flex-col gap-6">
+      <header className="flex items-center gap-3">
+        <h1 className="font-semibold text-lg">Dashboard</h1>
+        <StatusDot tone={toneForHealth(overall)} label={`overall ${overall}`} />
+        <span className="font-mono text-muted-foreground text-xs">
+          engine v{status.engine_version}
+        </span>
+        {projectCount !== null && (
+          <span className="text-muted-foreground text-sm">
+            {projectCount} project{projectCount === 1 ? "" : "s"}
+          </span>
+        )}
       </header>
 
-      {projectCount !== null && (
-        <p className="muted">
-          {projectCount} project{projectCount === 1 ? "" : "s"}
-        </p>
-      )}
-
-      <section className="lights">
+      <ItemGroup className="gap-1">
         {PARTS.map(({ key, label }) => (
-          <div key={key} className="light-row">
-            <span className={`light ${LIGHT_CLASS[healthFor(key, status)]}`} />
-            <strong>{label}</strong>
-            <span className="muted">{describe(key, status)}</span>
-          </div>
+          <Item key={key} size="sm" variant="muted">
+            <ItemMedia>
+              <StatusDot tone={toneForHealth(healthFor(key, status))} />
+            </ItemMedia>
+            <ItemContent>
+              <ItemTitle>{label}</ItemTitle>
+              <ItemDescription>{describe(key, status)}</ItemDescription>
+            </ItemContent>
+          </Item>
         ))}
-      </section>
+      </ItemGroup>
 
-      <section className="actions">
-        <button
-          type="button"
+      <ButtonGroup>
+        <Button
+          variant="outline"
           disabled={busy !== null || !status.image_available}
           onClick={() => run("install", engine.installDistro)}
         >
           {status.distro?.registered
             ? "Reinstall distribution"
             : "Install distribution"}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="outline"
           disabled={busy !== null || !status.distro?.registered}
           onClick={() =>
             run(
@@ -137,74 +155,81 @@ export function DashboardScreen() {
           }
         >
           {daemonRunning ? "Stop daemon" : "Start daemon"}
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="outline"
           disabled={busy !== null || !status.distro?.registered}
           onClick={() => run("doctor", engine.doctor)}
         >
           Run doctor
-        </button>
-        {busy && <span className="muted">{busy}…</span>}
-      </section>
+        </Button>
+      </ButtonGroup>
+      {busy && (
+        <div className="flex items-center gap-2 text-muted-foreground text-sm">
+          <Spinner /> {busy}…
+        </div>
+      )}
 
       {shown && <ProblemAlert problem={shown} />}
 
       {status.doctor && (
-        <section className="doctor">
-          <h2>Doctor</h2>
-          <ul>
+        <section className="flex flex-col gap-2">
+          <h2 className="font-medium text-muted-foreground text-sm">Doctor</h2>
+          <ItemGroup className="gap-1">
             {status.doctor.checks.map((c) => {
               const isHarnessCheck = c.name === "Claude Code";
+              const installing = installJob?.state.state === "running";
               return (
-                <li key={c.name} className={`check check-${c.status}`}>
-                  <code>[{c.status}]</code> <strong>{c.name}</strong>{" "}
-                  <span className="muted">{c.detail}</span>
-                  {c.status === "fail" && c.remediation && (
-                    <div className="muted">→ {c.remediation}</div>
-                  )}
+                <Item key={c.name} size="sm" variant="outline">
+                  <ItemMedia>
+                    <StatusDot tone={CHECK_TONE[c.status]} label={c.status} />
+                  </ItemMedia>
+                  <ItemContent>
+                    <ItemTitle>{c.name}</ItemTitle>
+                    <ItemDescription>{c.detail}</ItemDescription>
+                    {c.status === "fail" && c.remediation && (
+                      <ItemDescription>{c.remediation}</ItemDescription>
+                    )}
+                    {isHarnessCheck &&
+                      c.status === "fail" &&
+                      installJob &&
+                      installing && (
+                        <ItemDescription className="font-mono">
+                          {lastLogLine(installJob)}
+                        </ItemDescription>
+                      )}
+                    {isHarnessCheck &&
+                      c.status === "fail" &&
+                      installJob?.state.state === "failed" && (
+                        <FailureChip
+                          code={installJob.state.code}
+                          message={installJob.state.message}
+                          remediation={installJob.state.remediation}
+                        />
+                      )}
+                  </ItemContent>
                   {isHarnessCheck && c.status === "fail" && (
-                    <div className="actions">
-                      <button
-                        type="button"
-                        disabled={
-                          busy !== null || installJob?.state.state === "running"
-                        }
+                    <ItemActions>
+                      <Button
+                        size="sm"
+                        disabled={busy !== null || installing}
                         onClick={() =>
                           run("install-harness", () =>
                             tools.install("claude-code"),
                           )
                         }
                       >
-                        Install
-                      </button>
-                    </div>
+                        {installing && <Spinner />} Install
+                      </Button>
+                    </ItemActions>
                   )}
-                  {isHarnessCheck &&
-                    c.status === "fail" &&
-                    installJob?.state.state === "running" && (
-                      <div className="muted">{lastLogLine(installJob)}</div>
-                    )}
-                  {isHarnessCheck &&
-                    c.status === "fail" &&
-                    installJob?.state.state === "failed" && (
-                      <div>
-                        <code>{installJob.state.code}</code> —{" "}
-                        {installJob.state.message}
-                        {installJob.state.remediation && (
-                          <div className="muted">
-                            → {installJob.state.remediation}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                </li>
+                </Item>
               );
             })}
-          </ul>
+          </ItemGroup>
         </section>
       )}
-    </main>
+    </div>
   );
 }
 
