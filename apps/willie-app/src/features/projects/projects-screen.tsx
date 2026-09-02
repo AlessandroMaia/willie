@@ -1,4 +1,3 @@
-import { open } from "@tauri-apps/plugin-dialog";
 import { FolderGit2Icon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { ProblemAlert } from "@/components/problem-alert";
@@ -22,7 +21,11 @@ import { RootsPanel } from "@/features/projects/roots-panel";
 import { latestJobFor } from "@/lib/domain/jobs";
 import { isLive, liveCount } from "@/lib/domain/sessions";
 import type { Problem } from "@/lib/ipc";
-import { projects as projectsApi, sessions as sessionsApi } from "@/lib/ipc";
+import {
+  dialogs,
+  projects as projectsApi,
+  sessions as sessionsApi,
+} from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
 import type { Candidate, Job, Project } from "@/lib/proto";
 import { useSnapshot } from "@/store/use-snapshot";
@@ -254,8 +257,8 @@ export function ProjectsScreen() {
   }
 
   async function pickFolder() {
-    const picked = await open({ directory: true });
-    if (typeof picked === "string") setAddPath(picked);
+    const picked = await dialogs.pickFolder();
+    if (picked !== null) setAddPath(picked);
   }
 
   async function addByPath() {
@@ -429,8 +432,8 @@ export function ProjectsScreen() {
   }
 
   async function pickRelocateFolder() {
-    const picked = await open({ directory: true });
-    if (typeof picked === "string") setRelocatePath(picked);
+    const picked = await dialogs.pickFolder();
+    if (picked !== null) setRelocatePath(picked);
   }
 
   /* Same synchronous/asynchronous split as `confirmRemove`:

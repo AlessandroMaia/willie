@@ -75,12 +75,12 @@ const ipc = vi.hoisted(() => ({
     close: vi.fn(),
   },
   tools: { install: vi.fn() },
+  dialogs: { pickFolder: vi.fn(async () => null) },
   onDaemonEvent: vi.fn(async () => () => {}),
   onSessionOutput: vi.fn(async () => () => {}),
 }));
 
 vi.mock("@/lib/ipc", () => ipc);
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
 
 let App: typeof import("@/app/app").App;
 let createAppRouter: typeof import("@/app/router").createAppRouter;
