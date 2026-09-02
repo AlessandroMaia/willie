@@ -7,6 +7,7 @@ import type { EngineStatus, Problem } from "@/lib/ipc";
 import { engine, tools } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
 import type { Job } from "@/lib/proto";
+import { useEngineStatus } from "@/store/use-engine-status";
 import { useSnapshot } from "@/store/use-snapshot";
 
 const PARTS: { key: Part; label: string }[] = [
@@ -24,7 +25,7 @@ const LIGHT_CLASS: Record<Health, string> = {
 };
 
 export function DashboardScreen() {
-  const [status, setStatus] = useState<EngineStatus | null>(null);
+  const { status, problem: statusProblem, refresh } = useEngineStatus();
   const [problem, setProblem] = useState<Problem | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const handledInstallJobRef = useRef<string | null>(null);
@@ -32,27 +33,6 @@ export function DashboardScreen() {
   const report = useCallback((error: unknown) => {
     setProblem(asProblem(error));
   }, []);
-
-  const refresh = useCallback(() => {
-    engine.status().then(setStatus).catch(report);
-  }, [report]);
-
-  useEffect(() => {
-    refresh();
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    engine
-      .onStatus(setStatus)
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch(report);
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [refresh, report]);
 
   const daemonState = status?.daemon.state ?? null;
 
@@ -80,7 +60,10 @@ export function DashboardScreen() {
       handledInstallJobRef.current !== installJob.id
     ) {
       handledInstallJobRef.current = installJob.id;
-      engine.doctor().then(refresh).catch(report);
+      engine
+        .doctor()
+        .then(() => refresh())
+        .catch(report);
     }
   }, [installJob?.id, installJob?.state.state, refresh, report]);
 
@@ -89,7 +72,7 @@ export function DashboardScreen() {
     setProblem(null);
     try {
       await action();
-      refresh();
+      await refresh();
     } catch (error) {
       report(error);
     } finally {
@@ -103,6 +86,7 @@ export function DashboardScreen() {
 
   const overall = overallHealth(status);
   const daemonRunning = status.daemon.state === "running";
+  const shown = problem ?? statusProblem;
 
   return (
     <main className="dashboard">
@@ -164,7 +148,7 @@ export function DashboardScreen() {
         {busy && <span className="muted">{busy}…</span>}
       </section>
 
-      {problem && <ProblemAlert problem={problem} />}
+      {shown && <ProblemAlert problem={shown} />}
 
       {status.doctor && (
         <section className="doctor">
