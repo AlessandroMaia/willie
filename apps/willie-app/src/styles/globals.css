@@ -1,0 +1,153 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/inter";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --font-sans: "Inter Variable", sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: var(--font-mono-stack);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* The registry's zinc scale with its lightness steps kept and the hue
+ * moved from 286 (blue-grey) to 60-85 (warm), chroma at or below 0.008
+ * on every surface and at most 0.015 on mid-tone text and rings, so the
+ * ground reads as paper in light mode and warm charcoal in dark mode.
+ * success/warning/info are Willie's own: the registry ships only
+ * destructive. --terminal-* repeat the surfaces as hex, because xterm
+ * parses hex and rgb() only. This file is the only place a colour is
+ * written; everything else colours a state through a Tone. */
+:root {
+  color-scheme: light;
+  --font-mono-stack: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --radius: 0.625rem;
+  --background: oklch(0.99 0.004 85);
+  --foreground: oklch(0.16 0.008 60);
+  --card: oklch(0.985 0.004 85);
+  --card-foreground: oklch(0.16 0.008 60);
+  --popover: oklch(0.99 0.004 85);
+  --popover-foreground: oklch(0.16 0.008 60);
+  --primary: oklch(0.23 0.01 60);
+  --primary-foreground: oklch(0.985 0.003 85);
+  --secondary: oklch(0.96 0.005 85);
+  --secondary-foreground: oklch(0.23 0.01 60);
+  --muted: oklch(0.96 0.005 85);
+  --muted-foreground: oklch(0.55 0.015 70);
+  --accent: oklch(0.96 0.005 85);
+  --accent-foreground: oklch(0.23 0.01 60);
+  --destructive: oklch(0.577 0.245 27.325);
+  --success: oklch(0.56 0.15 150);
+  --success-foreground: oklch(0.985 0.003 85);
+  --warning: oklch(0.62 0.14 70);
+  --warning-foreground: oklch(0.985 0.003 85);
+  --info: oklch(0.58 0.15 245);
+  --info-foreground: oklch(0.985 0.003 85);
+  --border: oklch(0.91 0.006 80);
+  --input: oklch(0.91 0.006 80);
+  --ring: oklch(0.7 0.012 75);
+  --sidebar: oklch(0.975 0.005 85);
+  --sidebar-foreground: oklch(0.16 0.008 60);
+  --sidebar-primary: oklch(0.23 0.01 60);
+  --sidebar-primary-foreground: oklch(0.985 0.003 85);
+  --sidebar-accent: oklch(0.94 0.006 85);
+  --sidebar-accent-foreground: oklch(0.23 0.01 60);
+  --sidebar-border: oklch(0.91 0.006 80);
+  --sidebar-ring: oklch(0.7 0.012 75);
+  --terminal-background: #fdfcfa;
+  --terminal-foreground: #29251f;
+  --terminal-cursor: #29251f;
+  --terminal-selection: #d9d4c880;
+}
+
+.dark {
+  color-scheme: dark;
+  --background: oklch(0.17 0.006 60);
+  --foreground: oklch(0.97 0.004 85);
+  --card: oklch(0.22 0.007 60);
+  --card-foreground: oklch(0.97 0.004 85);
+  --popover: oklch(0.22 0.007 60);
+  --popover-foreground: oklch(0.97 0.004 85);
+  --primary: oklch(0.92 0.006 85);
+  --primary-foreground: oklch(0.22 0.007 60);
+  --secondary: oklch(0.28 0.007 60);
+  --secondary-foreground: oklch(0.97 0.004 85);
+  --muted: oklch(0.28 0.007 60);
+  --muted-foreground: oklch(0.71 0.012 75);
+  --accent: oklch(0.28 0.007 60);
+  --accent-foreground: oklch(0.97 0.004 85);
+  --destructive: oklch(0.704 0.191 22.216);
+  --success: oklch(0.72 0.15 150);
+  --success-foreground: oklch(0.17 0.006 60);
+  --warning: oklch(0.8 0.15 80);
+  --warning-foreground: oklch(0.17 0.006 60);
+  --info: oklch(0.72 0.13 245);
+  --info-foreground: oklch(0.17 0.006 60);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.55 0.012 75);
+  --sidebar: oklch(0.2 0.007 60);
+  --sidebar-foreground: oklch(0.97 0.004 85);
+  --sidebar-primary: oklch(0.92 0.006 85);
+  --sidebar-primary-foreground: oklch(0.22 0.007 60);
+  --sidebar-accent: oklch(0.28 0.007 60);
+  --sidebar-accent-foreground: oklch(0.97 0.004 85);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.55 0.012 75);
+  --terminal-background: #2a2622;
+  --terminal-foreground: #f7f5f1;
+  --terminal-cursor: #f7f5f1;
+  --terminal-selection: #5a544c80;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
