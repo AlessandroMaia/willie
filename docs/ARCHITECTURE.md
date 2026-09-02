@@ -537,22 +537,32 @@ window's percentage.
 | Settings      | machine (detected proxy/CA, re-sync), updates, tray                                                        |
 | Tray          | icon with the main window's percentage; menu: open, new session in a recent project, mute alerts, quit     |
 
+The shell is a collapsible sidebar with the six screens (Tools,
+Plugins and Settings disabled until they exist), a status bar with
+engine health, the daemon version and the live session count, and
+`Ctrl+1..3` / `Ctrl+B` shortcuts.
+
 Closing the window minimises to the tray; *quit* stops the daemon
 (sessions in Windows Terminal continue). One store fed only by
 `state.snapshot` + `state.events` — the UI **never computes truth**.
 
 The frontend source (`apps/willie-app/src/`) gives every kind of file
-one home: `app/` composes the shell and the route registry;
+one home: `app/` composes the shell — the route registry, the router,
+the sidebar and status bar, the theme effect and the shortcuts;
 `features/<domain>/` holds one directory per screen; `components/`
-holds what two features share; `store/` is the React binding over the
-one daemon-snapshot store; `lib/` has no React — the wire-type mirrors,
-the Tauri bridge, the pure domain modules and the store's state
-machine; `plugins/<id>/` holds the plugin panels. Imports only point
-down: `app → features → components`, `app` and `features` may read
-`store`, everything may read `lib`, and a feature never imports another
-feature. The linter fails `just check` on a violation, and filenames
-are kebab-case. Rationale and the enforcement table:
-`designs/frontend-foundations.md`.
+holds the design system's own pieces (`tone.ts`, `StatusDot`,
+`StatusBadge`, `FailureChip`, `ProblemAlert`) over the generated
+primitives in `components/ui/`; `store/` binds the two stores (daemon
+snapshot, engine status) to React; `lib/` has no React — the wire-type
+mirrors, the Tauri bridge, the pure domain modules and both stores'
+state machines; `plugins/<id>/` holds the plugin panels. Imports only
+point down: `app → features → components`, `app` and `features` may
+read `store`, everything may read `lib`, and a feature never imports
+another feature; `lib` returns facts, never a tone. The linter fails
+`just check` on a violation. Tokens live in `styles/globals.css` and
+nowhere else; the theme follows the system preference through `.dark`
+on the root. Rationale: `designs/frontend-foundations.md` and
+`designs/frontend-visual-system.md`.
 
 ### 5.2 Build and development (all from Windows)
 

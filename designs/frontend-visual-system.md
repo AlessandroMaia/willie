@@ -209,6 +209,10 @@ composition in `components/`:
 - `problem-alert.tsx` — rebuilt over `Alert`, same props.
 - `relative-time.tsx` — unchanged.
 
+Regeneration runs from inside `apps/willie-app`: the registry CLI
+resolves the project from its working directory, so `pnpm -C` does not
+reach it.
+
 `components/hooks/` holds the hooks the registry generates
 (`use-mobile`). Both directories sit under the `components/**` fence
 from stage 1 and need no new rule.
@@ -239,10 +243,11 @@ for its portals to stack correctly.
 so the bar never boots the daemon. Shows `StatusDot` with the overall
 health (`ok`, `degraded`, `failed` map to the tones `ok`, `warning`,
 `error`), the headline from `summarize()`, the daemon version, and the
-count of live sessions when the daemon is running. The whole bar is a
-link to `/dashboard`, which remains the detailed page with the doctor
-list and the actions. A store `problem` renders as tone `error` with
-its message.
+count of live sessions when the daemon is running. The health part of
+the bar — the dot and the headline — is a link to `/dashboard`, which
+remains the detailed page with the doctor list and the actions; the
+version and the count are plain text. A store `problem` renders as
+tone `error` with its message.
 
 **Theme** (`app/theme.ts`). `followSystemTheme()` reads
 `matchMedia("(prefers-color-scheme: dark)")`, toggles `.dark` on
