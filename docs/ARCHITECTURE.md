@@ -33,7 +33,7 @@ the *what*.
 ┌────────────────────────────▼──────────── distro "willie" ──────┐
 │  willied (uid 1000, unprivileged)                              │
 │  ├─ stdio  ◄─ engine                                           │
-│  ├─ /run/willie/willied.sock  ◄─ willie (CLI)                  │
+│  ├─ /run/willie/willied.sock  ◄─ willie (CLI), not served yet  │
 │  ├─ SQLite /var/lib/willie/willie.db (index)                   │
 │  └─ plugins: profiles, usage                                   │
 │                                                                │
@@ -62,7 +62,7 @@ the *what*.
 
 | Process            | User            | Role                                                                                                   |
 | ------------------ | --------------- | ------------------------------------------------------------------------------------------------------ |
-| `willied`          | `willie` (1000) | Daemon. Owns projects, profiles, session index, plugins, SQLite. Listens on **stdio** (engine) and **`/run/willie/willied.sock`** (local clients). |
+| `willied`          | `willie` (1000) | Daemon. Owns projects, profiles, session index, plugins, SQLite. Listens on **stdio** (engine); **`/run/willie/willied.sock`** (local clients) is designed and not yet served. |
 | `willie-sess <id>` | `willie`        | Detached supervisor of one session: PTY, sandbox, `/run/willie/sessions/<id>.sock`, `events.jsonl`, ring buffer. Lives as long as the harness, independent of daemon and app. |
 | `willie`           | `willie`        | Stateless CLI: `attach <id>`, `doctor`, `sandbox explain <project>`, `reindex`, `dev test`.            |
 | harness            | `willie` in a user namespace | The agent CLI, child of the supervisor, inside the sandbox (§3.3).                        |
@@ -384,8 +384,10 @@ sentence shown in the UI):
 | `mnt.all`          | off ⚠            | mounts all of `/mnt/*`                                                                                 |
 | `windows.interop`  | off ⚠⚠           | mounts `/init`, keeps `WSL_INTEROP` — equivalent to no sandbox towards Windows                        |
 
-`willie sandbox explain <project>` prints the exact bubblewrap argument
-vector, the seccomp summary and the Landlock rules.
+`willie sandbox explain <project>` prints the resolved capabilities;
+the exact bubblewrap argument vector, the seccomp summary and the
+Landlock rules arrive with the enforcement slice, which is what builds
+them.
 
 ### 3.4 Configuration layers (increasing authority, monotonic)
 

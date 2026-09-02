@@ -74,6 +74,22 @@ impl OpError {
     }
 }
 
+/// A sandbox refusal is already a code, a sentence naming the
+/// capability or the path at fault, and a remediation, so it is not
+/// looked up in the static session table like the other codes: it is
+/// carried across as it stands. Every path that resolves a policy —
+/// `session.create`, `project.set_sandbox`, `sandbox.explain` — reports
+/// the same shape because they all come through here.
+impl From<willie_core::sandbox::CapabilityError> for OpError {
+    fn from(e: willie_core::sandbox::CapabilityError) -> Self {
+        Self {
+            code: e.code().to_owned(),
+            message: e.to_string(),
+            remediation: e.remediation(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Ops {
     state: Arc<Mutex<State>>,
@@ -853,13 +869,7 @@ impl Ops {
         } = params;
         let mut project = self.get_project(project_id)?;
         let defaults = crate::harness::claude().default_capabilities();
-        willie_core::sandbox::resolve(defaults, &profile).map_err(|e| {
-            OpError {
-                code: e.code().to_owned(),
-                message: e.to_string(),
-                remediation: e.remediation(),
-            }
-        })?;
+        willie_core::sandbox::resolve(defaults, &profile)?;
         project.sandbox = profile;
         store::save(&self.state_dir, &project).map_err(|e| {
             OpError::new(

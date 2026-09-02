@@ -263,11 +263,18 @@ denials.
 | a required mechanism is unavailable            | `sandbox_backend_missing`        | the session does not start; the remediation names the mechanism         |
 | the kernel offers no path-based restriction    | —                                | the session starts; the applied event says so, and every view shows it  |
 | the profile names a deferred capability        | `sandbox_capability_unsupported` | refused in the daemon, before any process exists                        |
-| the profile has an unknown key or a wrong type | `sandbox_profile_invalid`        | refused in the daemon; the message names the key                        |
+| an `extra.paths` entry is not an absolute path | `sandbox_profile_invalid`        | refused in the daemon; the message names the path                       |
 | a backend refuses at launch                    | `sandbox_apply_failed`           | the session does not start; the backend's own message is carried        |
 | the notification thread dies                   | —                                | intercepted syscalls fail; an event records it; the session continues   |
 | `extra.paths` names a path outside the project | —                                | allowed, that is its purpose, and recorded in the spec                  |
 | a per-project cache path does not exist yet    | —                                | created before the bind; a session never starts without its caches      |
+
+An unknown key or a wrong type has no row, because it never reaches
+resolution: the profile is a section of the project's own record, so
+`toml` refuses the whole record and the daemon skips it at start-up —
+the project disappears from the Projects screen with no coded error.
+Holding the section as a deferred-parse value, so a bad profile fails
+by itself while the project still loads, is the named follow-up.
 
 ## Testing
 

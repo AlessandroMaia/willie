@@ -112,6 +112,15 @@ impl SessionOps {
         if self.runner.is_busy(&params.project_id) {
             return Err(crate::projects::busy_err());
         }
+        // Fail closed means fail before anything happens: resolution
+        // needs only the profile already in hand, so it runs before
+        // `--version` is spawned and before `identity::ensure` may write
+        // `~/.gitconfig`. A refusal after a filesystem side effect is
+        // not the daemon refusing early, it is the daemon refusing late.
+        let capabilities = session_capabilities(
+            harness::claude().default_capabilities(),
+            &project.sandbox,
+        )?;
         let (mode, resumed_from) = resume_decision(
             params.resume,
             harness::claude().capabilities().resume,
@@ -133,10 +142,6 @@ impl SessionOps {
         )
         .map_err(|e| OpError::coded(e.code(), e.message()))?;
 
-        let capabilities = session_capabilities(
-            harness::claude().default_capabilities(),
-            &project.sandbox,
-        )?;
         let id = SessionId::new();
         let socket = session_socket(&self.run_dir, &id.to_string());
         let launch = harness::claude().launch(
@@ -443,16 +448,11 @@ fn resume_decision(
 /// Layer 1 from the harness, layer 2 from the project record. A policy
 /// that cannot be applied must not become a session that pretends it
 /// was, so both refusals happen here, before anything is spawned.
-/// `OpError`'s fields are public, so this needs no new constructor.
 fn session_capabilities(
     defaults: CapabilitySet,
     profile: &SandboxProfile,
 ) -> Result<CapabilitySet, OpError> {
-    willie_core::sandbox::resolve(defaults, profile).map_err(|e| OpError {
-        code: e.code().to_owned(),
-        message: e.to_string(),
-        remediation: e.remediation(),
-    })
+    Ok(willie_core::sandbox::resolve(defaults, profile)?)
 }
 
 #[derive(Debug)]
@@ -803,5 +803,50 @@ mod create_tests {
             })
             .unwrap_err();
         assert_eq!(err.code, "session_already_live");
+    }
+
+    /// The policy is resolved before the harness is detected and before
+    /// `identity::ensure` may write `~/.gitconfig`, so this refusal
+    /// needs no `claude` binary on the host — which is exactly the
+    /// property being asserted: nothing has happened yet when the
+    /// daemon says no.
+    #[test]
+    fn create_refuses_a_deferred_capability_before_anything_is_touched() {
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+        let mut project = ready_project();
+        project.sandbox = SandboxProfile {
+            ssh: Some(true),
+            ..SandboxProfile::default()
+        };
+        let pid = project.id;
+        crate::lock(&state).projects.insert(pid, project);
+
+        let home = std::env::temp_dir().join("willie-sess-sandbox-home");
+        let identity = home.join(".gitconfig");
+        let _ = std::fs::remove_file(&identity);
+
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            std::env::temp_dir().join("willie-sess-sandbox-state"),
+            std::env::temp_dir().join("willie-sess-sandbox-run"),
+            home,
+            clock,
+            Arc::clone(&runner),
+        );
+        let err = ops
+            .create(CreateParams {
+                project_id: pid,
+                git_identity: None,
+                resume: false,
+            })
+            .unwrap_err();
+
+        assert_eq!(err.code, "sandbox_capability_unsupported");
+        assert!(err.message.contains("ssh"), "{}", err.message);
+        assert!(!identity.exists());
     }
 }

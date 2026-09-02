@@ -41,9 +41,12 @@ fn op_error(e: crate::projects::OpError) -> RpcError {
 }
 
 /// Maps a `CapabilityError` onto the wire error, the same two codes the
-/// session-create path reports for the same two refusals.
+/// session-create path reports for the same two refusals. Goes through
+/// `OpError` rather than building the payload again: the daemon has one
+/// conversion out of a sandbox refusal, and `op_error` is already the
+/// one place an `OpError` becomes a reply.
 fn capability_error(e: willie_core::sandbox::CapabilityError) -> RpcError {
-    RpcError::new(e.code(), e.to_string()).with_remediation(e.remediation())
+    op_error(e.into())
 }
 
 /// Recovers a poisoned lock instead of panicking: one worker's panic must
