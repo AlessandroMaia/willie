@@ -1,7 +1,7 @@
 import { fileURLToPath, URL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -14,6 +14,32 @@ export default defineConfig(async () => ({
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
+  },
+
+  /* Two projects: lib/ stays pure and runs in node, unchanged; anything
+   * that renders runs in jsdom with Testing Library's automatic
+   * cleanup, which needs `globals`. */
+  test: {
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "lib",
+          include: ["src/lib/**/*.test.ts"],
+          environment: "node",
+        },
+      },
+      {
+        extends: true,
+        test: {
+          name: "ui",
+          include: ["src/{app,components,features,store}/**/*.test.{ts,tsx}"],
+          environment: "jsdom",
+          globals: true,
+          setupFiles: ["./src/test-setup.ts"],
+        },
+      },
+    ],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
