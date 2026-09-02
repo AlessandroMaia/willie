@@ -26,6 +26,11 @@ impl WslError {
     pub fn code(&self) -> &'static str {
         match self {
             Self::NotInstalled(_) => "wsl_not_installed",
+            Self::CommandFailed { stderr, .. }
+                if stderr.contains(LOGON_TYPE_NOT_GRANTED) =>
+            {
+                SERVICE_LOGON_RIGHT_CODE
+            }
             Self::CommandFailed { .. } => "wsl_command_failed",
             Self::Unparseable { .. } => "wsl_unparseable_output",
             Self::Io(_) => "wsl_io",
@@ -42,6 +47,40 @@ const SERVICE_LOGON_REMEDIATION: &str = concat!(
     "this account cannot create the WSL 2 VM: an administrator must ",
     "grant \"Log on as a service\" to NT VIRTUAL MACHINE\\Virtual ",
     "Machines (S-1-5-83-0); then sign in again"
+);
+
+/// The HCS code Windows reports when the virtual-machine account lacks
+/// that right. It arrives inside `wsl.exe`'s stderr and inside the
+/// daemon's own last words, so both paths recognise it by this text.
+const LOGON_TYPE_NOT_GRANTED: &str = "0x80070569";
+
+/// The one problem code whose remedy needs an administrator rather than
+/// the user. Not for any other `wsl.exe` or daemon failure: seeing it,
+/// the UI offers the script below, and that script grants a Windows
+/// right.
+const SERVICE_LOGON_RIGHT_CODE: &str = "service_logon_right_missing";
+
+/// The commands that grant the right the remediation asks for, ready to
+/// paste into an administrator's prompt. It reads the current
+/// assignment and rewrites it only when the account is missing, and
+/// writes the template back in the encoding `secedit` produced, because
+/// it runs elevated on a machine Willie does not control.
+pub const SERVICE_LOGON_FIX_SCRIPT: &str = concat!(
+    "# Run in an elevated PowerShell (Run as administrator).\n",
+    r#"$cfg = "$env:TEMP\willie-secpol.cfg""#,
+    "\n",
+    r#"$db = "$env:windir\security\local.sdb""#,
+    "\n",
+    "secedit /export /cfg $cfg /areas USER_RIGHTS | Out-Null\n",
+    r"if (-not ((Get-Content $cfg) -match ",
+    r"'^SeServiceLogonRight .*\*S-1-5-83-0')) {",
+    "\n",
+    r"    (Get-Content $cfg) -replace ",
+    r"'^(SeServiceLogonRight .*)', '$1,*S-1-5-83-0' |",
+    "\n",
+    "        Set-Content $cfg -Encoding Unicode\n",
+    "    secedit /configure /db $db /cfg $cfg /areas USER_RIGHTS\n",
+    "}\n",
 );
 
 /// `Some(127)` is an implementation detail; the user reads a number or
@@ -108,6 +147,11 @@ impl EngineError {
             Self::Rpc(_) => "daemon_error",
             Self::Timeout { .. } => "daemon_timeout",
             Self::Transport(_) => "daemon_transport",
+            Self::DaemonExited { detail, .. }
+                if detail.contains(LOGON_TYPE_NOT_GRANTED) =>
+            {
+                SERVICE_LOGON_RIGHT_CODE
+            }
             Self::DaemonExited { .. } => "daemon_exited",
             Self::Protocol(_) => "protocol_violation",
             Self::VersionMismatch { .. } => "version_mismatch",
@@ -127,7 +171,7 @@ impl EngineError {
     pub fn remediation(&self) -> String {
         match self {
             Self::Wsl(WslError::CommandFailed { stderr, .. })
-                if stderr.contains("0x80070569") =>
+                if stderr.contains(LOGON_TYPE_NOT_GRANTED) =>
             {
                 SERVICE_LOGON_REMEDIATION.into()
             }
@@ -221,7 +265,7 @@ fn wsl_remediation(err: &WslError) -> String {
 /// host right needs an administrator, a missing distribution needs an
 /// install, anything else is worth one more attempt.
 fn daemon_exited_remediation(detail: &str) -> String {
-    if detail.contains("0x80070569") {
+    if detail.contains(LOGON_TYPE_NOT_GRANTED) {
         SERVICE_LOGON_REMEDIATION.into()
     } else if detail.contains("WSL_E_DISTRO_NOT_FOUND") {
         "the `willie` distribution is not registered: click Install \
@@ -246,6 +290,51 @@ mod tests {
             stderr: "Error code: Wsl/Service/CreateInstance/0x80070569".into(),
         });
         assert!(err.remediation().contains("S-1-5-83-0"));
+    }
+
+    /// The same host prerequisite reaches the UI from two unrelated
+    /// failures, and both must name it with the one code the Dashboard
+    /// keys its "copy the fix" action on.
+    #[test]
+    fn the_missing_logon_right_reports_one_code_from_both_paths() {
+        let from_command = EngineError::Wsl(WslError::CommandFailed {
+            args: "--exec /opt/willie/bin/willied --stdio".into(),
+            code: Some(1),
+            stderr: "Wsl/Service/CreateInstance/0x80070569".into(),
+        });
+        let from_exit =
+            exited(Some(1), "Wsl/Service/CreateInstance/0x80070569");
+
+        assert_eq!(from_command.code(), "service_logon_right_missing");
+        assert_eq!(from_exit.code(), "service_logon_right_missing");
+    }
+
+    /// The specific code may not swallow the generic ones: any other
+    /// output is still just a failed command or a dead daemon.
+    #[test]
+    fn a_failure_without_the_logon_code_keeps_its_generic_code() {
+        let err = EngineError::Wsl(WslError::CommandFailed {
+            args: "--list --quiet".into(),
+            code: Some(1),
+            stderr: "boom".into(),
+        });
+
+        assert_eq!(err.code(), "wsl_command_failed");
+        assert_eq!(exited(Some(127), "boom").code(), "daemon_exited");
+    }
+
+    /// The script is what the user pastes into an administrator's
+    /// prompt, so it may not drift from the remediation beside it: both
+    /// name the same right and the same account, and the script says
+    /// which prompt it needs.
+    #[test]
+    fn the_fix_script_grants_the_right_the_remediation_names() {
+        for text in [SERVICE_LOGON_REMEDIATION, SERVICE_LOGON_FIX_SCRIPT] {
+            assert!(text.contains("S-1-5-83-0"), "{text}");
+        }
+
+        assert!(SERVICE_LOGON_FIX_SCRIPT.contains("SeServiceLogonRight"));
+        assert!(SERVICE_LOGON_FIX_SCRIPT.contains("elevated"));
     }
 
     #[test]
