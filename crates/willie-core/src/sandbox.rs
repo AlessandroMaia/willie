@@ -151,6 +151,29 @@ pub struct CapabilitySet {
     pub extra_paths: Vec<ExtraPath>,
 }
 
+impl CapabilitySet {
+    /// Whether this set grants `capability`. The four deferred names
+    /// have no field, because a set can never grant what this version
+    /// cannot apply; `extra.paths` is granted once the list holds an
+    /// entry. The one place the enum and the record meet, so nothing
+    /// downstream restates the mapping.
+    #[must_use]
+    pub fn enabled(&self, capability: Capability) -> bool {
+        match capability {
+            Capability::ProjectRw => self.project_rw,
+            Capability::AgentState => self.agent_state,
+            Capability::ToolsRo => self.tools_ro,
+            Capability::CachesRw => self.caches_rw,
+            Capability::GitIdentity => self.git_identity,
+            Capability::ExtraPaths => !self.extra_paths.is_empty(),
+            Capability::HomePersistent
+            | Capability::Ssh
+            | Capability::MntAll
+            | Capability::WindowsInterop => false,
+        }
+    }
+}
+
 /// A defaulted set means "written before sandboxing", which is not the
 /// same as "reach nothing": the project bind is what makes a session a
 /// session, so it is on even here.
@@ -309,28 +332,18 @@ pub fn explain(
     Ok(Capability::ALL
         .iter()
         .map(|&capability| {
-            let (enabled, spoken) = match capability {
-                Capability::ProjectRw => (resolved.project_rw, false),
-                Capability::AgentState => {
-                    (resolved.agent_state, profile.agent_state.is_some())
-                }
-                Capability::ToolsRo => {
-                    (resolved.tools_ro, profile.tools_ro.is_some())
-                }
-                Capability::CachesRw => {
-                    (resolved.caches_rw, profile.caches_rw.is_some())
-                }
-                Capability::GitIdentity => {
-                    (resolved.git_identity, profile.git_identity.is_some())
-                }
-                Capability::ExtraPaths => (
-                    !resolved.extra_paths.is_empty(),
-                    !profile.extra_paths.is_empty(),
-                ),
+            let enabled = resolved.enabled(capability);
+            let spoken = match capability {
+                Capability::ProjectRw => false,
+                Capability::AgentState => profile.agent_state.is_some(),
+                Capability::ToolsRo => profile.tools_ro.is_some(),
+                Capability::CachesRw => profile.caches_rw.is_some(),
+                Capability::GitIdentity => profile.git_identity.is_some(),
+                Capability::ExtraPaths => !profile.extra_paths.is_empty(),
                 Capability::HomePersistent
                 | Capability::Ssh
                 | Capability::MntAll
-                | Capability::WindowsInterop => (false, false),
+                | Capability::WindowsInterop => false,
             };
             let source = if capability.is_implemented() {
                 if spoken {
@@ -638,5 +651,34 @@ extra_paths = [{ path = \"/srv/shared\", mode = \"ro\" }]
         let err = toml::from_str::<SandboxProfile>(text).unwrap_err();
 
         assert!(err.to_string().contains("agnt_state"), "{err}");
+    }
+
+    /// Every reader of a set — `explain`, the app's catalogue — asks
+    /// this one question, so a capability with no field must answer
+    /// `false` rather than let a caller guess.
+    #[test]
+    fn a_set_answers_for_every_capability_and_grants_no_deferred_one() {
+        let set = CapabilitySet {
+            agent_state: false,
+            extra_paths: vec![ExtraPath {
+                path: "/srv/shared".into(),
+                mode: PathMode::Ro,
+            }],
+            ..defaults()
+        };
+
+        assert!(set.enabled(Capability::ProjectRw));
+        assert!(!set.enabled(Capability::AgentState));
+        assert!(set.enabled(Capability::ToolsRo));
+        assert!(set.enabled(Capability::ExtraPaths));
+        assert!(!CapabilitySet::default().enabled(Capability::ExtraPaths));
+        for deferred in [
+            Capability::HomePersistent,
+            Capability::Ssh,
+            Capability::MntAll,
+            Capability::WindowsInterop,
+        ] {
+            assert!(!set.enabled(deferred), "{}", deferred.display_name());
+        }
     }
 }

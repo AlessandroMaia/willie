@@ -65,6 +65,11 @@ export interface CapabilityInfo {
   display_name: string;
   consequence: string;
   implemented: boolean;
+  /* Layer 1's answer, from `Harness::default_capabilities()`. What a
+   * row shows when the project's profile says nothing about it; never
+   * assumed here, because the trait's own default and Claude Code's
+   * differ on `agent_state`. */
+  default_enabled: boolean;
 }
 
 export type JobKind =

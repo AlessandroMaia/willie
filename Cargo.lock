@@ -4091,6 +4091,7 @@ dependencies = [
  "tauri-plugin-dialog",
  "willie-core",
  "willie-engine",
+ "willie-harness",
  "willie-proto",
 ]
 

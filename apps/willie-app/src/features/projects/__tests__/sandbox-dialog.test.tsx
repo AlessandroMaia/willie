@@ -15,20 +15,31 @@ const catalogue = (): CapabilityInfo[] => [
     display_name: "project.rw",
     consequence: "the session edits the project, which is why it exists",
     implemented: true,
+    default_enabled: true,
   },
   {
     capability: "agent_state",
     display_name: "agent.state",
     consequence: "anything the agent runs can use the harness's login",
     implemented: true,
+    default_enabled: true,
   },
   {
     capability: "ssh",
     display_name: "ssh",
     consequence: "the agent can use the user's ssh keys and agent socket",
     implemented: false,
+    default_enabled: false,
   },
 ];
+
+/* A harness that leaves the credential off, which is what the `Harness`
+ * trait's own default does: Claude Code is the only implementation that
+ * turns `agent.state` on, so the dialog may not assume it. */
+const credentialOffByDefault = (): CapabilityInfo[] =>
+  catalogue().map((c) =>
+    c.capability === "agent_state" ? { ...c, default_enabled: false } : c,
+  );
 
 /* Fill the remaining fields from the fixture the neighbouring projects
  * tests already use, so one project shape is described in one place. */
@@ -126,12 +137,42 @@ describe("SandboxDialog", () => {
     const ssh = screen.getByRole("checkbox", { name: /ssh/ });
     expect(ssh.hasAttribute("data-disabled")).toBe(false);
 
+    /* Off in the catalogue's defaults, so the one click that becomes
+     * possible writes the override that turns it on. */
     await user.click(ssh);
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({ ssh: false }),
+    expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ ssh: true }));
+  });
+
+  it("seeds a row the profile says nothing about from the harness default", () => {
+    render(
+      <SandboxDialog
+        project={project()}
+        catalogue={credentialOffByDefault()}
+        problem={null}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
     );
+
+    const credential = screen.getByRole("checkbox", { name: /agent\.state/ });
+    expect(credential.hasAttribute("data-checked")).toBe(false);
+  });
+
+  it("shows an override that turns a default-off capability on", () => {
+    render(
+      <SandboxDialog
+        project={{ ...project(), sandbox: { agent_state: true } }}
+        catalogue={credentialOffByDefault()}
+        problem={null}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    const credential = screen.getByRole("checkbox", { name: /agent\.state/ });
+    expect(credential.hasAttribute("data-checked")).toBe(true);
   });
 
   it("keeps a refusal visible inside the dialog", () => {

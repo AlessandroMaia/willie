@@ -22,6 +22,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 willie-core = { workspace = true }
 willie-engine = { workspace = true }
+# Layer 1 of the sandbox policy lives on the `Harness` trait, and the
+# capability catalogue is answered here without a daemon round-trip.
+willie-harness = { workspace = true }
 willie-proto = { workspace = true }
 
 [lints]

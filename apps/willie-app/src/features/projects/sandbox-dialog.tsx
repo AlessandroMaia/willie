@@ -175,10 +175,15 @@ export function SandboxDialog({
             const capability = info.capability;
             const id = `sandbox-${capability}`;
             const forced = capability === "project_rw";
+            /* An absent override means "whatever the harness decided",
+             * and only the catalogue knows what that is: the trait's
+             * default leaves `agent.state` off where Claude Code turns
+             * it on, so a guess here would show a credential as
+             * mounted for a harness that never asked for it. */
             const checked = forced
               ? true
               : info.implemented
-                ? (local[capability] ?? true)
+                ? (local[capability] ?? info.default_enabled)
                 : false;
 
             const content = (
