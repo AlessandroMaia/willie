@@ -1,4 +1,7 @@
+import { FailureChip } from "@/components/failure-chip";
+import { StatusBadge } from "@/components/status-badge";
 import type { Tone } from "@/components/tone";
+import { Spinner } from "@/components/ui/spinner";
 import type { SessionState } from "@/lib/proto";
 
 /** What a session state says on its badge and the tone it takes.
@@ -23,16 +26,6 @@ export function badgeFor(state: SessionState): { label: string; tone: Tone } {
   }
 }
 
-/* Until Task 9 the badge still renders with the old chip classes so
- * nothing changes on screen while the mapping moves. */
-const CHIP_CLASS: Record<Tone, string> = {
-  ok: "chip chip-ready",
-  warning: "chip chip-busy",
-  error: "chip chip-failed",
-  pending: "chip chip-busy",
-  muted: "chip chip-muted",
-};
-
 interface SessionStateBadgeProps {
   state: SessionState;
 }
@@ -44,20 +37,18 @@ export function SessionStateBadge({ state }: SessionStateBadgeProps) {
 
   if (state.state === "failed") {
     return (
-      <div className={CHIP_CLASS[tone]}>
-        <code>{label}</code>
-        <span>{state.message}</span>
-        {state.remediation && (
-          <div className="muted">→ {state.remediation}</div>
-        )}
-      </div>
+      <FailureChip
+        code={label}
+        message={state.message}
+        remediation={state.remediation}
+      />
     );
   }
 
   return (
-    <span className={CHIP_CLASS[tone]}>
-      {tone === "pending" && <span className="spinner" aria-hidden="true" />}
+    <StatusBadge tone={tone}>
+      {tone === "pending" && <Spinner className="size-3" />}
       {label}
-    </span>
+    </StatusBadge>
   );
 }
