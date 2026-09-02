@@ -544,8 +544,10 @@ engine health, the daemon version and the live session count, and
 `Ctrl+1..3` reach the shell; `Ctrl+B` stays with the session).
 
 Closing the window minimises to the tray; *quit* stops the daemon
-(sessions in Windows Terminal continue). One store fed only by
-`state.snapshot` + `state.events` — the UI **never computes truth**.
+(sessions in Windows Terminal continue). Daemon truth flows through one
+store fed only by `state.snapshot` + `state.events`; a second,
+read-only store mirrors `engine_status` + `engine://status`. The UI
+**never computes truth**.
 
 The frontend source (`apps/willie-app/src/`) gives every kind of file
 one home: `app/` composes the shell — the route registry, the router,

@@ -10,7 +10,7 @@ export type Part = "wsl" | "distro" | "daemon" | "doctor";
 /** The order a summary reads the parts in: the first that is not ok
  * is the one worth naming, and WSL comes before everything that runs
  * inside it. */
-export const PARTS: Part[] = ["wsl", "distro", "daemon", "doctor"];
+export const PARTS: readonly Part[] = ["wsl", "distro", "daemon", "doctor"];
 
 export function healthFor(part: Part, s: EngineStatus): Health {
   switch (part) {

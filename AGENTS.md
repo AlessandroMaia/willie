@@ -99,10 +99,10 @@ releases/            curated release notes, one file per version
 - Frontend colours live only in `apps/willie-app/src/styles/globals.css`.
   A state is coloured through a `Tone` (`components/tone.ts`), never
   through a literal or an ad-hoc class.
-- `apps/willie-app/src/components/ui/` is generated, never hand-edited:
-  from inside `apps/willie-app` (the registry CLI resolves the project
-  from its working directory, not from `-C`),
-  `pnpm dlx shadcn@latest add <name>`, then
+- `apps/willie-app/src/components/ui/` and `components/hooks/` are
+  generated, never hand-edited: from inside `apps/willie-app` (the
+  registry CLI resolves the project from its working directory, not
+  from `-C`), `pnpm dlx shadcn@latest add <name>`, then
   `pnpm exec biome check --write --unsafe src/components/ui src/components/hooks`.
   Willie's own components are compositions in `components/`.
 - Frontend layering: `app → features → components → components/ui`;

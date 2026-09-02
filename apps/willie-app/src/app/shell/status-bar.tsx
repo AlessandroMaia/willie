@@ -9,7 +9,8 @@ import { useSnapshot } from "@/store/use-snapshot";
 /**
  * The always-visible line under the screen: engine health, the first
  * thing wrong or "Engine running", the daemon version, live sessions.
- * The whole bar links to the Dashboard, which holds the details.
+ * The dot and the headline link to the Dashboard, which holds the
+ * details; the version and the count are plain text.
  */
 export function StatusBar() {
   const { status, problem } = useEngineStatus();
