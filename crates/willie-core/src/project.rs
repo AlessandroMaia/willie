@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::ProjectId;
+use crate::{id::ProjectId, sandbox::SandboxProfile};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -31,6 +31,11 @@ pub struct Project {
     #[serde(default = "yes")]
     pub source_present: bool,
     pub created_at: String,
+    /// Layer 2 of the sandbox policy, edited by the app. Defaulted so a
+    /// project record written before sandboxing still loads, and last
+    /// so the TOML table it serialises to lands at the end of the file.
+    #[serde(default)]
+    pub sandbox: SandboxProfile,
 }
 
 fn yes() -> bool {
@@ -106,6 +111,25 @@ pub fn source_key(windows_path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sandbox::{ExtraPath, PathMode, SandboxProfile};
+
+    /// A minimal, valid `Project` for tests that don't care which
+    /// fields hold what, so a new field is added here once rather than
+    /// at every call site.
+    fn sample_project() -> Project {
+        Project {
+            id: ProjectId::new(),
+            name: "Willie".into(),
+            slug: "willie".into(),
+            source: r"C:\github\pessoal\willie".into(),
+            workspace: "/home/willie/projects/willie".into(),
+            branch: "main".into(),
+            state: ProjectState::Ready,
+            source_present: true,
+            created_at: "2026-08-26T00:00:00Z".into(),
+            sandbox: SandboxProfile::default(),
+        }
+    }
 
     #[test]
     fn slug_is_kebab_ascii_and_avoids_collisions() {
@@ -128,20 +152,45 @@ mod tests {
 
     #[test]
     fn project_round_trips_through_toml() {
-        let p = Project {
-            id: ProjectId::new(),
-            name: "Willie".into(),
-            slug: "willie".into(),
-            source: r"C:\github\pessoal\willie".into(),
-            workspace: "/home/willie/projects/willie".into(),
-            branch: "main".into(),
-            state: ProjectState::Ready,
-            source_present: true,
-            created_at: "2026-08-26T00:00:00Z".into(),
-        };
+        let p = sample_project();
         let text = toml::to_string(&p).unwrap();
         let back: Project = toml::from_str(&text).unwrap();
         assert_eq!(p, back);
+    }
+
+    /// The profile rides in the project record the daemon already
+    /// persists, so no new file appears and a project written before
+    /// this version still loads.
+    #[test]
+    fn a_project_written_without_a_sandbox_section_loads_with_defaults() {
+        let text = toml::to_string(&sample_project()).unwrap();
+        let stripped: String = text
+            .lines()
+            .filter(|l| !l.starts_with("[sandbox"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let project: Project = toml::from_str(&stripped).unwrap();
+
+        assert_eq!(project.sandbox, SandboxProfile::default());
+    }
+
+    #[test]
+    fn a_sandbox_section_round_trips_through_the_project_toml() {
+        let mut project = sample_project();
+        project.sandbox = SandboxProfile {
+            agent_state: Some(false),
+            extra_paths: vec![ExtraPath {
+                path: "/srv/shared".into(),
+                mode: PathMode::Ro,
+            }],
+            ..SandboxProfile::default()
+        };
+
+        let text = toml::to_string(&project).unwrap();
+        let back: Project = toml::from_str(&text).unwrap();
+
+        assert_eq!(back.sandbox, project.sandbox);
     }
 
     #[test]

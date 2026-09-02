@@ -593,6 +593,7 @@ mod create_tests {
     use willie_core::{
         id::ProjectId,
         project::{Project, ProjectState},
+        sandbox::SandboxProfile,
     };
     use willie_proto::{job::JobKind, session::CreateParams};
 
@@ -614,6 +615,7 @@ mod create_tests {
             state: ProjectState::Ready,
             source_present: true,
             created_at: clock(),
+            sandbox: SandboxProfile::default(),
         }
     }
 

@@ -12,6 +12,7 @@ use willie_core::{
     id::{JobId, ProjectId},
     paths::windows_to_drvfs,
     project::{Project, ProjectState, slug_for, source_key},
+    sandbox::SandboxProfile,
 };
 use willie_proto::{
     job::JobKind,
@@ -646,6 +647,7 @@ impl Ops {
             state: ProjectState::Preparing,
             source_present: true,
             created_at: (self.clock)(),
+            sandbox: SandboxProfile::default(),
         };
         store::save_or_log(&self.state_dir, &project);
         state::emit(&self.state, &self.out, |s| {
@@ -959,6 +961,7 @@ mod tests {
             state: ProjectState::Preparing,
             source_present: true,
             created_at: clock(),
+            sandbox: SandboxProfile::default(),
         }
     }
 

@@ -133,7 +133,7 @@ pub fn emit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use willie_core::project::ProjectState;
+    use willie_core::{project::ProjectState, sandbox::SandboxProfile};
 
     fn proj() -> Project {
         Project {
@@ -146,6 +146,7 @@ mod tests {
             state: ProjectState::Preparing,
             source_present: true,
             created_at: "t".into(),
+            sandbox: SandboxProfile::default(),
         }
     }
 
