@@ -15,9 +15,11 @@ const store = createStore({
  */
 export function useSnapshot(enabled = true): StoreState {
   const state = useSyncExternalStore(store.subscribe, store.getState);
+
   useEffect(() => {
     if (!enabled) return;
     return store.acquire();
   }, [enabled]);
+
   return state;
 }
