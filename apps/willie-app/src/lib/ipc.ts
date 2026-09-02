@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { open } from "@tauri-apps/plugin-dialog";
 import type { Candidate, Event, Session, Snapshot } from "./proto";
 
 /* Mirrors of crates/willie-engine (EngineStatus) and willie-proto. */
@@ -116,6 +117,16 @@ export const onSessionOutput = (
 
 export const tools = {
   install: (harness: string) => invoke("tool_install", { harness }),
+};
+
+/* The folder picker is I/O like every `invoke`, so it lives here and
+ * tests fake one module. */
+export const dialogs = {
+  pickFolder: async (): Promise<string | null> => {
+    const picked = await open({ directory: true });
+
+    return typeof picked === "string" ? picked : null;
+  },
 };
 
 export const onDaemonEvent = (cb: (ev: Event) => void): Promise<UnlistenFn> =>

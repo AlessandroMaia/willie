@@ -1,18 +1,34 @@
+import { TerminalIcon, XIcon } from "lucide-react";
 import { useState } from "react";
 import { ProblemAlert } from "@/components/problem-alert";
 import { relativeTime } from "@/components/relative-time";
+import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import {
+  Item,
+  ItemActions,
+  ItemDescription,
+  ItemGroup,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
+import { SessionStateBadge } from "@/features/sessions/session-state-badge";
 import { SessionTerminal } from "@/features/sessions/session-terminal";
 import {
   liveSessions,
   recentTerminal,
-  stateChip,
   TERMINAL_HISTORY_LIMIT,
-  type Tone,
 } from "@/lib/domain/sessions";
 import type { Problem } from "@/lib/ipc";
 import { sessions as sessionsApi } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
-import type { Session, SessionState, Snapshot } from "@/lib/proto";
+import type { Session, Snapshot } from "@/lib/proto";
 import { useSnapshot } from "@/store/use-snapshot";
 
 /* Every row needs the owning project's display name, but a session can
@@ -22,42 +38,6 @@ import { useSnapshot } from "@/store/use-snapshot";
 function projectNameFor(snap: Snapshot, projectId: string): string {
   const project = snap.projects.find((p) => p.id === projectId);
   return project ? project.name : `removed project (${projectId})`;
-}
-
-const TONE_CLASS: Record<Tone, string> = {
-  ok: "ready",
-  pending: "busy",
-  error: "failed",
-  muted: "muted",
-};
-
-interface SessionChipProps {
-  state: SessionState;
-}
-
-/* Mirrors `ProjectStateChip`: a failed state carries its own
- * code, message and remediation, so it renders as the same stacked
- * chip-failed shape; every other state is a single-line pill. */
-function SessionChip({ state }: SessionChipProps) {
-  const { label, tone } = stateChip(state);
-  const cls = `chip chip-${TONE_CLASS[tone]}`;
-  if (state.state === "failed") {
-    return (
-      <div className={cls}>
-        <code>{label}</code>
-        <span>{state.message}</span>
-        {state.remediation && (
-          <div className="muted">→ {state.remediation}</div>
-        )}
-      </div>
-    );
-  }
-  return (
-    <span className={cls}>
-      {tone === "pending" && <span className="spinner" aria-hidden="true" />}
-      {label}
-    </span>
-  );
 }
 
 interface LiveRowProps {
@@ -80,34 +60,34 @@ function LiveRow({
   onOpenInApp,
 }: LiveRowProps) {
   return (
-    <div className="session-row">
-      <div className="session-row-main">
-        <strong>{projectName}</strong>
-        <SessionChip state={session.state} />
+    <Item variant="outline" className="flex-col items-stretch gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <ItemTitle className="font-semibold">{projectName}</ItemTitle>
+        <SessionStateBadge state={session.state} />
       </div>
-      <div className="session-row-detail muted">
-        <div>harness: {session.harness}</div>
-        <div>
+      <ItemDescription className="flex flex-col gap-0.5">
+        <span>harness: {session.harness}</span>
+        <span>
           {session.clients} client{session.clients === 1 ? "" : "s"} attached
-        </div>
-        <div>
+        </span>
+        <span>
           started {relativeTime(session.started_at ?? session.created_at)}
-        </div>
-      </div>
+        </span>
+      </ItemDescription>
       {problem && <ProblemAlert problem={problem} />}
-      <div className="actions">
-        <button type="button" disabled={busy} onClick={onAttach}>
+      <ItemActions className="flex flex-wrap gap-2">
+        <Button size="sm" variant="outline" disabled={busy} onClick={onAttach}>
           Attach
-        </button>
-        <button type="button" disabled={busy} onClick={onStop}>
+        </Button>
+        <Button size="sm" variant="outline" disabled={busy} onClick={onStop}>
           Stop
-        </button>
-        <button type="button" disabled={busy} onClick={onOpenInApp}>
+        </Button>
+        <Button size="sm" disabled={busy} onClick={onOpenInApp}>
           Open in app
-        </button>
-        {busy && <span className="muted">working…</span>}
-      </div>
-    </div>
+        </Button>
+        {busy && <Spinner className="text-muted-foreground" />}
+      </ItemActions>
+    </Item>
   );
 }
 
@@ -118,18 +98,22 @@ interface RecentRowProps {
 
 function RecentRow({ session, projectName }: RecentRowProps) {
   return (
-    <div className="session-row session-row-recent">
-      <div className="session-row-main">
-        <strong>{projectName}</strong>
-        <SessionChip state={session.state} />
+    <Item
+      variant="muted"
+      size="sm"
+      className="flex-col items-stretch gap-1 opacity-80"
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <ItemTitle>{projectName}</ItemTitle>
+        <SessionStateBadge state={session.state} />
       </div>
-      <div className="session-row-detail muted">
-        <div>harness: {session.harness}</div>
-        <div>
+      <ItemDescription className="flex gap-3">
+        <span>harness: {session.harness}</span>
+        <span>
           finished {relativeTime(session.finished_at ?? session.created_at)}
-        </div>
-      </div>
-    </div>
+        </span>
+      </ItemDescription>
+    </Item>
   );
 }
 
@@ -200,63 +184,90 @@ export function SessionsScreen() {
   }
 
   return (
-    <main className="sessions">
+    <div className="mx-auto flex max-w-4xl flex-col gap-6">
       <header>
-        <h1>Sessions</h1>
+        <h1 className="font-semibold text-lg">Sessions</h1>
       </header>
 
       {problem && <ProblemAlert problem={problem} />}
 
       {snap === null ? (
-        !problem && <p className="muted">Loading sessions…</p>
+        !problem && (
+          <div className="flex items-center gap-2 text-muted-foreground text-sm">
+            <Spinner /> Loading sessions…
+          </div>
+        )
       ) : snap.sessions.length === 0 ? (
-        <p className="muted">No sessions yet — open one from a project.</p>
+        <Empty>
+          <EmptyHeader>
+            <EmptyMedia variant="icon">
+              <TerminalIcon />
+            </EmptyMedia>
+            <EmptyTitle>No sessions yet</EmptyTitle>
+            <EmptyDescription>Open one from a project.</EmptyDescription>
+          </EmptyHeader>
+        </Empty>
       ) : (
         <>
-          <section className="session-list">
-            <h2>Live</h2>
+          <section className="flex flex-col gap-2">
+            <h2 className="font-medium text-muted-foreground text-sm">Live</h2>
             {live.length === 0 ? (
-              <p className="muted">No live sessions.</p>
+              <p className="text-muted-foreground text-sm">No live sessions.</p>
             ) : (
-              live.map((session) => (
-                <LiveRow
-                  key={session.id}
-                  session={session}
-                  projectName={projectNameFor(snap, session.project_id)}
-                  busy={busyId === session.id}
-                  problem={rowProblems.get(session.id) ?? null}
-                  onAttach={() =>
-                    attach(session, projectNameFor(snap, session.project_id))
-                  }
-                  onStop={() => stop(session)}
-                  onOpenInApp={() => setOpenId(session.id)}
-                />
-              ))
+              <ItemGroup className="gap-3">
+                {live.map((session) => (
+                  <LiveRow
+                    key={session.id}
+                    session={session}
+                    projectName={projectNameFor(snap, session.project_id)}
+                    busy={busyId === session.id}
+                    problem={rowProblems.get(session.id) ?? null}
+                    onAttach={() =>
+                      attach(session, projectNameFor(snap, session.project_id))
+                    }
+                    onStop={() => stop(session)}
+                    onOpenInApp={() => setOpenId(session.id)}
+                  />
+                ))}
+              </ItemGroup>
             )}
           </section>
 
-          <section className="session-list">
-            <h2>Recent</h2>
+          <section className="flex flex-col gap-2">
+            <h2 className="font-medium text-muted-foreground text-sm">
+              Recent
+            </h2>
             {recent.length === 0 ? (
-              <p className="muted">No recent sessions.</p>
+              <p className="text-muted-foreground text-sm">
+                No recent sessions.
+              </p>
             ) : (
-              recent.map((session) => (
-                <RecentRow
-                  key={session.id}
-                  session={session}
-                  projectName={projectNameFor(snap, session.project_id)}
-                />
-              ))
+              <ItemGroup className="gap-2">
+                {recent.map((session) => (
+                  <RecentRow
+                    key={session.id}
+                    session={session}
+                    projectName={projectNameFor(snap, session.project_id)}
+                  />
+                ))}
+              </ItemGroup>
             )}
           </section>
 
           {openId && (
-            <section className="session-terminal">
-              <div className="session-terminal-head">
-                <strong>{titleFor(openId)}</strong>
-                <button type="button" onClick={() => setOpenId(null)}>
-                  Close
-                </button>
+            <section className="flex flex-col gap-2 rounded-lg border bg-card p-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-semibold text-sm">
+                  {titleFor(openId)}
+                </span>
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Close terminal"
+                  onClick={() => setOpenId(null)}
+                >
+                  <XIcon />
+                </Button>
               </div>
               <SessionTerminal
                 key={openId}
@@ -267,6 +278,6 @@ export function SessionsScreen() {
           )}
         </>
       )}
-    </main>
+    </div>
   );
 }

@@ -90,6 +90,25 @@ releases/            curated release notes, one file per version
   duplicated across test modules.
 - Formatting is `just fmt` (80 columns, LF). Frontend: Biome and strict
   TypeScript.
+- Frontend rhythm: one blank line between logical blocks inside a
+  function (setup, each hook, handlers, the `return`) and between
+  top-level declarations. Imports in Biome's order — packages, then
+  `@/`, then relative — and the editor's Biome extension organises them
+  on save (`.vscode/settings.json`). `pnpm -C apps/willie-app format`
+  applies both order and class sorting.
+- Frontend colours live only in `apps/willie-app/src/styles/globals.css`.
+  A state is coloured through a `Tone` (`components/tone.ts`), never
+  through a literal or an ad-hoc class.
+- `apps/willie-app/src/components/ui/` and `components/hooks/` are
+  generated, never hand-edited: from inside `apps/willie-app` (the
+  registry CLI resolves the project from its working directory, not
+  from `-C`), `pnpm dlx shadcn@latest add <name>`, then
+  `pnpm exec biome check --write --unsafe src/components/ui src/components/hooks`.
+  Willie's own components are compositions in `components/`.
+- Frontend layering: `app → features → components → components/ui`;
+  `app` and `features` may read `store`; everything may read `lib`;
+  `lib` has no React and returns facts, never presentation; a feature
+  never imports another feature. Biome enforces it.
 - Configuration files are TOML; JSON only where a foreign tool requires
   it. Writing a foreign config file preserves its existing format,
   comments and key order.

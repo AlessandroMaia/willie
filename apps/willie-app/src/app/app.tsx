@@ -1,27 +1,28 @@
-import { useState } from "react";
-import { ROUTES, type Route } from "@/app/routes";
+import { HotkeysProvider } from "@tanstack/react-hotkeys";
+import { RouterProvider } from "@tanstack/react-router";
+import { useEffect } from "react";
+import { type AppRouter, createAppRouter } from "@/app/router";
+import { followSystemTheme } from "@/app/theme";
+import { Toaster } from "@/components/ui/toast";
+import { TooltipProvider } from "@/components/ui/tooltip";
 
-export function App() {
-  const [active, setActive] = useState<Route["id"]>(
-    ROUTES[0]?.id ?? "dashboard",
-  );
-  const route = ROUTES.find((r) => r.id === active) ?? ROUTES[0];
-  const Screen = route?.screen;
+const defaultRouter = createAppRouter();
+
+interface AppProps {
+  /** Tests pass a router over a memory history. */
+  router?: AppRouter;
+}
+
+export function App({ router = defaultRouter }: AppProps) {
+  useEffect(() => followSystemTheme(), []);
+
   return (
-    <div className="app">
-      <nav className="tabs">
-        {ROUTES.map((r) => (
-          <button
-            key={r.id}
-            type="button"
-            data-active={r.id === active}
-            onClick={() => setActive(r.id)}
-          >
-            {r.label}
-          </button>
-        ))}
-      </nav>
-      {Screen && <Screen />}
-    </div>
+    <HotkeysProvider>
+      <TooltipProvider>
+        <Toaster>
+          <RouterProvider router={router} />
+        </Toaster>
+      </TooltipProvider>
+    </HotkeysProvider>
   );
 }

@@ -1,4 +1,4 @@
-import type { Session, SessionState } from "@/lib/proto";
+import type { Session } from "@/lib/proto";
 
 /**
  * A non-terminal session — the UI's "live vs history" split. This is the
@@ -18,29 +18,6 @@ export function isLive(s: Session): boolean {
 /** How many of a project's sessions are live right now. */
 export function liveCount(sessions: Session[], projectId: string): number {
   return sessions.filter((s) => s.project_id === projectId && isLive(s)).length;
-}
-
-export type Tone = "ok" | "muted" | "error" | "pending";
-
-/** The chip label and tone for a session's state. */
-export function stateChip(state: SessionState): { label: string; tone: Tone } {
-  switch (state.state) {
-    case "creating":
-      return { label: "creating", tone: "pending" };
-    case "running":
-      return { label: "running", tone: "ok" };
-    case "stopping":
-      return { label: "stopping", tone: "pending" };
-    case "exited": {
-      if (state.code == null && state.signal != null) {
-        return { label: `exited (signal ${state.signal})`, tone: "error" };
-      }
-      const code = state.code ?? 0;
-      return { label: `exited ${code}`, tone: code === 0 ? "muted" : "error" };
-    }
-    case "failed":
-      return { label: `failed: ${state.code}`, tone: "error" };
-  }
 }
 
 /** Live sessions, newest `created_at` first. */

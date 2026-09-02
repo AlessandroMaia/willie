@@ -1,3 +1,7 @@
+import { FailureChip } from "@/components/failure-chip";
+import { StatusBadge } from "@/components/status-badge";
+import { Button } from "@/components/ui/button";
+import { Spinner } from "@/components/ui/spinner";
 import type { Job, JobKind, Project } from "@/lib/proto";
 
 const RETRYABLE_KINDS: JobKind[] = ["sync_to_windows", "update_from_windows"];
@@ -15,15 +19,14 @@ export function ProjectStateChip({
 }: ProjectStateChipProps) {
   if (project.state.state === "failed") {
     return (
-      <div className="chip chip-failed">
-        <code>{project.state.code}</code>
-        <span>{project.state.message}</span>
-        {project.state.remediation && (
-          <div className="muted">→ {project.state.remediation}</div>
-        )}
-      </div>
+      <FailureChip
+        code={project.state.code}
+        message={project.state.message}
+        remediation={project.state.remediation}
+      />
     );
   }
+
   if (job && job.state.state === "failed") {
     /* `workspace_dirty` only ever arrives this way: `project_remove`
      * resolves the instant the job is queued, so the dirty-workspace
@@ -34,28 +37,30 @@ export function ProjectStateChip({
     const forceRemove =
       job.kind === "remove" && job.state.code === "workspace_dirty";
     const canRetry = forceRemove || RETRYABLE_KINDS.includes(job.kind);
+
     return (
-      <div className="chip chip-failed">
-        <code>{job.state.code}</code>
-        <span>{job.state.message}</span>
-        {job.state.remediation && (
-          <div className="muted">→ {job.state.remediation}</div>
-        )}
+      <FailureChip
+        code={job.state.code}
+        message={job.state.message}
+        remediation={job.state.remediation}
+      >
         {canRetry && (
-          <button type="button" onClick={() => onRetry(job)}>
+          <Button size="xs" variant="outline" onClick={() => onRetry(job)}>
             {forceRemove ? "Remove anyway" : "Retry"}
-          </button>
+          </Button>
         )}
-      </div>
+      </FailureChip>
     );
   }
+
   if (project.state.state === "preparing" || job?.state.state === "running") {
     return (
-      <div className="chip chip-busy">
-        <span className="spinner" aria-hidden="true" />
-        <span>{job?.log_tail || "working…"}</span>
-      </div>
+      <StatusBadge tone="pending">
+        <Spinner className="size-3" />
+        {job?.log_tail || "working…"}
+      </StatusBadge>
     );
   }
-  return <span className="chip chip-ready">ready</span>;
+
+  return <StatusBadge tone="ok">ready</StatusBadge>;
 }

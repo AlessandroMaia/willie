@@ -1,11 +1,41 @@
 import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
+import { type ITheme, Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { useEffect, useRef, useState } from "react";
 import { ProblemAlert } from "@/components/problem-alert";
 import type { Problem } from "@/lib/ipc";
 import { onSessionOutput, sessionTerminal } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
+
+/* Reads the tokens globals.css declares for the terminal. xterm parses
+ * hex and rgb() only, which is why those four are kept as hex there. */
+function cssVar(name: string): string {
+  return getComputedStyle(document.documentElement)
+    .getPropertyValue(name)
+    .trim();
+}
+
+function terminalTheme(): ITheme {
+  return {
+    background: cssVar("--terminal-background"),
+    foreground: cssVar("--terminal-foreground"),
+    cursor: cssVar("--terminal-cursor"),
+    selectionBackground: cssVar("--terminal-selection"),
+  };
+}
+
+/* The shell's screen shortcuts must work while the terminal has focus,
+ * so Ctrl with a digit goes back to the document; every other chord —
+ * Ctrl+B included, which the hosted agent and terminal programs bind —
+ * stays with the session. */
+export function isShellShortcut(event: KeyboardEvent): boolean {
+  return (
+    event.ctrlKey &&
+    !event.altKey &&
+    !event.shiftKey &&
+    /^[1-9]$/.test(event.key)
+  );
+}
 
 interface SessionTerminalProps {
   id: string;
@@ -25,10 +55,26 @@ export function SessionTerminal({ id, title }: SessionTerminalProps) {
     const container = containerRef.current;
     if (!container) return;
 
-    const term = new Terminal({ convertEol: false });
+    const term = new Terminal({
+      convertEol: false,
+      fontFamily: cssVar("--font-mono-stack") || "monospace",
+      fontSize: 13,
+      theme: terminalTheme(),
+    });
+    term.attachCustomKeyEventHandler((event) => !isShellShortcut(event));
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(container);
+
+    /* The theme effect toggles `.dark` on <html>; re-reading the tokens
+     * on that change keeps the terminal in step without importing app/. */
+    const themeObserver = new MutationObserver(() => {
+      term.options.theme = terminalTheme();
+    });
+    themeObserver.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
 
     let cancelled = false;
     let unlisten: (() => void) | undefined;
@@ -77,6 +123,7 @@ export function SessionTerminal({ id, title }: SessionTerminalProps) {
       cancelled = true;
       unlisten?.();
       observer.disconnect();
+      themeObserver.disconnect();
       sessionTerminal.close(id).catch(() => {
         /* Best-effort: the session may already be gone. */
       });
@@ -85,9 +132,13 @@ export function SessionTerminal({ id, title }: SessionTerminalProps) {
   }, [id]);
 
   return (
-    <div className="session-terminal-body">
+    <div className="flex flex-col gap-2">
       {problem && <ProblemAlert problem={problem} />}
-      <div className="terminal-surface" ref={containerRef} title={title} />
+      <div
+        className="h-[22rem] overflow-hidden rounded-md border bg-[var(--terminal-background)] p-1.5"
+        ref={containerRef}
+        title={title}
+      />
     </div>
   );
 }

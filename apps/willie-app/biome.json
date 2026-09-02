@@ -20,7 +20,15 @@
     "rules": {
       "preset": "recommended",
       "nursery": {
-        "noFloatingPromises": "error"
+        "noFloatingPromises": "error",
+        "useSortedClasses": {
+          "level": "error",
+          "fix": "safe",
+          "options": {
+            "attributes": ["className"],
+            "functions": ["cn", "cva", "clsx"]
+          }
+        }
       },
       "suspicious": {
         "noExplicitAny": "error"
@@ -41,6 +49,11 @@
       "quoteStyle": "double",
       "semicolons": "always",
       "trailingCommas": "all"
+    }
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
     }
   },
   "overrides": [
@@ -241,6 +254,21 @@
                 ]
               }
             }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/components/ui/**"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noLabelWithoutControl": "off",
+            "useSemanticElements": "off"
+          },
+          "suspicious": {
+            "noArrayIndexKey": "off",
+            "noDocumentCookie": "off"
           }
         }
       }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { lightFor, overallHealth } from "@/lib/domain/health";
+import { healthFor, overallHealth } from "@/lib/domain/health";
 import type { DistroStatus, EngineStatus } from "@/lib/ipc";
 
 const distro: DistroStatus = {
@@ -38,30 +38,30 @@ const base: EngineStatus = {
 };
 
 describe("health lights", () => {
-  it("is green when wsl, distro, daemon and doctor are all fine", () => {
-    expect(overallHealth(base)).toBe("green");
+  it("is ok when wsl, distro, daemon and doctor are all fine", () => {
+    expect(overallHealth(base)).toBe("ok");
   });
 
-  it("is red when WSL is missing or too old", () => {
+  it("has failed when WSL is missing or too old", () => {
     expect(
       overallHealth({ ...base, wsl: { ...base.wsl, meets_minimum: false } }),
-    ).toBe("red");
+    ).toBe("failed");
     expect(
-      lightFor("wsl", { ...base, wsl: { ...base.wsl, installed: false } }),
-    ).toBe("red");
+      healthFor("wsl", { ...base, wsl: { ...base.wsl, installed: false } }),
+    ).toBe("failed");
   });
 
-  it("is yellow when the distro is not registered yet", () => {
+  it("is degraded when the distro is not registered yet", () => {
     expect(
       overallHealth({
         ...base,
         distro: { ...distro, registered: false },
         daemon: { state: "stopped" },
       }),
-    ).toBe("yellow");
+    ).toBe("degraded");
   });
 
-  it("is red when a required doctor check fails or the daemon failed", () => {
+  it("has failed when a required doctor check fails or the daemon failed", () => {
     const failing = {
       checks: [
         {
@@ -73,18 +73,18 @@ describe("health lights", () => {
         },
       ],
     };
-    expect(overallHealth({ ...base, doctor: failing })).toBe("red");
+    expect(overallHealth({ ...base, doctor: failing })).toBe("failed");
     expect(
-      lightFor("daemon", {
+      healthFor("daemon", {
         ...base,
         daemon: { state: "failed", code: "daemon_exited", message: "boom" },
       }),
-    ).toBe("red");
+    ).toBe("failed");
   });
 
-  it("treats a stopped daemon as yellow, not red", () => {
-    expect(lightFor("daemon", { ...base, daemon: { state: "stopped" } })).toBe(
-      "yellow",
+  it("treats a stopped daemon as degraded, not failed", () => {
+    expect(healthFor("daemon", { ...base, daemon: { state: "stopped" } })).toBe(
+      "degraded",
     );
   });
 });
