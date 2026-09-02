@@ -194,6 +194,20 @@ fn render_capabilities(entries: &[Explained]) -> String {
         .join("\n")
 }
 
+/// The stderr line a failed command ends with: the command's own
+/// prefix, the stable code, the message, then the remediation when the
+/// error carries one. The code belongs on this line because
+/// docs/CLI_CONTRACT.md makes it part of every error, not only of the
+/// `--json` object: without it the only way to tell one refusal from
+/// another is to match the prose.
+fn error_line(command: &str, err: &RpcError) -> String {
+    let mut line = format!("{command}: {}: {}", err.code, err.message);
+    if let Some(hint) = &err.remediation {
+        line.push_str(&format!(" → {hint}"));
+    }
+    line
+}
+
 /// `willie sandbox explain` has nowhere to send this yet: `willied`
 /// speaks JSON-RPC only over the engine's stdio pipe
 /// (`crates/willied/src/main.rs`'s `run_stdio`), and the local socket
@@ -255,12 +269,7 @@ fn sandbox_explain(project: &str, json: bool) -> ExitCode {
                     ),
                 }
             } else {
-                let mut line =
-                    format!("willie sandbox explain: {}", err.message);
-                if let Some(hint) = &err.remediation {
-                    line.push_str(&format!(" → {hint}"));
-                }
-                eprintln!("{line}");
+                eprintln!("{}", error_line("willie sandbox explain", &err));
             }
             ExitCode::from(EXIT_FAILURE)
         }
@@ -520,5 +529,35 @@ mod tests {
         assert_eq!(err.code, "daemon_unreachable");
         assert!(err.message.contains("daemon"), "{}", err.message);
         assert!(err.remediation.is_some());
+    }
+
+    #[test]
+    fn a_text_mode_error_names_the_code_then_the_message_then_the_hint() {
+        let err = RpcError::new("daemon_unreachable", "nothing to ask")
+            .with_remediation("read the record");
+
+        assert_eq!(
+            error_line("willie sandbox explain", &err),
+            "willie sandbox explain: daemon_unreachable: nothing to ask \
+             → read the record"
+        );
+        assert_eq!(
+            error_line("willie sandbox explain", &RpcError::new("x", "no")),
+            "willie sandbox explain: x: no"
+        );
+    }
+
+    /// The portable half of `tests/cli.rs`'s
+    /// `sandbox_explain_fails_closed_with_no_daemon_to_ask`, which only
+    /// runs inside the distribution: whatever the subcommand refuses
+    /// with, the line a human reads names the code.
+    #[test]
+    fn the_text_line_of_a_failed_explain_carries_its_code() {
+        let line = error_line(
+            "willie sandbox explain",
+            &fetch_explain("p").unwrap_err(),
+        );
+
+        assert!(line.contains("daemon_unreachable"), "{line}");
     }
 }
