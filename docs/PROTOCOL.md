@@ -230,7 +230,10 @@ reserved: no session method today distinguishes an unknown id from one
 whose supervisor cannot be reached, so `session.stop` reports
 `session_not_running` for both. Remediations match
 `willie_core::session::remediation_for`, the one table the daemon
-reads from (and the app will, once its Plan B session UI lands).
+reads from (and the app will, once its Plan B session UI lands). The
+two sandbox codes are the exception: theirs are built by
+`willie_core::sandbox::CapabilityError` so the text can name the
+capability or the path at fault, which a static table cannot.
 
 | Code | When | Remediation |
 | --- | --- | --- |
@@ -239,6 +242,8 @@ reads from (and the app will, once its Plan B session UI lands).
 | `session_already_live` | `session.create { resume: true }` while the project already has a live session | use the running session, or stop it first, then resume |
 | `harness_not_installed` | no harness binary on the session `PATH` (or `--version` fails) | click Install on the Dashboard |
 | `git_identity_missing` | none of the identity sources — an existing `~/.gitconfig`, the Windows identity, the source checkout's — yields a name and e-mail | set `git config --global user.name` and `user.email` on Windows, then open the session again |
+| `sandbox_capability_unsupported` | `session.create` on a project whose sandbox profile enables a capability this version cannot apply | remove it from the project's sandbox settings; the message names it |
+| `sandbox_profile_invalid` | `session.create` on a project whose sandbox profile is unreadable as a profile: an unknown key, a wrong type, or an extra path that is not absolute | the message names the key or the path; correct it in the project's sandbox settings |
 | `supervisor_spawn_failed` | `willie-sess` could not be executed, or its launcher's readiness line could not be parsed | run `willie doctor`; reinstall the distribution if the supervisor binary is missing |
 | `supervisor_timeout` | no readiness reply from the supervisor within ten seconds | open the session again; run `willie doctor` if it repeats |
 | `harness_exec_failed` | the harness child's `chdir` or `execve` failed (binary gone, workspace deleted by hand) | reinstall Claude Code, or remove the project and add it again |
