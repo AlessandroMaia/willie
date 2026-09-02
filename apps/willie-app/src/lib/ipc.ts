@@ -55,6 +55,7 @@ export const engine = {
   startDaemon: () => invoke<EngineStatus>("engine_start_daemon"),
   stopDaemon: () => invoke<EngineStatus>("engine_stop_daemon"),
   doctor: () => invoke<DoctorReport>("engine_doctor"),
+  logonFixScript: () => invoke<string>("engine_logon_fix_script"),
   onStatus: (cb: (status: EngineStatus) => void): Promise<UnlistenFn> =>
     listen<EngineStatus>(STATUS_EVENT, (event) => cb(event.payload)),
 };

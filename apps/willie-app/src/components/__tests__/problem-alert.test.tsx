@@ -19,6 +19,20 @@ describe("ProblemAlert", () => {
     expect(alert.textContent).toContain("Wait for it to finish");
   });
 
+  it("shows a control that belongs to the failure when given one", () => {
+    render(
+      <ProblemAlert
+        problem={problem}
+        action={<button type="button">Fix it</button>}
+      />,
+    );
+
+    const alert = screen.getByRole("alert");
+    const button = screen.getByRole("button", { name: "Fix it" });
+
+    expect(alert.contains(button)).toBe(true);
+  });
+
   it("renders a notice as a status, without the code", () => {
     render(<ProblemAlert problem={problem} tone="notice" />);
 

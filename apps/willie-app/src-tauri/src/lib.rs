@@ -102,6 +102,14 @@ fn engine_stop_daemon(
     mutate(app, state, Engine::stop_daemon)
 }
 
+/// The commands that clear the one host prerequisite an administrator
+/// owns. A constant the engine holds, so no lock is taken and nothing
+/// can fail; the UI asks for it only when it sees that problem code.
+#[tauri::command]
+fn engine_logon_fix_script() -> &'static str {
+    willie_engine::error::SERVICE_LOGON_FIX_SCRIPT
+}
+
 #[tauri::command(async)]
 fn engine_doctor(
     app: AppHandle,
@@ -425,6 +433,7 @@ pub fn run() {
             engine_start_daemon,
             engine_stop_daemon,
             engine_doctor,
+            engine_logon_fix_script,
             project_list,
             project_add,
             project_remove,

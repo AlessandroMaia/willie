@@ -15,6 +15,10 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Spinner } from "@/components/ui/spinner";
+import {
+  LogonFixAction,
+  offersLogonFix,
+} from "@/features/health/logon-fix-action";
 import { healthFor, overallHealth, type Part } from "@/lib/domain/health";
 import { latestInstallJob } from "@/lib/domain/jobs";
 import type { EngineStatus, Problem } from "@/lib/ipc";
@@ -170,7 +174,12 @@ export function DashboardScreen() {
         </div>
       )}
 
-      {shown && <ProblemAlert problem={shown} />}
+      {shown && (
+        <ProblemAlert
+          problem={shown}
+          action={offersLogonFix(shown) ? <LogonFixAction /> : undefined}
+        />
+      )}
 
       {status.doctor && (
         <section className="flex flex-col gap-2">

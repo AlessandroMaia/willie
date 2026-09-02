@@ -1,5 +1,11 @@
 import { CircleAlertIcon, InfoIcon } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import type { ReactNode } from "react";
+import {
+  Alert,
+  AlertAction,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
 import type { Problem } from "@/lib/ipc";
 
 interface ProblemAlertProps {
@@ -8,9 +14,17 @@ interface ProblemAlertProps {
    * used when an action succeeded but something beside it did not —
    * a live session whose terminal tab never opened. */
   tone?: "error" | "notice";
+  /** One control that belongs to this failure, shown in the alert's own
+   * action corner. This component never learns which failure it is
+   * looking at: the caller decides what a given code deserves. */
+  action?: ReactNode;
 }
 
-export function ProblemAlert({ problem, tone = "error" }: ProblemAlertProps) {
+export function ProblemAlert({
+  problem,
+  tone = "error",
+  action,
+}: ProblemAlertProps) {
   if (tone === "notice") {
     return (
       <Alert role="status">
@@ -19,6 +33,7 @@ export function ProblemAlert({ problem, tone = "error" }: ProblemAlertProps) {
         {problem.remediation && (
           <AlertDescription>{problem.remediation}</AlertDescription>
         )}
+        {action && <AlertAction>{action}</AlertAction>}
       </Alert>
     );
   }
@@ -32,6 +47,7 @@ export function ProblemAlert({ problem, tone = "error" }: ProblemAlertProps) {
       {problem.remediation && (
         <AlertDescription>{problem.remediation}</AlertDescription>
       )}
+      {action && <AlertAction>{action}</AlertAction>}
     </Alert>
   );
 }
