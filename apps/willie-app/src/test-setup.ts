@@ -26,3 +26,19 @@ if (typeof globalThis.ResizeObserver !== "function") {
 if (typeof Element.prototype.scrollIntoView !== "function") {
   Element.prototype.scrollIntoView = () => {};
 }
+
+if (typeof Element.prototype.getAnimations !== "function") {
+  Element.prototype.getAnimations = () => [];
+}
+
+/* jsdom already defines `window.scrollTo` and `getContext`, but only as
+ * a "not implemented" stub that logs a console notice on every call
+ * (the router resets the window's scroll on navigation; a canvas
+ * measurement runs somewhere in the primitives). There is no absent
+ * feature to guard on, so both are replaced outright with a silent,
+ * equally inert version. */
+window.scrollTo = () => {};
+
+if (typeof HTMLCanvasElement.prototype.getContext === "function") {
+  HTMLCanvasElement.prototype.getContext = () => null;
+}
