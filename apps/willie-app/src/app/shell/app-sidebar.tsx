@@ -43,14 +43,6 @@ export function AppSidebar() {
                   <SidebarMenuButton
                     render={<Link to={entry.path} />}
                     isActive={pathname === entry.path}
-                    /* `isActive` drives the button's own state styling
-                     * (Base UI renders it as a bare `data-active`, no
-                     * value); tests and any external styling that reads
-                     * the active row want the conventional
-                     * `data-active="true"`, so it is set explicitly
-                     * too and wins the merge over the state-derived
-                     * one. */
-                    data-active={pathname === entry.path ? "true" : undefined}
                     tooltip={{
                       children: (
                         <>

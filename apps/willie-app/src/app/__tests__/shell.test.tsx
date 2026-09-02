@@ -97,8 +97,8 @@ beforeEach(async () => {
   ({ createAppRouter } = await import("@/app/router"));
 });
 
-function renderApp(path = "/") {
-  ipc.engine.status.mockResolvedValue(STATUS);
+function renderApp(path = "/", status: EngineStatus = STATUS) {
+  ipc.engine.status.mockResolvedValue(status);
   ipc.projects.snapshot.mockResolvedValue(SNAPSHOT);
   const router = createAppRouter(
     createMemoryHistory({ initialEntries: [path] }),
@@ -113,7 +113,7 @@ describe("the shell", () => {
 
     const link = await screen.findByRole("link", { name: /Dashboard/ });
 
-    expect(link.getAttribute("data-active")).toBe("true");
+    expect(link.getAttribute("aria-current")).toBe("page");
     expect(link.getAttribute("href")).toBe("/dashboard");
   });
 
@@ -142,6 +142,18 @@ describe("the shell", () => {
     await vi.waitFor(() =>
       expect(router.state.location.pathname).toBe("/sessions"),
     );
+  });
+
+  it("toggles the sidebar exactly once on Mod+B", async () => {
+    const user = userEvent.setup();
+    renderApp();
+    await screen.findByRole("link", { name: /Dashboard/ });
+    const sidebar = document.querySelector("[data-slot='sidebar'][data-state]");
+    expect(sidebar?.getAttribute("data-state")).toBe("expanded");
+
+    await user.keyboard("{Control>}b{/Control}");
+
+    expect(sidebar?.getAttribute("data-state")).toBe("collapsed");
   });
 
   it("shows the planned screens disabled, with no route", async () => {
@@ -192,16 +204,7 @@ describe("the shell", () => {
   });
 
   it("names the first failing part and hides the count when the daemon is stopped", async () => {
-    ipc.engine.status.mockResolvedValue({
-      ...STATUS,
-      daemon: { state: "stopped" },
-    });
-    ipc.projects.snapshot.mockResolvedValue(SNAPSHOT);
-    render(
-      <App
-        router={createAppRouter(createMemoryHistory({ initialEntries: ["/"] }))}
-      />,
-    );
+    renderApp("/", { ...STATUS, daemon: { state: "stopped" } });
 
     expect(await screen.findByText("Daemon stopped")).toBeDefined();
     expect(screen.queryByText(/live session/)).toBeNull();

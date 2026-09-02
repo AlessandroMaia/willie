@@ -23,6 +23,10 @@ function ScreenHotkey({ shortcut, path }: ScreenHotkeyProps) {
   return null;
 }
 
+/* The generated sidebar also listens for `Ctrl+B` on `window`. The
+ * shortcuts library handles the chord on `document` first and stops
+ * propagation, so the sidebar toggles exactly once — the shell test
+ * pins that. */
 function SidebarHotkey() {
   const { toggleSidebar } = useSidebar();
 
