@@ -1,4 +1,16 @@
 import { ProblemAlert } from "@/components/problem-alert";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import type { Problem } from "@/lib/ipc";
 import type { Project } from "@/lib/proto";
 
@@ -21,36 +33,45 @@ export function RelocateProjectDialog({
   onConfirm,
   onCancel,
 }: RelocateProjectDialogProps) {
-  if (!project) return null;
   return (
-    <div className="modal-backdrop">
-      <div className="modal" role="dialog" aria-modal="true">
-        <h2>Relocate “{project.name}”</h2>
-        <div className="actions">
-          <input
-            value={path}
-            onChange={(e) => onPathChange(e.target.value)}
-            placeholder="C:\github\..."
-            aria-label="new source path"
-          />
-          <button type="button" onClick={onBrowse}>
-            Browse…
-          </button>
-        </div>
+    <Dialog
+      open={project !== null}
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Relocate “{project?.name}”</DialogTitle>
+          <DialogDescription>
+            Point the project at the folder its source moved to.
+          </DialogDescription>
+        </DialogHeader>
+
+        <Field>
+          <FieldLabel htmlFor="relocate-path">New source path</FieldLabel>
+          <div className="flex gap-2">
+            <Input
+              id="relocate-path"
+              value={path}
+              onChange={(e) => onPathChange(e.target.value)}
+              placeholder="C:\github\..."
+            />
+            <Button variant="outline" onClick={onBrowse}>
+              Browse…
+            </Button>
+          </div>
+        </Field>
+
         {problem && <ProblemAlert problem={problem} />}
-        <div className="actions">
-          <button
-            type="button"
-            disabled={path.trim() === ""}
-            onClick={onConfirm}
-          >
+
+        <DialogFooter>
+          <DialogClose render={<Button variant="ghost" />}>Cancel</DialogClose>
+          <Button disabled={path.trim() === ""} onClick={onConfirm}>
             Relocate
-          </button>
-          <button type="button" onClick={onCancel}>
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

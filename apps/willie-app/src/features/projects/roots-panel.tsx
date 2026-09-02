@@ -1,3 +1,14 @@
+import { XIcon } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemGroup,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
+
 interface RootsPanelProps {
   roots: string[];
   newRoot: string;
@@ -20,35 +31,48 @@ export function RootsPanel({
   onDiscover,
 }: RootsPanelProps) {
   return (
-    <section className="roots">
-      <h2>Roots</h2>
-      <ul>
-        {roots.map((root) => (
-          <li key={root}>
-            <span>{root}</span>
-            <button type="button" onClick={() => onRemove(root)}>
-              Remove
-            </button>
-          </li>
-        ))}
-      </ul>
-      <div className="actions">
-        <input
+    <section className="flex flex-col gap-2">
+      <h2 className="font-medium text-muted-foreground text-sm">Roots</h2>
+
+      {roots.length > 0 && (
+        <ItemGroup className="gap-1">
+          {roots.map((root) => (
+            <Item key={root} size="xs" variant="muted">
+              <ItemContent className="font-mono text-xs">{root}</ItemContent>
+              <ItemActions>
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={`Remove root ${root}`}
+                  onClick={() => onRemove(root)}
+                >
+                  <XIcon />
+                </Button>
+              </ItemActions>
+            </Item>
+          ))}
+        </ItemGroup>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
           value={newRoot}
           onChange={(e) => onNewRootChange(e.target.value)}
           placeholder="C:\github\..."
           aria-label="new root"
+          className="w-72"
         />
-        <button
-          type="button"
+        <Button
+          variant="outline"
           disabled={newRoot.trim() === "" || busy}
           onClick={onAdd}
         >
           Add root
-        </button>
-        <button type="button" disabled={discovering} onClick={onDiscover}>
+        </Button>
+        <Button variant="outline" disabled={discovering} onClick={onDiscover}>
+          {discovering && <Spinner />}
           {discovering ? "Discovering…" : "Discover"}
-        </button>
+        </Button>
       </div>
     </section>
   );

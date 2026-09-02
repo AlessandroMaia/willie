@@ -1,4 +1,23 @@
+import { EllipsisIcon } from "lucide-react";
 import { ProblemAlert } from "@/components/problem-alert";
+import { StatusBadge } from "@/components/status-badge";
+import { Button } from "@/components/ui/button";
+import { ButtonGroup } from "@/components/ui/button-group";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import {
+  Item,
+  ItemActions,
+  ItemDescription,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Spinner } from "@/components/ui/spinner";
 import { ProjectStateChip } from "@/features/projects/project-state-chip";
 import type { Problem } from "@/lib/ipc";
 import type { Job, Project } from "@/lib/proto";
@@ -58,112 +77,134 @@ export function ProjectRow({
   onCancelJob,
   onOpenRemoveDialog,
 }: ProjectRowProps) {
+  const actionable = !isBusy && project.state.state === "ready" && !jobRunning;
+
   return (
-    <div className="project-row">
-      <div className="project-row-main">
+    <Item variant="outline" className="flex-col items-stretch gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {isEditing ? (
-          <span className="rename">
-            <input
+          <div className="flex items-center gap-1.5">
+            <Input
               value={editingName}
               onChange={(e) => onEditingNameChange(e.target.value)}
               aria-label="project name"
+              className="h-7 w-56"
             />
-            <button type="button" onClick={onSaveRename}>
+            <Button size="sm" onClick={onSaveRename}>
               Save
-            </button>
-            <button type="button" onClick={onCancelRename}>
+            </Button>
+            <Button size="sm" variant="ghost" onClick={onCancelRename}>
               Cancel
-            </button>
-          </span>
+            </Button>
+          </div>
         ) : (
-          <span className="project-name">
-            <strong>{project.name}</strong>
-            <button type="button" onClick={onStartRename}>
-              Rename
-            </button>
-          </span>
+          <ItemTitle className="font-semibold">{project.name}</ItemTitle>
         )}
+
         <ProjectStateChip project={project} job={job} onRetry={onRetry} />
+
         {live > 0 && (
-          <span
-            className="badge badge-live"
+          <StatusBadge
+            tone="ok"
             title={`${live} live session${live === 1 ? "" : "s"}`}
           >
             {live} live
+          </StatusBadge>
+        )}
+
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label={`More actions for ${project.name}`}
+                className="ml-auto"
+              />
+            }
+          >
+            <EllipsisIcon />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={onStartRename}>Rename</DropdownMenuItem>
+            <DropdownMenuItem onClick={onCopyPath}>
+              Copy workspace path
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onOpenInExplorer}>
+              Open in Explorer
+            </DropdownMenuItem>
+            {!project.source_present && (
+              <DropdownMenuItem onClick={onOpenRelocateDialog}>
+                Relocate source…
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              variant="destructive"
+              onClick={onOpenRemoveDialog}
+            >
+              Remove…
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+
+      <ItemDescription className="flex flex-col gap-0.5">
+        <span>source: {project.source}</span>
+        <span>
+          workspace: <code className="font-mono">{path}</code>
+        </span>
+        <span>branch: {project.branch}</span>
+        {!project.source_present && (
+          <span className="flex items-center gap-2">
+            <StatusBadge tone="warning">source missing</StatusBadge>
+            <Button size="xs" variant="outline" onClick={onOpenRelocateDialog}>
+              Relocate
+            </Button>
           </span>
         )}
-      </div>
-
-      <div className="project-row-detail muted">
-        <div>source: {project.source}</div>
-        <div>
-          workspace: <code>{path}</code>
-          <button type="button" onClick={onCopyPath}>
-            Copy
-          </button>
-          <button type="button" onClick={onOpenInExplorer}>
-            Open in Explorer
-          </button>
-        </div>
-        <div>branch: {project.branch}</div>
-        {!project.source_present && (
-          <div className="badge badge-warning">
-            source missing
-            <button type="button" onClick={onOpenRelocateDialog}>
-              Relocate
-            </button>
-          </div>
-        )}
-      </div>
+      </ItemDescription>
 
       {rowProblem && <ProblemAlert problem={rowProblem} />}
-
       {openNotice && <ProblemAlert problem={openNotice} tone="notice" />}
 
-      <div className="actions">
-        <button
-          type="button"
-          disabled={isBusy || project.state.state !== "ready" || jobRunning}
-          onClick={onOpenSession}
-        >
+      <ItemActions className="flex flex-wrap gap-2">
+        <Button size="sm" disabled={!actionable} onClick={onOpenSession}>
           Open session
-        </button>
-        <button
-          type="button"
-          disabled={
-            isBusy ||
-            project.state.state !== "ready" ||
-            jobRunning ||
-            !canResume
-          }
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!actionable || !canResume}
           onClick={onResumeSession}
         >
           Resume
-        </button>
-        <button
-          type="button"
-          disabled={isBusy || project.state.state !== "ready" || jobRunning}
-          onClick={onSyncToWindows}
-        >
-          Send to Windows
-        </button>
-        <button
-          type="button"
-          disabled={isBusy || project.state.state !== "ready" || jobRunning}
-          onClick={onUpdateFromWindows}
-        >
-          Update from Windows
-        </button>
+        </Button>
+        <ButtonGroup>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!actionable}
+            onClick={onSyncToWindows}
+          >
+            Send to Windows
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!actionable}
+            onClick={onUpdateFromWindows}
+          >
+            Update from Windows
+          </Button>
+        </ButtonGroup>
         {job && jobRunning && (
-          <button type="button" onClick={() => onCancelJob(job)}>
-            Cancel
-          </button>
+          <Button size="sm" variant="ghost" onClick={() => onCancelJob(job)}>
+            Cancel job
+          </Button>
         )}
-        <button type="button" onClick={onOpenRemoveDialog}>
-          Remove
-        </button>
-        {isBusy && <span className="muted">working…</span>}
-      </div>
-    </div>
+        {isBusy && <Spinner className="text-muted-foreground" />}
+      </ItemActions>
+    </Item>
   );
 }

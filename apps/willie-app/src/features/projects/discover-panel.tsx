@@ -1,3 +1,7 @@
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Item, ItemContent, ItemGroup } from "@/components/ui/item";
 import type { Candidate } from "@/lib/proto";
 
 interface DiscoverPanelProps {
@@ -16,35 +20,49 @@ export function DiscoverPanel({
   onAddSelected,
 }: DiscoverPanelProps) {
   if (candidates === null) return null;
+
   return (
-    <section className="discover">
-      <h2>Discovered</h2>
+    <section className="flex flex-col gap-2">
+      <h2 className="font-medium text-muted-foreground text-sm">Discovered</h2>
+
       {candidates.length === 0 ? (
-        <p className="muted">No repositories found under the roots.</p>
+        <p className="text-muted-foreground text-sm">
+          No repositories found under the roots.
+        </p>
       ) : (
         <>
-          <ul>
-            {candidates.map((c) => (
-              <li key={c.path} className="candidate">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(c.path)}
-                    onChange={() => onToggle(c.path)}
-                  />
-                  {c.name}
-                  <span className="muted"> — {c.path}</span>
-                </label>
-              </li>
-            ))}
-          </ul>
-          <button
-            type="button"
-            disabled={selected.size === 0 || busy}
-            onClick={onAddSelected}
-          >
-            Add selected
-          </button>
+          <ItemGroup className="gap-1">
+            {candidates.map((c) => {
+              const id = `candidate-${c.path}`;
+              return (
+                <Item key={c.path} size="xs" variant="muted">
+                  <ItemContent>
+                    <Field orientation="horizontal">
+                      <Checkbox
+                        id={id}
+                        checked={selected.has(c.path)}
+                        onCheckedChange={() => onToggle(c.path)}
+                      />
+                      <FieldLabel htmlFor={id}>
+                        {c.name}
+                        <span className="font-mono text-muted-foreground text-xs">
+                          {c.path}
+                        </span>
+                      </FieldLabel>
+                    </Field>
+                  </ItemContent>
+                </Item>
+              );
+            })}
+          </ItemGroup>
+          <div>
+            <Button
+              disabled={selected.size === 0 || busy}
+              onClick={onAddSelected}
+            >
+              Add selected
+            </Button>
+          </div>
         </>
       )}
     </section>

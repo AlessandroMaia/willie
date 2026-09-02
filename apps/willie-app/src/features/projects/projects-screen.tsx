@@ -1,6 +1,19 @@
 import { open } from "@tauri-apps/plugin-dialog";
+import { FolderGit2Icon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { ProblemAlert } from "@/components/problem-alert";
+import { Button } from "@/components/ui/button";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty";
+import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Spinner } from "@/components/ui/spinner";
+import { toast } from "@/components/ui/toast";
 import { DiscoverPanel } from "@/features/projects/discover-panel";
 import { ProjectRow } from "@/features/projects/project-row";
 import { RelocateProjectDialog } from "@/features/projects/relocate-project-dialog";
@@ -177,6 +190,7 @@ export function ProjectsScreen() {
     if (ok) {
       setRoots(next);
       setNewRoot("");
+      toast.add({ type: "success", title: "Roots saved" });
     }
   }
 
@@ -232,6 +246,10 @@ export function ProjectsScreen() {
     } else {
       setCandidates(null);
       setSelected(new Set());
+      toast.add({
+        type: "success",
+        title: `${paths.length} project${paths.length === 1 ? "" : "s"} added`,
+      });
     }
   }
 
@@ -250,6 +268,7 @@ export function ProjectsScreen() {
     if (ok) {
       setAddPath("");
       setAddName("");
+      toast.add({ type: "success", title: "Project added", description: path });
     }
   }
 
@@ -347,9 +366,14 @@ export function ProjectsScreen() {
   }
 
   function copyPath(path: string) {
-    navigator.clipboard?.writeText(path).catch(() => {
-      /* best effort — the path is also shown as plain text */
-    });
+    navigator.clipboard
+      ?.writeText(path)
+      .then(() =>
+        toast.add({ type: "success", title: "Workspace path copied" }),
+      )
+      .catch(() => {
+        /* best effort — the path is also shown as plain text */
+      });
   }
 
   function openInExplorer(project: Project, path: string) {
@@ -435,9 +459,9 @@ export function ProjectsScreen() {
   }
 
   return (
-    <main className="projects">
+    <div className="mx-auto flex max-w-4xl flex-col gap-6">
       <header>
-        <h1>Projects</h1>
+        <h1 className="font-semibold text-lg">Projects</h1>
       </header>
 
       {problem && <ProblemAlert problem={problem} />}
@@ -461,88 +485,112 @@ export function ProjectsScreen() {
         onAddSelected={addSelected}
       />
 
-      <section className="add-project">
-        <h2>Add by path</h2>
-        <div className="actions">
-          <input
-            value={addPath}
-            onChange={(e) => setAddPath(e.target.value)}
-            placeholder="C:\github\..."
-            aria-label="project path"
-          />
-          <button type="button" onClick={pickFolder}>
-            Browse…
-          </button>
-          <input
-            value={addName}
-            onChange={(e) => setAddName(e.target.value)}
-            placeholder="name (optional)"
-            aria-label="project name"
-          />
-          <button
-            type="button"
+      <section className="flex flex-col gap-2">
+        <h2 className="font-medium text-muted-foreground text-sm">
+          Add by path
+        </h2>
+        <div className="flex flex-wrap items-end gap-2">
+          <Field className="w-72">
+            <FieldLabel htmlFor="add-path">Path</FieldLabel>
+            <div className="flex gap-2">
+              <Input
+                id="add-path"
+                value={addPath}
+                onChange={(e) => setAddPath(e.target.value)}
+                placeholder="C:\github\..."
+              />
+              <Button variant="outline" onClick={pickFolder}>
+                Browse…
+              </Button>
+            </div>
+          </Field>
+          <Field className="w-48">
+            <FieldLabel htmlFor="add-name">Name (optional)</FieldLabel>
+            <Input
+              id="add-name"
+              value={addName}
+              onChange={(e) => setAddName(e.target.value)}
+            />
+          </Field>
+          <Button
             disabled={addPath.trim() === "" || busyId === "add-path"}
             onClick={addByPath}
           >
-            Add
-          </button>
+            {busyId === "add-path" && <Spinner />} Add
+          </Button>
         </div>
       </section>
 
-      <section className="project-list">
-        <h2>Registered</h2>
+      <section className="flex flex-col gap-2">
+        <h2 className="font-medium text-muted-foreground text-sm">
+          Registered
+        </h2>
         {snap === null ? (
-          <p className="muted">Loading projects…</p>
+          <div className="flex items-center gap-2 text-muted-foreground text-sm">
+            <Spinner /> Loading projects…
+          </div>
         ) : snap.projects.length === 0 ? (
-          <p className="muted">No projects yet.</p>
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <FolderGit2Icon />
+              </EmptyMedia>
+              <EmptyTitle>No projects yet</EmptyTitle>
+              <EmptyDescription>
+                Add one by path, or discover the repositories under a root.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         ) : (
-          snap.projects.map((project) => {
-            const job = latestJobFor(snap.jobs, project.id);
-            const isEditing = editingId === project.id;
-            const isBusy = busyId === project.id || busyId === job?.id;
-            const jobRunning = job?.state.state === "running";
-            const path = wslPathFor(project.slug);
-            const rowProblem = rowProblems.get(project.id) ?? null;
-            const openNotice = openNotices.get(project.id) ?? null;
-            const live = liveCount(snap.sessions, project.id);
-            /* Resume needs a finished conversation to resume and no live
-             * one already occupying the project — both read straight off
-             * the snapshot, never a locally-tracked flag. */
-            const hasFinishedSession = snap.sessions.some(
-              (s) => s.project_id === project.id && !isLive(s),
-            );
-            const canResume = live === 0 && hasFinishedSession;
-            return (
-              <ProjectRow
-                key={project.id}
-                project={project}
-                job={job}
-                isEditing={isEditing}
-                editingName={editingName}
-                isBusy={isBusy}
-                jobRunning={jobRunning}
-                path={path}
-                rowProblem={rowProblem}
-                openNotice={openNotice}
-                live={live}
-                canResume={canResume}
-                onEditingNameChange={setEditingName}
-                onStartRename={() => startRename(project)}
-                onSaveRename={() => saveRename(project)}
-                onCancelRename={cancelRename}
-                onRetry={retry}
-                onCopyPath={() => copyPath(path)}
-                onOpenInExplorer={() => openInExplorer(project, path)}
-                onOpenRelocateDialog={() => openRelocateDialog(project)}
-                onOpenSession={() => openSession(project)}
-                onResumeSession={() => resumeSession(project)}
-                onSyncToWindows={() => syncToWindows(project)}
-                onUpdateFromWindows={() => updateFromWindows(project)}
-                onCancelJob={cancelJobFor}
-                onOpenRemoveDialog={() => openRemoveDialog(project)}
-              />
-            );
-          })
+          <div className="flex flex-col gap-3">
+            {snap.projects.map((project) => {
+              const job = latestJobFor(snap.jobs, project.id);
+              const isEditing = editingId === project.id;
+              const isBusy = busyId === project.id || busyId === job?.id;
+              const jobRunning = job?.state.state === "running";
+              const path = wslPathFor(project.slug);
+              const rowProblem = rowProblems.get(project.id) ?? null;
+              const openNotice = openNotices.get(project.id) ?? null;
+              const live = liveCount(snap.sessions, project.id);
+              /* Resume needs a finished conversation to resume and no live
+               * one already occupying the project — both read straight off
+               * the snapshot, never a locally-tracked flag. */
+              const hasFinishedSession = snap.sessions.some(
+                (s) => s.project_id === project.id && !isLive(s),
+              );
+              const canResume = live === 0 && hasFinishedSession;
+              return (
+                <ProjectRow
+                  key={project.id}
+                  project={project}
+                  job={job}
+                  isEditing={isEditing}
+                  editingName={editingName}
+                  isBusy={isBusy}
+                  jobRunning={jobRunning}
+                  path={path}
+                  rowProblem={rowProblem}
+                  openNotice={openNotice}
+                  live={live}
+                  canResume={canResume}
+                  onEditingNameChange={setEditingName}
+                  onStartRename={() => startRename(project)}
+                  onSaveRename={() => saveRename(project)}
+                  onCancelRename={cancelRename}
+                  onRetry={retry}
+                  onCopyPath={() => copyPath(path)}
+                  onOpenInExplorer={() => openInExplorer(project, path)}
+                  onOpenRelocateDialog={() => openRelocateDialog(project)}
+                  onOpenSession={() => openSession(project)}
+                  onResumeSession={() => resumeSession(project)}
+                  onSyncToWindows={() => syncToWindows(project)}
+                  onUpdateFromWindows={() => updateFromWindows(project)}
+                  onCancelJob={cancelJobFor}
+                  onOpenRemoveDialog={() => openRemoveDialog(project)}
+                />
+              );
+            })}
+          </div>
         )}
       </section>
 
@@ -564,6 +612,6 @@ export function ProjectsScreen() {
         onConfirm={confirmRelocate}
         onCancel={closeRelocateDialog}
       />
-    </main>
+    </div>
   );
 }
