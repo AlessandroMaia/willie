@@ -47,3 +47,4 @@ Things deliberately left open or explicitly rejected for now, and why.
 | 0013 | git sync via updateInstead                                    |
 | 0014 | One framed socket per session, the daemon as a control client |
 | 0015 | A session's git identity is resolved and required             |
+| 0016 | sandbox mechanisms on the WSL kernel, and the helper's behaviour (S3) |
