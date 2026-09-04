@@ -11,8 +11,14 @@ use std::{path::Path, time::Duration};
 
 use serde_json::{Value, json};
 
-/// Writes an executable fake `claude` under `home/.local/bin` and returns
-/// the home path to pass as WILLIE_HOME.
+/// A home shaped like the one the image provisions: an executable fake
+/// `claude` under `home/.local/bin`, and the harness's state directory
+/// with the two links into it (`distro/provision.sh`). Returns the home
+/// path to pass as WILLIE_HOME.
+///
+/// The state directory is not decoration: `agent.state` is on by default
+/// for Claude Code, and the sandbox binds it without tolerance, so a
+/// home without it is a home no real session would ever find.
 fn fake_home(root: &Path, body: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let home = root.join("home");
@@ -29,14 +35,27 @@ fn fake_home(root: &Path, body: &str) -> std::path::PathBuf {
     .unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))
         .unwrap();
+    let state = home.join(".willie/agent-state/claude");
+    std::fs::create_dir_all(state.join("dot-claude")).unwrap();
+    std::fs::write(state.join("claude.json"), b"{}\n").unwrap();
+    std::os::unix::fs::symlink(
+        ".willie/agent-state/claude/dot-claude",
+        home.join(".claude"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        ".willie/agent-state/claude/claude.json",
+        home.join(".claude.json"),
+    )
+    .unwrap();
     home
 }
 
-/// The supervisor pid for a session: the parent of the harness process the
-/// session reports, since `willie-sess` forks the harness directly under
-/// itself. Parsed from `/proc/<pid>/stat`, whose `comm` field may hold
-/// spaces or parentheses, so the numeric fields are read after the last
-/// `)`.
+/// The supervisor pid for a session: the parent of the pid the session
+/// reports, which is the namespace helper's monitor — `willie-sess`
+/// forks the helper, and the harness is two levels below it. Parsed
+/// from `/proc/<pid>/stat`, whose `comm` field may hold spaces or
+/// parentheses, so the numeric fields are read after the last `)`.
 fn supervisor_pid_of(harness_pid: u64) -> u64 {
     let stat =
         std::fs::read_to_string(format!("/proc/{harness_pid}/stat")).unwrap();

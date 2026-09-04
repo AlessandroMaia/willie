@@ -191,9 +191,10 @@ supervisor applies a plan; the daemon shows one.
 **The base, not configurable:** own user, pid, ipc and uts namespaces,
 dying with the supervisor; no new privileges; system paths read-only; a
 tmpfs home; a private temporary directory; a fresh process filesystem;
-a minimal device tree; no interop interpreter and none of its
-environment, so no Windows executable is reachable — the interpreter
-that runs them is a file that is not in the namespace; the Windows
+a minimal device tree; no interop interpreter, none of its environment
+and none of its sockets, so no Windows executable runs — the kernel
+holds the interpreter open whatever the namespace contains, so what
+stops one is the socket it cannot reach (0016); the Windows
 drives unmounted except the project itself; privilege escalation
 helpers masked; Willie's own state and runtime directories absent; an
 environment allowlist rather than a denylist.
@@ -338,8 +339,7 @@ One task, one commit:
 2. the harness defaults, and the profile's format and reader
 3. the daemon's resolution into the spec, with its refusals
 4. the argument vector and the mounts, as data; then the launch through
-   them, once spike S3 has said how a stop and the exit status travel
-   through the helper
+   them — *both landed*
 5. the syscall filter, denying only
 6. the limits, and the required-subset decision with its report
 7. path-based restriction, applied after the re-exec

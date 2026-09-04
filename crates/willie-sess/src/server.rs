@@ -88,6 +88,10 @@ struct Screen {
 pub struct Shared {
     master: pty::Fd,
     child: libc::pid_t,
+    /// The harness behind the helper's monitor, resolved once before the
+    /// session was announced ready. `None` when the shape never
+    /// appeared; the ladder tries again and then signals the group.
+    harness: Option<libc::pid_t>,
     started_at: String,
     socket: PathBuf,
     screen: Mutex<Screen>,
@@ -114,6 +118,7 @@ impl Shared {
     pub fn new(
         master: pty::Fd,
         child: libc::pid_t,
+        harness: Option<libc::pid_t>,
         started_at: String,
         socket: PathBuf,
         events: EventLog,
@@ -122,6 +127,7 @@ impl Shared {
         Arc::new(Self {
             master,
             child,
+            harness,
             started_at,
             socket,
             screen: Mutex::new(Screen {
@@ -292,8 +298,9 @@ pub fn stop_grace() -> Duration {
         .map_or(Duration::from_secs(5), Duration::from_millis)
 }
 
-/// Ask the harness to stop: `SIGINT`, then `SIGTERM`, then `SIGKILL`, one
-/// grace apart, to its whole process group. Idempotent.
+/// Ask the harness to stop: `SIGINT`, then `SIGTERM` to the harness
+/// process, then `SIGKILL` to its whole process group, one grace apart.
+/// Idempotent.
 pub fn request_stop(shared: &Arc<Shared>, by: &str, cause: CloseReason) {
     {
         let mut phase = lock(&shared.phase);
@@ -311,8 +318,30 @@ pub fn request_stop(shared: &Arc<Shared>, by: &str, cause: CloseReason) {
     let spawned = thread::Builder::new().name("stop-ladder".to_owned()).spawn(
         move || {
             for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGKILL] {
-                // SAFETY: signalling the harness's own process group.
-                unsafe { libc::kill(-owned.child, signal) };
+                // The polite rungs go to the harness itself: the helper's
+                // monitor dies on them and would take the session down
+                // with SIGKILL (decision 0016). Resolved fresh every
+                // rung, because the harness is the reaper's child, not
+                // ours: once it exits its number is free to be reused by
+                // any process in the distribution while this session is
+                // still running. The value found at start-up is only the
+                // fallback, for a start-up that never found the shape.
+                // The last rung goes to the whole group, and so does any
+                // rung when the harness cannot be told apart from the
+                // helper any more.
+                let harness = if signal == libc::SIGKILL {
+                    None
+                } else {
+                    crate::sandbox::harness_pid(owned.child).or(owned.harness)
+                };
+                // SAFETY: signalling our own child's process, or its
+                // process group.
+                unsafe {
+                    match harness {
+                        Some(pid) => libc::kill(pid, signal),
+                        None => libc::kill(-owned.child, signal),
+                    }
+                };
                 if wait_exited(&owned, owned.grace) {
                     return;
                 }

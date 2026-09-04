@@ -275,8 +275,9 @@ a rebuildable index (`willie reindex`).
    `SIGWINCH` → `resize`. Several attaches may coexist; all read-write.
 
 **Stop.** `session.stop` → daemon → supervisor: `SIGINT` (5 s) →
-`SIGTERM` (5 s) → `SIGKILL` to the process group; `exited` recorded; the
-supervisor exits when the last client detaches.
+`SIGTERM` (5 s) to the harness process, resolved through the helper's
+reaper, then `SIGKILL` to the process group (decision 0016); `exited`
+recorded; the supervisor exits when the last client detaches.
 
 **Daemon restart.** It scans the session directories under
 `/var/lib/willie/sessions/`, reading each one's spec and event log, and
@@ -355,8 +356,11 @@ namespace right before `exec` of the harness) + **rlimits**.
 - `$HOME=/home/willie` as **tmpfs**; private `/tmp`; fresh `/proc`;
   minimal `/dev`;
 - **no `/init`, no `/run/WSL`, no `WSL_INTEROP`/`WSL_DISTRO_NAME`** ⇒ no
-  Windows executable is reachable (binfmt points at `/init`, absent in the
-  namespace);
+  Windows executable runs. Measured (0016): the binfmt entry carries the
+  *fix binary* flag, so the kernel holds the interpreter open and an
+  absent `/init` does not stop it — what stops it is the interop socket
+  directory missing from the namespace. `/run` is refused as an
+  `extra.paths` entry for exactly this reason;
 - `/mnt/*` **not mounted** except the project path and `extra.paths`;
 - `sudo` masked; `/var/lib/willie` and `/run/willie` not mounted;
 - the harness binary (`argv[0]`) bound **ro** at its own path whatever
@@ -368,8 +372,8 @@ namespace right before `exec` of the harness) + **rlimits**.
 - seccomp blocks `ptrace`, `process_vm_*`, `bpf`, `io_uring_*`,
   `perf_event_open`, `userfaultfd`, the mount family, `unshare`/`setns`,
   module loading, `kexec_*`, `keyctl`/`add_key`, `ioctl(TIOCSTI)`, packet
-  and raw sockets;
-- rlimits `NPROC`, `NOFILE`, `CORE=0`;
+  and raw sockets — *second enforcement plan*;
+- rlimits `NPROC`, `NOFILE`, `CORE=0` — *second enforcement plan*;
 - **network on** (no `--unshare-net`): the harness needs it; Landlock at
   this kernel version has no network rules; fine-grained egress is a
   growth item.
@@ -394,9 +398,10 @@ sentence shown in the UI):
 The mounts and the exact bubblewrap argument vector are built **as
 data** by `willie-linux::sandbox` (`plan`, then `bwrap::argv`), so the
 supervisor that applies them and the daemon that explains them share
-one builder and its tests run on any host; the supervisor does not
-launch through them yet. The seccomp summary and the Landlock rules
-arrive with their own commits of the enforcement slice.
+one builder and its tests run on any host; the supervisor launches
+every session through them and records `sandbox_applied { mechanisms }`
+in the event log before `started`. The seccomp summary and the Landlock
+rules arrive with their own commits of the enforcement slice.
 
 ### 3.4 Configuration layers (increasing authority, monotonic)
 

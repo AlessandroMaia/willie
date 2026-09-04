@@ -111,6 +111,11 @@ pub enum SessionEventKind {
     Started {
         pid: u32,
     },
+    /// What the supervisor applied around the harness, once per session,
+    /// before `started`. A session that ran with less says so forever.
+    SandboxApplied {
+        mechanisms: Vec<String>,
+    },
     Attached {
         client: u64,
     },
@@ -141,7 +146,9 @@ pub fn apply_event(session: &mut Session, event: &SessionEvent) {
         return;
     }
     match &event.kind {
-        SessionEventKind::Created | SessionEventKind::Resized { .. } => {}
+        SessionEventKind::Created
+        | SessionEventKind::Resized { .. }
+        | SessionEventKind::SandboxApplied { .. } => {}
         SessionEventKind::Started { pid } => {
             session.state = SessionState::Running;
             session.pid = Some(*pid);
@@ -230,6 +237,15 @@ pub fn remediation_for(code: &str) -> &'static str {
         }
         "harness_exec_failed" => {
             "reinstall Claude Code, or remove the project and add it again"
+        }
+        "sandbox_backend_missing" => {
+            "the image lacks the namespace helper: rebuild and reinstall \
+             the distribution (`just distro-build`, `just distro-install`)"
+        }
+        "sandbox_apply_failed" => {
+            "the message names the path; the helper writes its own \
+             complaint to the session's terminal, so attach to see it, \
+             then run `willie doctor`"
         }
         "session_not_found" => "refresh the Sessions screen",
         "session_not_running" => "nothing to stop; open a new session",
@@ -436,6 +452,38 @@ mod tests {
     }
 
     #[test]
+    fn a_sandbox_applied_event_changes_nothing_about_the_state() {
+        let spec = spec();
+        let mut session = from_log(&spec, &[]);
+        let before = session.clone();
+
+        apply_event(
+            &mut session,
+            &SessionEvent {
+                at: "2".into(),
+                kind: SessionEventKind::SandboxApplied {
+                    mechanisms: vec!["namespaces".into(), "mounts".into()],
+                },
+            },
+        );
+
+        assert_eq!(session, before);
+    }
+
+    #[test]
+    fn a_sandbox_applied_event_serialises_with_its_mechanisms() {
+        let text = serde_json::to_string(&SessionEventKind::SandboxApplied {
+            mechanisms: vec!["namespaces".into()],
+        })
+        .unwrap();
+
+        assert_eq!(
+            text,
+            r#"{"kind":"sandbox_applied","mechanisms":["namespaces"]}"#
+        );
+    }
+
+    #[test]
     fn event_lines_use_a_flat_kind_tag() {
         let line = serde_json::to_string(&ev(
             "12",
@@ -492,6 +540,8 @@ mod tests {
             "supervisor_spawn_failed",
             "supervisor_timeout",
             "harness_exec_failed",
+            "sandbox_backend_missing",
+            "sandbox_apply_failed",
             "session_not_found",
             "session_not_running",
             "sessions_running",

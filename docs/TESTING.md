@@ -44,10 +44,12 @@ its checklist has been walked and the results recorded in it.
 - The session tests use fakes, not a real agent: `WILLIE_HARNESS_BIN`
   points detection at a chosen binary, `WILLIE_HARNESS_INSTALLER`
   replaces the install command, `WILLIE_SESS_STOP_GRACE_MS` shortens the
-  stop ladder, `WILLIE_SESS_BIN` points the daemon at a freshly built
-  supervisor instead of the installed one, and `WILLIE_HOME`/
-  `WILLIE_RUN_DIR` isolate a test daemon's home and sockets. All are
-  test-only.
+  stop ladder, `WILLIE_SESS_HARNESS_WAIT_MS` shortens the wait for the
+  harness to appear behind the namespace helper (zero reaches the branch
+  that gives that wait up), `WILLIE_SESS_BIN` points the daemon at a
+  freshly built supervisor instead of the installed one, and
+  `WILLIE_HOME`/`WILLIE_RUN_DIR` isolate a test daemon's home and
+  sockets. All are test-only.
 
 ## Sandbox tests (Linux, inside the distro)
 

@@ -100,10 +100,18 @@ pub fn wait_until(timeout: Duration, mut pred: impl FnMut() -> bool) -> bool {
 
 /// Runs `willie-sess run --spec` and returns (exit code, stdout line).
 pub fn launch(spec: &Path) -> (i32, String) {
-    let out = Command::new(sess_bin())
-        .args(["run", "--spec", &spec.to_string_lossy()])
-        .output()
-        .unwrap();
+    launch_with_env(spec, &[])
+}
+
+/// The same, with the test-only variables the supervisor reads
+/// (`docs/TESTING.md`).
+pub fn launch_with_env(spec: &Path, env: &[(&str, &str)]) -> (i32, String) {
+    let mut command = Command::new(sess_bin());
+    command.args(["run", "--spec", &spec.to_string_lossy()]);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let out = command.output().unwrap();
     (
         out.status.code().unwrap_or(-1),
         String::from_utf8_lossy(&out.stdout).trim().to_owned(),
@@ -131,7 +139,11 @@ fn a_harness_that_exits_is_reported_started_then_exited() {
     }));
     let events = read_events(&spec);
     assert_eq!(events[0].kind, SessionEventKind::Created);
-    assert!(matches!(events[1].kind, SessionEventKind::Started { .. }));
+    assert!(matches!(
+        events[1].kind,
+        SessionEventKind::SandboxApplied { .. }
+    ));
+    assert!(matches!(events[2].kind, SessionEventKind::Started { .. }));
     assert_eq!(exited(&events), Some((Some(7), None)));
     let _ = fs::remove_dir_all(&root);
 }
@@ -267,8 +279,7 @@ impl TestClient {
     }
 }
 
-// A lifecycle helper kept beside `exited` for later stop-task tests.
-#[allow(dead_code)]
+// A lifecycle helper kept beside `exited`.
 fn started(events: &[SessionEvent]) -> bool {
     events
         .iter()
@@ -474,15 +485,8 @@ fn parent_of(pid: u32) -> u32 {
 }
 
 fn launch_with_grace(spec: &Path, grace_ms: u32) -> (i32, String) {
-    let out = Command::new(sess_bin())
-        .args(["run", "--spec", &spec.to_string_lossy()])
-        .env("WILLIE_SESS_STOP_GRACE_MS", grace_ms.to_string())
-        .output()
-        .unwrap();
-    (
-        out.status.code().unwrap_or(-1),
-        String::from_utf8_lossy(&out.stdout).trim().to_owned(),
-    )
+    let grace = grace_ms.to_string();
+    launch_with_env(spec, &[("WILLIE_SESS_STOP_GRACE_MS", &grace)])
 }
 
 #[test]
@@ -553,7 +557,15 @@ fn a_stop_is_visible_as_stopping_and_sigterm_ends_a_harness_that_ignores_sigint(
 #[test]
 fn sigterm_to_the_supervisor_is_a_clean_shutdown() {
     let root = scratch("sigterm");
-    let bin = fake_harness(&root, "sleep 30");
+    // `exec`, so the harness process is the sleep itself. The ladder
+    // signals the harness and nothing else, so a shell left in front of
+    // it would take the signal while its child slept on inside the
+    // namespace, and the session would not end on this rung at all.
+    // What this test proves is the shutdown, not which process was
+    // signalled: the recorded signal is the same either way, since the
+    // helper maps a signal death to an exit code and back. The rung the
+    // ladder reaches is settled by the two tests above.
+    let bin = fake_harness(&root, "exec sleep 30");
     let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
     let (_, line) = launch(&spec);
     let harness: u32 = line.strip_prefix("ok ").unwrap().parse().unwrap();
@@ -576,5 +588,135 @@ fn sigterm_to_the_supervisor_is_a_clean_shutdown() {
             ..
         }
     )));
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The boundary, observed from inside: the harness writes what it can
+/// see into the workspace, the one place both sides share.
+#[test]
+fn a_session_runs_confined_and_sees_neither_the_real_home_nor_windows() {
+    let root = scratch("confined");
+    fs::write(root.join("secret"), b"outside").unwrap();
+    let ws = root.join("ws");
+    fs::create_dir_all(&ws).unwrap();
+    let bin = fake_harness(
+        &root,
+        "{ cat \"$HOME/secret\" 2>/dev/null && echo home-visible || echo home-private; \
+         [ -e /run/WSL ] && echo interop-visible || echo interop-absent; \
+         [ -e /mnt/c ] && echo mnt-visible || echo mnt-absent; \
+         [ -n \"$WSL_INTEROP\" ] && echo env-leaked || echo env-clean; \
+         cat /proc/1/comm; id -u; \
+         touch /tmp/left-behind; } > \"$PWD/probe.txt\" 2>&1",
+    );
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &ws);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    assert!(wait_until(Duration::from_secs(10), || {
+        exited(&read_events(&spec)).is_some()
+    }));
+    let probe = fs::read_to_string(ws.join("probe.txt")).unwrap();
+    assert!(probe.contains("home-private"), "{probe}");
+    // The interop socket directory, not the interpreter, is what stops a
+    // Windows executable: the kernel holds the interpreter open, so an
+    // absent /init proves nothing (decision 0016).
+    assert!(probe.contains("interop-absent"), "{probe}");
+    assert!(probe.contains("mnt-absent"), "{probe}");
+    assert!(probe.contains("env-clean"), "{probe}");
+    assert!(probe.contains("bwrap"), "{probe}");
+    assert!(!root.join("left-behind").exists());
+    assert!(!PathBuf::from("/tmp/left-behind").exists());
+    let _ = fs::remove_dir_all(&root);
+}
+
+#[test]
+fn the_applied_mechanisms_are_recorded_before_the_start() {
+    let root = scratch("applied");
+    let bin = fake_harness(&root, "exit 0");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    assert!(wait_until(Duration::from_secs(5), || {
+        exited(&read_events(&spec)).is_some()
+    }));
+    let events = read_events(&spec);
+    let applied = events
+        .iter()
+        .position(|e| {
+            matches!(&e.kind, SessionEventKind::SandboxApplied { mechanisms }
+            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned()])
+        })
+        .expect("a sandbox_applied event");
+    let started = events
+        .iter()
+        .position(|e| matches!(e.kind, SessionEventKind::Started { .. }))
+        .expect("a started event");
+    assert!(applied < started);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A harness that ends by a signal is recorded by that signal, as it
+/// was before the helper stood between it and the supervisor.
+#[test]
+fn a_harness_killed_by_a_signal_inside_is_recorded_as_that_signal() {
+    let root = scratch("sigexit");
+    let bin = fake_harness(&root, "kill -TERM $$");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    assert!(wait_until(Duration::from_secs(5), || {
+        exited(&read_events(&spec)).is_some()
+    }));
+    assert_eq!(exited(&read_events(&spec)), Some((None, Some(15))));
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The helper is executed some milliseconds before it forks the harness.
+/// A stop that arrives with the readiness line used to find nothing
+/// behind the monitor and signal the whole group, which killed the
+/// session on the first rung. The harness is now resolved before the
+/// session is announced ready, so the ladder reaches it: a harness that
+/// ignores `SIGINT` survives the first rung and ends on the second,
+/// recorded as signal 15 rather than the monitor's own 2.
+#[test]
+fn a_stop_that_arrives_with_the_readiness_line_still_climbs_the_ladder() {
+    let root = scratch("racystop");
+    let bin = fake_harness(&root, "trap '' INT; sleep 30");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (code, line) = launch_with_grace(&spec, 200);
+    assert_eq!(code, 0, "{line}");
+    let sock = socket_of(&root);
+    assert!(sock.exists(), "the socket is bound before readiness");
+    let mut ctl = TestClient::connect(&sock, Role::Control, 0, 0);
+    ctl.send(&wire::encode(wire::STOP, b""));
+    assert!(wait_until(Duration::from_secs(5), || {
+        exited(&read_events(&spec)).is_some()
+    }));
+    assert_eq!(exited(&read_events(&spec)), Some((None, Some(15))));
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The wait for the harness has a ceiling, so a helper that never forks
+/// cannot hold a session open for ever. With the ceiling at zero the
+/// resolution always gives up: the session still starts, and the
+/// supervisor says in its log that the promise readiness carries — the
+/// harness is running — has just been given up.
+#[test]
+fn a_resolution_that_gives_up_still_starts_the_session_and_says_so() {
+    let root = scratch("nowait");
+    let bin = fake_harness(&root, "exec cat");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (code, line) =
+        launch_with_env(&spec, &[("WILLIE_SESS_HARNESS_WAIT_MS", "0")]);
+    assert_eq!(code, 0, "{line}");
+    let pid: u32 = line.strip_prefix("ok ").unwrap().parse().unwrap();
+    assert!(started(&read_events(&spec)));
+    let log =
+        fs::read_to_string(spec.with_file_name("supervisor.log")).unwrap();
+    assert!(
+        log.contains("no harness appeared behind the helper"),
+        "{log}"
+    );
+    // The ladder finds it anyway, by resolving again at the first rung.
+    kill(pid, libc::SIGKILL);
     let _ = fs::remove_dir_all(&root);
 }
