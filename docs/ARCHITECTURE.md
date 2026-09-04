@@ -275,8 +275,9 @@ a rebuildable index (`willie reindex`).
    `SIGWINCH` → `resize`. Several attaches may coexist; all read-write.
 
 **Stop.** `session.stop` → daemon → supervisor: `SIGINT` (5 s) →
-`SIGTERM` (5 s) → `SIGKILL` to the process group; `exited` recorded; the
-supervisor exits when the last client detaches.
+`SIGTERM` (5 s) to the harness process, resolved through the helper's
+reaper, then `SIGKILL` to the process group (decision 0016); `exited`
+recorded; the supervisor exits when the last client detaches.
 
 **Daemon restart.** It scans the session directories under
 `/var/lib/willie/sessions/`, reading each one's spec and event log, and
@@ -355,19 +356,24 @@ namespace right before `exec` of the harness) + **rlimits**.
 - `$HOME=/home/willie` as **tmpfs**; private `/tmp`; fresh `/proc`;
   minimal `/dev`;
 - **no `/init`, no `/run/WSL`, no `WSL_INTEROP`/`WSL_DISTRO_NAME`** ⇒ no
-  Windows executable is reachable (binfmt points at `/init`, absent in the
-  namespace);
+  Windows executable runs. Measured (0016): the binfmt entry carries the
+  *fix binary* flag, so the kernel holds the interpreter open and an
+  absent `/init` does not stop it — what stops it is the interop socket
+  directory missing from the namespace. `/run` is refused as an
+  `extra.paths` entry for exactly this reason;
 - `/mnt/*` **not mounted** except the project path and `extra.paths`;
 - `sudo` masked; `/var/lib/willie` and `/run/willie` not mounted;
 - the harness binary (`argv[0]`) bound **ro** at its own path whatever
   the policy says — a session that cannot start is no session;
-- environment **allowlist**: `PATH`, `HOME`, `USER`, `TERM`, `COLORTERM`,
-  `LANG`, `LC_*`, `TZ`, plus the `machine.env` variables;
+- environment **allowlist**, applied by the vector itself (`--clearenv`
+  then one `--setenv` per variable), not by whoever spawns it: `PATH`,
+  `HOME`, `USER`, `TERM`, `COLORTERM`, `LANG`, `LC_*`, `TZ`, plus the
+  `machine.env` variables;
 - seccomp blocks `ptrace`, `process_vm_*`, `bpf`, `io_uring_*`,
   `perf_event_open`, `userfaultfd`, the mount family, `unshare`/`setns`,
   module loading, `kexec_*`, `keyctl`/`add_key`, `ioctl(TIOCSTI)`, packet
-  and raw sockets;
-- rlimits `NPROC`, `NOFILE`, `CORE=0`;
+  and raw sockets — *second enforcement plan*;
+- rlimits `NPROC`, `NOFILE`, `CORE=0` — *second enforcement plan*;
 - **network on** (no `--unshare-net`): the harness needs it; Landlock at
   this kernel version has no network rules; fine-grained egress is a
   growth item.
@@ -386,15 +392,16 @@ sentence shown in the UI):
 | `extra.paths`      | empty            | additional `ro`/`rw` binds declared in the profile                                                     |
 | `ssh`              | off              | `~/.ssh` ro + agent socket                                                                             |
 | `mnt.all`          | off ⚠            | mounts all of `/mnt/*`                                                                                 |
-| `windows.interop`  | off ⚠⚠           | mounts `/init`, keeps `WSL_INTEROP` — equivalent to no sandbox towards Windows                        |
+| `windows.interop`  | off ⚠⚠           | mounts the interop socket directory (`/run/WSL`) and keeps `WSL_INTEROP`, which names the socket in it — equivalent to no sandbox towards Windows. The interpreter itself is never the question: the kernel holds it open through its binfmt entry (0016) |
 
 `willie sandbox explain <project>` prints the resolved capabilities.
 The mounts and the exact bubblewrap argument vector are built **as
 data** by `willie-linux::sandbox` (`plan`, then `bwrap::argv`), so the
 supervisor that applies them and the daemon that explains them share
-one builder and its tests run on any host; the supervisor does not
-launch through them yet. The seccomp summary and the Landlock rules
-arrive with their own commits of the enforcement slice.
+one builder and its tests run on any host; the supervisor launches
+every session through them and records `sandbox_applied { mechanisms }`
+in the event log before `started`. The seccomp summary and the Landlock
+rules arrive with their own commits of the enforcement slice.
 
 ### 3.4 Configuration layers (increasing authority, monotonic)
 
@@ -616,7 +623,7 @@ wizard of §2.4. Code signing is out of scope for now.
 | ----- | ------ | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | S1    | F0     | stdio through `wsl.exe`: latency; UTF-16LE of `wsl.exe`'s own messages vs raw bytes of the Linux process; `CREATE_NO_WINDOW`; does the daemon die with its parent? | steady-state round trip < 50 ms (measured ≈0.5 ms); the first request after a spawn is budgeted in seconds (measured 0.2–0.9 s); no console window; a `--exec` child dies with its Windows parent — supervisors detach and confirm it |
 | S2    | F1     | PTY + supervisor + attach in Windows Terminal: resize, 24-bit colour, keys, faithful TUI; supervisor survives the daemon | measured (0012): Claude Code session in a WT tab through `willie attach`, redrawn on reattach; keystroke echo 165 µs median; the session survives its launcher and `willied` — F1 adds a control channel |
-| S3    | F3     | sandbox on the real kernel: `landlock` in `/sys/kernel/security/lsm`; Landlock ABI; `unshare -U`; `.exe` denied inside; CLI logs in with `agent.state` + tmpfs home | matrix of what works, recorded as a decision |
+| S3    | F3     | sandbox on the real kernel: `landlock` in `/sys/kernel/security/lsm`; Landlock ABI; `unshare -U`; `.exe` denied inside; CLI logs in with `agent.state` + tmpfs home | measured (0016): Landlock ABI 3, probed through the syscall because securityfs is not mounted; unprivileged user namespaces, seccomp and its user notification all present; a Windows executable refused because `/run/WSL` is outside the namespace, not because `/init` is; the CLI logged in and answered a prompt with `agent.state` and a tmpfs home — F3 ships the required subset |
 | S4    | F2     | corporate network: what does `autoProxy` inject (PAC or static)? does `curl` to the API work with the imported CA? | exact list of variables/files to propagate |
 | S5    | F1     | `/mnt/c` performance: `git status`, `rg`, CLI startup on a real repository                                 | measured (0011): warm `git status` 511 ms on DrvFs vs 4.9 ms on ext4 (~100×), `rg` 19×, traversal 27× — F1 ships the ext4 workspace |
 

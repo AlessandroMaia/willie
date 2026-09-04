@@ -174,8 +174,11 @@ impl CapabilitySet {
     }
 }
 
-/// A defaulted set means "written before sandboxing", which is not the
-/// same as "reach nothing": the project bind is what makes a session a
+/// What a spec written before sandboxing resolves to. It does not mean
+/// "unconfined": such a session runs inside the boundary like any
+/// other and reaches a private home, its workspace and the harness
+/// binary, and nothing else of the machine. What it must never mean is
+/// "reach nothing" — the project bind is what makes a session a
 /// session, so it is on even here.
 impl Default for CapabilitySet {
     fn default() -> Self {
@@ -228,6 +231,8 @@ pub enum CapabilityError {
     Unsupported(Capability),
     #[error("`{path}` is not an absolute path")]
     ExtraPathNotAbsolute { path: String },
+    #[error("`{path}` cannot be an extra path: {reason}")]
+    ExtraPathGuarded { path: String, reason: &'static str },
 }
 
 impl CapabilityError {
@@ -237,6 +242,7 @@ impl CapabilityError {
         match self {
             Self::Unsupported(_) => "sandbox_capability_unsupported",
             Self::ExtraPathNotAbsolute { .. } => "sandbox_profile_invalid",
+            Self::ExtraPathGuarded { .. } => "sandbox_profile_invalid",
         }
     }
 
@@ -253,8 +259,248 @@ impl CapabilityError {
                  distribution, starting with `/`"
                     .to_owned()
             }
+            Self::ExtraPathGuarded { reason, .. } => {
+                format!("this version will not grant it: {reason}")
+            }
         }
     }
+}
+
+/// True if any `/`-separated component of `path` is `..`. Checked
+/// before anything else, and refused unconditionally: resolving `..`
+/// lexically would be wrong wherever a symbolic link sits along the
+/// way, and refusing costs a caller nothing, because the same location
+/// is always nameable plainly.
+fn has_dotdot_component(path: &str) -> bool {
+    path.split('/').any(|c| c == "..")
+}
+
+/// Collapses repeated separators and drops `.` components and a
+/// trailing separator, without resolving `..`. Assumes `path` has
+/// already been checked for a `..` component; called on `home` too, so
+/// a `WILLIE_HOME` with a trailing separator still compares correctly.
+fn normalize_lexical(path: &str) -> String {
+    let mut out = String::from("/");
+    for part in path.split('/').filter(|p| !p.is_empty() && *p != ".") {
+        if out.len() > 1 {
+            out.push('/');
+        }
+        out.push_str(part);
+    }
+    out
+}
+
+/// Whether `path` is `prefix` itself or nested under it at a
+/// `/`-separated component boundary, never merely sharing characters
+/// (`/mnt` must not match `/mntx`).
+fn is_prefix_path(prefix: &str, path: &str) -> bool {
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// How a guarded location is refused. Both directions matter: a path
+/// under a guarded location reaches it piecemeal, and a path above a
+/// guarded location contains it, so granting the ancestor is the same
+/// as granting the location itself.
+#[derive(Clone, Copy)]
+enum Flavor {
+    /// Refuses the location, everything under it, and everything
+    /// above it.
+    Subtree,
+    /// Refuses the location itself and everything above it, but not
+    /// what is under it. For the two locations the base makes private,
+    /// the home and the temporary directory: a project must still be
+    /// able to name `~/notes` or `/tmp/handoff` one path at a time,
+    /// which a `Subtree` flavour would forbid. Also for the two files
+    /// under the home, where "under" means nothing.
+    Exact,
+}
+
+/// Every location `home`-relative or absolute that an extra path must
+/// not name, reach into, or contain. Built per call because the
+/// home-relative half depends on `home`; the list itself is short and
+/// this runs once per `extra_paths` entry, not on a hot path.
+fn guarded_locations(home: &str) -> [(String, Flavor, &'static str); 25] {
+    let interop = "the interop interpreter and its sockets are \
+                   `windows.interop`, which this version does not apply";
+    let kernel = "kernel interfaces are not paths to grant";
+    let system = "the system stays as the base mounts it";
+    let willie_state = "Willie's own state stays as the base mounts it";
+    let tools = "managed tools are `tools.ro`, read-only; an extra path \
+                 must not reopen them read-write";
+    let caches = "package caches are `caches.rw`, one per project; an \
+                  extra path must not share them across projects";
+    [
+        ("/init".to_owned(), Flavor::Subtree, interop),
+        ("/run".to_owned(), Flavor::Subtree, interop),
+        ("/proc".to_owned(), Flavor::Subtree, kernel),
+        ("/sys".to_owned(), Flavor::Subtree, kernel),
+        ("/dev".to_owned(), Flavor::Subtree, kernel),
+        ("/etc".to_owned(), Flavor::Subtree, system),
+        ("/usr".to_owned(), Flavor::Subtree, system),
+        ("/bin".to_owned(), Flavor::Subtree, system),
+        ("/sbin".to_owned(), Flavor::Subtree, system),
+        ("/lib".to_owned(), Flavor::Subtree, system),
+        ("/lib64".to_owned(), Flavor::Subtree, system),
+        ("/opt/willie".to_owned(), Flavor::Subtree, willie_state),
+        ("/var/lib/willie".to_owned(), Flavor::Subtree, willie_state),
+        // The two the base makes private, before what sits under them:
+        // an entry for a path *under* the home matches the home first
+        // through its ancestor half, and would answer with the wrong
+        // reason.
+        (
+            "/tmp".to_owned(),
+            Flavor::Exact,
+            "the temporary directory is private to the session; grant \
+             paths inside it one by one",
+        ),
+        (
+            home.to_owned(),
+            Flavor::Exact,
+            "the home is private; grant paths inside it one by one",
+        ),
+        (
+            format!("{home}/.willie"),
+            Flavor::Subtree,
+            "Willie's per-user state holds the login and every \
+             project's caches",
+        ),
+        (
+            format!("{home}/.ssh"),
+            Flavor::Subtree,
+            "keys are `ssh`, which this version does not apply",
+        ),
+        (
+            format!("{home}/.claude"),
+            Flavor::Subtree,
+            "the login is `agent.state`",
+        ),
+        (format!("{home}/.local"), Flavor::Subtree, tools),
+        (format!("{home}/.dotnet"), Flavor::Subtree, tools),
+        (format!("{home}/.npm"), Flavor::Subtree, caches),
+        (format!("{home}/.nuget"), Flavor::Subtree, caches),
+        (format!("{home}/.cache"), Flavor::Subtree, caches),
+        (
+            format!("{home}/.claude.json"),
+            Flavor::Exact,
+            "the login is `agent.state`",
+        ),
+        (
+            format!("{home}/.gitconfig"),
+            Flavor::Exact,
+            "the identity is `git.identity`",
+        ),
+    ]
+}
+
+/// `/mnt` is not a system directory the base guards outright: it is
+/// where Windows drives land, and the project's own is always bound.
+/// Refuses `/mnt` itself (every drive is `mnt.all`, not applied), a
+/// bare drive letter under it (the whole of that one drive, the same
+/// capability), and anything under it whose first component is not a
+/// single ASCII letter — the WSLg runtime directory chief among them,
+/// a channel to the Windows side in the same family `/run` closes, not
+/// a Windows drive at all. `path` must already be normalised.
+fn guard_mnt(path: &str) -> Option<&'static str> {
+    let rest = path.strip_prefix("/mnt")?;
+    if rest.is_empty() {
+        return Some(
+            "every Windows drive is `mnt.all`, which this version does \
+             not apply",
+        );
+    }
+    let mut components = rest.strip_prefix('/')?.split('/');
+    let drive = components.next().unwrap_or("");
+    let is_drive_letter = drive.len() == 1
+        && drive
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic());
+    if !is_drive_letter {
+        return Some(
+            "this reaches the Windows side; interop is `windows.interop`, \
+             which this version does not apply",
+        );
+    }
+    if components.next().is_none() {
+        return Some(
+            "a whole Windows drive is `mnt.all`, which this version \
+             does not apply",
+        );
+    }
+    None
+}
+
+/// Why an extra path is refused, if it is. An extra path exists to
+/// reach outside the project; it must not name, reach into, or contain
+/// what the base closes (the system, the kernel's interfaces, the
+/// interop interpreter, Willie's own state, the private home and
+/// temporary directory, the managed tool roots and package caches) or
+/// what a deferred capability grants on its own terms (a whole Windows
+/// drive, the keys, the login). Public so the
+/// app and `sandbox explain` can ask the same question `resolve`
+/// answers, and so `willie-harness` can assert its own managed paths
+/// are on this list.
+///
+/// The comparison is **textual and lexical**, after normalising both
+/// `path` and `home`: repeated separators collapsed, `.` components
+/// dropped, a trailing separator dropped. A `..` component is refused
+/// outright rather than resolved lexically — see
+/// [`has_dotdot_component`]. Guarding is symmetric: a location is
+/// refused, everything under it, and everything above it, because an
+/// ancestor of a guarded location contains it (so `/home`, `/var` and
+/// `/opt` are refused along with what they contain, even though none
+/// is itself on the list). The home and the temporary directory are
+/// the exceptions, guarded exactly rather than as subtrees, or nothing
+/// inside them — including the paths a project is meant to be able to
+/// grant — could ever pass.
+///
+/// This guard does no I/O and cannot see whether an allowed path is
+/// itself a symbolic link into a guarded one. That gap is real and is
+/// not closed here: the supervisor owes a resolution-time re-check
+/// immediately before it applies the plan, where I/O is allowed.
+///
+/// `/run` is not refused for tidiness: decision 0016 measured that the
+/// interop interpreter stays registered with the kernel whether or not
+/// `/init` is in the namespace, so an absent `/init` stops nothing by
+/// itself. What actually keeps a Windows executable from running is
+/// that `/run` — where the interop socket the interpreter dials lives
+/// — is not in the namespace. Binding `/run` back in was measured to
+/// make a Windows executable run and exit successfully, so an
+/// `extra.paths` entry naming `/run` would not merely widen reach, it
+/// would void this boundary's whole defence against Windows interop.
+#[must_use]
+pub fn guard_extra_path(path: &str, home: &str) -> Option<&'static str> {
+    if has_dotdot_component(path) {
+        return Some(
+            "a `..` component is refused outright and never resolved; \
+             name the path directly",
+        );
+    }
+    let path = normalize_lexical(path);
+    let home = normalize_lexical(home);
+
+    if path == "/" {
+        return Some("the whole filesystem");
+    }
+    if let Some(reason) = guard_mnt(&path) {
+        return Some(reason);
+    }
+    for (location, flavor, reason) in guarded_locations(&home) {
+        let matches = match flavor {
+            Flavor::Subtree => {
+                is_prefix_path(&location, &path)
+                    || is_prefix_path(&path, &location)
+            }
+            Flavor::Exact => is_prefix_path(&path, &location),
+        };
+        if matches {
+            return Some(reason);
+        }
+    }
+    None
 }
 
 /// Merges layer 1 (the harness defaults) with layer 2 (the project
@@ -265,10 +511,13 @@ impl CapabilityError {
 ///
 /// Every refusal happens here, in the daemon, before any process
 /// exists: a policy that cannot be applied must not become a session
-/// that pretends it was.
+/// that pretends it was. `home` is the real home; the guard on
+/// `extra_paths` needs it to name the login, the keys and Willie's
+/// state.
 pub fn resolve(
     defaults: CapabilitySet,
     profile: &SandboxProfile,
+    home: &str,
 ) -> Result<CapabilitySet, CapabilityError> {
     for (asked, capability) in [
         (profile.home_persistent, Capability::HomePersistent),
@@ -285,6 +534,12 @@ pub fn resolve(
         if !extra.path.starts_with('/') {
             return Err(CapabilityError::ExtraPathNotAbsolute {
                 path: extra.path.clone(),
+            });
+        }
+        if let Some(reason) = guard_extra_path(&extra.path, home) {
+            return Err(CapabilityError::ExtraPathGuarded {
+                path: extra.path.clone(),
+                reason,
             });
         }
     }
@@ -322,12 +577,15 @@ pub struct Explained {
 /// What a session for this project would run under, capability by
 /// capability, in the order the UI lists them. Resolves first, so a
 /// profile that cannot be applied is refused here exactly as it is at
-/// `session.create`.
+/// `session.create`. `home` is the real home, forwarded to `resolve`
+/// unchanged: the guard on `extra_paths` needs it to name the login,
+/// the keys and Willie's state.
 pub fn explain(
     defaults: CapabilitySet,
     profile: &SandboxProfile,
+    home: &str,
 ) -> Result<Vec<Explained>, CapabilityError> {
-    let resolved = resolve(defaults, profile)?;
+    let resolved = resolve(defaults, profile, home)?;
 
     Ok(Capability::ALL
         .iter()
@@ -368,6 +626,8 @@ pub fn explain(
 mod tests {
     use super::*;
 
+    const HOME: &str = "/home/willie";
+
     fn defaults() -> CapabilitySet {
         CapabilitySet {
             project_rw: true,
@@ -392,7 +652,7 @@ mod tests {
             ..SandboxProfile::default()
         };
 
-        let rows = explain(defaults(), &profile).unwrap();
+        let rows = explain(defaults(), &profile, HOME).unwrap();
 
         let credential = row(&rows, Capability::AgentState);
         assert!(!credential.enabled);
@@ -408,7 +668,8 @@ mod tests {
     /// is coming is visible without being offered.
     #[test]
     fn explain_lists_a_deferred_capability_as_unavailable() {
-        let rows = explain(defaults(), &SandboxProfile::default()).unwrap();
+        let rows =
+            explain(defaults(), &SandboxProfile::default(), HOME).unwrap();
 
         let ssh = row(&rows, Capability::Ssh);
         assert!(!ssh.enabled);
@@ -417,7 +678,8 @@ mod tests {
 
     #[test]
     fn explain_reports_every_capability_once_in_declaration_order() {
-        let rows = explain(defaults(), &SandboxProfile::default()).unwrap();
+        let rows =
+            explain(defaults(), &SandboxProfile::default(), HOME).unwrap();
 
         let listed: Vec<Capability> =
             rows.iter().map(|r| r.capability).collect();
@@ -434,14 +696,15 @@ mod tests {
         };
 
         assert_eq!(
-            explain(defaults(), &profile).unwrap_err(),
+            explain(defaults(), &profile, HOME).unwrap_err(),
             CapabilityError::Unsupported(Capability::Ssh)
         );
     }
 
     #[test]
     fn an_empty_profile_leaves_the_defaults_alone() {
-        let set = resolve(defaults(), &SandboxProfile::default()).unwrap();
+        let set =
+            resolve(defaults(), &SandboxProfile::default(), HOME).unwrap();
 
         assert_eq!(set, defaults());
     }
@@ -453,7 +716,7 @@ mod tests {
             ..SandboxProfile::default()
         };
 
-        let set = resolve(defaults(), &profile).unwrap();
+        let set = resolve(defaults(), &profile, HOME).unwrap();
 
         assert!(!set.agent_state);
         assert!(set.tools_ro);
@@ -470,7 +733,7 @@ mod tests {
             ..SandboxProfile::default()
         };
 
-        assert!(resolve(base, &profile).unwrap().caches_rw);
+        assert!(resolve(base, &profile, HOME).unwrap().caches_rw);
     }
 
     /// `project.rw` is the session itself: a profile cannot take it
@@ -482,7 +745,7 @@ mod tests {
             ..SandboxProfile::default()
         };
 
-        assert!(resolve(defaults(), &profile).unwrap().project_rw);
+        assert!(resolve(defaults(), &profile, HOME).unwrap().project_rw);
     }
 
     #[test]
@@ -517,7 +780,7 @@ mod tests {
                 Capability::HomePersistent,
             ),
         ] {
-            let err = resolve(defaults(), &profile).unwrap_err();
+            let err = resolve(defaults(), &profile, HOME).unwrap_err();
 
             assert_eq!(err, CapabilityError::Unsupported(expected));
             assert_eq!(err.code(), "sandbox_capability_unsupported");
@@ -535,7 +798,7 @@ mod tests {
             ..SandboxProfile::default()
         };
 
-        assert!(resolve(defaults(), &profile).is_ok());
+        assert!(resolve(defaults(), &profile, HOME).is_ok());
     }
 
     #[test]
@@ -554,7 +817,7 @@ mod tests {
             ..SandboxProfile::default()
         };
 
-        let set = resolve(defaults(), &profile).unwrap();
+        let set = resolve(defaults(), &profile, HOME).unwrap();
 
         assert_eq!(set.extra_paths.len(), 2);
         assert_eq!(set.extra_paths[0].mode, PathMode::Ro);
@@ -574,15 +837,17 @@ mod tests {
             ..SandboxProfile::default()
         };
 
-        let err = resolve(defaults(), &profile).unwrap_err();
+        let err = resolve(defaults(), &profile, HOME).unwrap_err();
 
         assert_eq!(err.code(), "sandbox_profile_invalid");
         assert!(err.remediation().contains("absolute"));
     }
 
-    /// A spec written before sandboxing deserialises to this, so it
-    /// must mean "unconfined, as it used to be" and never "reach
-    /// nothing", which would be a session that cannot see its project.
+    /// A spec written before sandboxing deserialises to this. It is the
+    /// tightest policy there is now that the boundary is applied — a
+    /// private home, the workspace, the harness binary — and it must
+    /// still never mean "reach nothing", which would be a session that
+    /// cannot see its project.
     #[test]
     fn a_defaulted_set_still_carries_the_project_bind() {
         let set = CapabilitySet::default();
@@ -680,5 +945,177 @@ extra_paths = [{ path = \"/srv/shared\", mode = \"ro\" }]
         ] {
             assert!(!set.enabled(deferred), "{}", deferred.display_name());
         }
+    }
+
+    fn extra(path: &str) -> SandboxProfile {
+        SandboxProfile {
+            extra_paths: vec![ExtraPath {
+                path: path.into(),
+                mode: PathMode::Ro,
+            }],
+            ..SandboxProfile::default()
+        }
+    }
+
+    /// An extra path reaches outside the project on purpose; what it
+    /// must not do is hand back what the base closes or a deferred
+    /// capability will grant on its own terms.
+    #[test]
+    fn an_extra_path_that_voids_the_boundary_is_refused_with_its_reason() {
+        for path in [
+            "/",
+            "/mnt",
+            "/mnt/c",
+            "/init",
+            "/run",
+            "/run/WSL",
+            "/proc",
+            "/sys/kernel",
+            "/dev",
+            "/etc",
+            "/etc/shadow",
+            "/usr",
+            "/usr/bin",
+            "/bin",
+            "/sbin",
+            "/lib",
+            "/lib64",
+            "/opt/willie",
+            "/opt/willie/bin",
+            "/var/lib/willie",
+            "/var/lib/willie/projects",
+            "/home/willie",
+            "/home/willie/.willie",
+            "/home/willie/.willie/agent-state/claude",
+            "/home/willie/.ssh",
+            "/home/willie/.ssh/id_ed25519",
+            "/home/willie/.claude",
+            "/home/willie/.claude.json",
+            "/home/willie/.gitconfig",
+            // A path is compared normalised, not as written: a double
+            // separator, a `.` component or a trailing separator must
+            // not walk it past an arm the plain spelling would hit.
+            "//mnt",
+            "//run",
+            "/mnt//c",
+            "/mnt/./c",
+            "//home/willie/.ssh",
+            // `..` is refused outright rather than resolved: this
+            // would lexically reach `.ssh`, but is never given the
+            // chance to.
+            "/home/willie/notes/../.ssh",
+            // An ancestor of a guarded location contains it, so
+            // granting the ancestor must be refused too, even though
+            // none of these is itself on the guarded list.
+            "/home",
+            "/var",
+            "/var/lib",
+            "/opt",
+            // `.claude` guards its contents now, not only its own
+            // name: the credential lives inside it.
+            "/home/willie/.claude/projects",
+            // The managed tool roots and package caches: an extra
+            // path must not reopen read-write what `tools.ro` binds
+            // read-only or hand every project the same `caches.rw`
+            // copy.
+            "/home/willie/.local",
+            "/home/willie/.dotnet",
+            "/home/willie/.npm",
+            "/home/willie/.nuget",
+            "/home/willie/.cache",
+            // The private temporary directory the base gives every
+            // session: an extra path naming it would bind the shared
+            // one over it, because the base renders first and a later
+            // bind at the same destination wins. Every spelling of it,
+            // since the comparison is normalised.
+            "/tmp",
+            "/tmp/",
+            "//tmp",
+            "/tmp/.",
+            // Not a Windows drive: a channel to the Windows side in
+            // the same family `/run` closes.
+            "/mnt/wsl",
+            "/mnt/wslg/runtime-dir",
+        ] {
+            let err = resolve(defaults(), &extra(path), HOME).unwrap_err();
+
+            assert_eq!(err.code(), "sandbox_profile_invalid", "{path}");
+            assert!(
+                matches!(&err, CapabilityError::ExtraPathGuarded { path: p, .. } if p == path),
+                "{path}: {err:?}"
+            );
+            assert!(err.to_string().contains(path), "{err}");
+        }
+    }
+
+    #[test]
+    fn an_extra_path_that_merely_reaches_outside_the_project_is_allowed() {
+        for path in [
+            "/srv/shared",
+            "/mnt/c/Users/me/data",
+            "/mnt/d/out",
+            "/home/willie/projects/other",
+            "/home/willie/notes",
+            // Inside the private temporary directory, which is guarded
+            // exactly so a hand-off point stays grantable.
+            "/tmp/handoff",
+            "/var/lib/other-tool",
+            "/opt/tools",
+            // Siblings that merely share a prefix with a guarded name
+            // must not be caught by a boundary that compares
+            // characters instead of path components.
+            "/home/willie/.claude-old",
+            "/optical",
+            "/variable",
+            "/homework",
+        ] {
+            assert!(resolve(defaults(), &extra(path), HOME).is_ok(), "{path}");
+        }
+    }
+
+    /// The reason is not decoration: it is the sentence the dialog and
+    /// the session's failure show. Each flavour of guard must answer
+    /// with its own, and an entry must not be shadowed into answering
+    /// with a neighbour's.
+    #[test]
+    fn each_flavour_of_guard_answers_with_the_reason_a_user_reads() {
+        for (path, expected) in [
+            // A subtree: the location, what is under it, what is above.
+            ("/var/lib/willie", "Willie's own state"),
+            ("/var/lib/willie/projects", "Willie's own state"),
+            ("/var", "Willie's own state"),
+            ("/home/willie/.npm", "one per project"),
+            // Guarded exactly: the location and its ancestors, while
+            // what is under it stays grantable.
+            ("/home/willie", "the home is private"),
+            ("/home", "the home is private"),
+            ("/tmp", "the temporary directory is private"),
+            ("//tmp", "the temporary directory is private"),
+            // The Windows mount root, guarded by its own rules.
+            ("/mnt", "every Windows drive is `mnt.all`"),
+            ("/mnt/c", "a whole Windows drive"),
+            ("/mnt/wsl", "this reaches the Windows side"),
+            // The two answered before the list is walked at all.
+            ("/", "the whole filesystem"),
+            ("/home/willie/notes/../.ssh", "`..` component"),
+        ] {
+            let err = resolve(defaults(), &extra(path), HOME).unwrap_err();
+
+            let CapabilityError::ExtraPathGuarded { reason, .. } = &err else {
+                panic!("{path}: {err:?}");
+            };
+            assert!(reason.contains(expected), "{path}: {reason}");
+            assert!(err.remediation().contains(expected), "{path}");
+        }
+    }
+
+    /// The same guard through `explain`, so the dialog refuses what the
+    /// session would refuse.
+    #[test]
+    fn explain_refuses_a_guarded_extra_path_too() {
+        assert!(matches!(
+            explain(defaults(), &extra("/mnt"), HOME).unwrap_err(),
+            CapabilityError::ExtraPathGuarded { .. }
+        ));
     }
 }

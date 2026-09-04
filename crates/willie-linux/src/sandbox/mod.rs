@@ -8,7 +8,7 @@
 
 pub mod bwrap;
 
-use std::{fmt, path::Path};
+use std::{collections::BTreeMap, fmt, path::Path};
 
 use willie_core::{sandbox::PathMode, session::SessionSpec};
 use willie_harness::{Harness, cache_paths, tool_roots};
@@ -41,6 +41,10 @@ pub struct Plan {
     pub workspace: String,
     /// The harness command, untouched.
     pub argv: Vec<String>,
+    /// The session's whole environment, from the spec. The helper clears
+    /// what it inherits and sets exactly this, so the boundary does not
+    /// depend on how the supervisor was started.
+    pub env: BTreeMap<String, String>,
     /// Host directories that must exist before the ops are applied:
     /// the per-project caches. A session never starts without them.
     pub ensure_dirs: Vec<String>,
@@ -163,6 +167,7 @@ pub fn plan(
         home,
         workspace: spec.workspace.clone(),
         argv: spec.argv.clone(),
+        env: spec.env.clone(),
         ensure_dirs,
         ops,
     })
@@ -273,6 +278,15 @@ mod tests {
         let (spec, plan) = planned(all_on());
 
         assert_eq!(plan.argv, spec.argv);
+    }
+
+    /// The daemon resolved the environment when it wrote the spec; the
+    /// plan carries it, it does not rebuild it.
+    #[test]
+    fn the_plan_carries_the_spec_environment_verbatim() {
+        let (spec, plan) = planned(all_on());
+
+        assert_eq!(plan.env, spec.env);
     }
 
     /// The harness is what the session runs; a policy that hides the

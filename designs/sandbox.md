@@ -83,6 +83,11 @@ fail" has no answer outside the agent's transcript.
   slice that already lands four.
 - **A disposable virtual machine per session.** See the boundary below:
   that is the tool for the workload this sandbox declines.
+- **Carrying the helper's own message into the failure record.** The
+  supervisor refuses the causes it can see before the helper runs; what
+  a helper writes after being executed reaches the session's terminal,
+  and capturing it belongs with the enforcement's second part, which
+  already owns the report of which mechanisms applied.
 - **Kernel, driver and sandbox-backend escapes.** Outside the boundary
   by definition.
 
@@ -117,7 +122,13 @@ so a session can work at all, and anything the agent runs can read it.
 Combined with the open network that is a declared residual risk, not an
 oversight: a session is as trusted as the harness's own credentials, and
 the way to reduce the blast radius is to keep sessions short and
-projects separate, not to pretend otherwise.
+projects separate, not to pretend otherwise. It follows, and is worth
+saying because a reader of the capability switch would expect more, that
+turning `agent.state` off governs what a session may mount and not what
+an earlier one left behind: the project and the harness's state
+directory sit on the same filesystem, so a session that had the
+credential can hard-link it into the project, where every later session
+on that project reads it whatever its own policy says.
 
 ### Capabilities — `willie-core/src/sandbox.rs`
 
@@ -191,9 +202,10 @@ supervisor applies a plan; the daemon shows one.
 **The base, not configurable:** own user, pid, ipc and uts namespaces,
 dying with the supervisor; no new privileges; system paths read-only; a
 tmpfs home; a private temporary directory; a fresh process filesystem;
-a minimal device tree; no interop interpreter and none of its
-environment, so no Windows executable is reachable — the interpreter
-that runs them is a file that is not in the namespace; the Windows
+a minimal device tree; no interop interpreter, none of its environment
+and none of its sockets, so no Windows executable runs — the kernel
+holds the interpreter open whatever the namespace contains, so what
+stops one is the socket it cannot reach (0016); the Windows
 drives unmounted except the project itself; privilege escalation
 helpers masked; Willie's own state and runtime directories absent; an
 environment allowlist rather than a denylist.
@@ -276,7 +288,7 @@ denials.
 | the kernel offers no path-based restriction    | —                                | the session starts; the applied event says so, and every view shows it  |
 | the profile names a deferred capability        | `sandbox_capability_unsupported` | refused in the daemon, before any process exists                        |
 | an `extra.paths` entry is not an absolute path | `sandbox_profile_invalid`        | refused in the daemon; the message names the path                       |
-| a backend refuses at launch                    | `sandbox_apply_failed`           | the session does not start; the backend's own message is carried        |
+| a backend refuses at launch                    | `sandbox_apply_failed`           | the causes the supervisor can see before the helper runs — a cache directory it cannot create, a source the plan binds without tolerance that is not there, the helper itself failing to execute — are refused with the code and the session does not start. A helper that refuses after being executed, at mount time, ends the session as an exit; its message reaches the session's terminal |
 | the notification thread dies                   | —                                | intercepted syscalls fail; an event records it; the session continues   |
 | `extra.paths` names a path outside the project | —                                | allowed, that is its purpose, and recorded in the spec                  |
 | a per-project cache path does not exist yet    | —                                | created before the bind; a session never starts without its caches      |
@@ -338,8 +350,7 @@ One task, one commit:
 2. the harness defaults, and the profile's format and reader
 3. the daemon's resolution into the spec, with its refusals
 4. the argument vector and the mounts, as data; then the launch through
-   them, once spike S3 has said how a stop and the exit status travel
-   through the helper
+   them — *both landed*
 5. the syscall filter, denying only
 6. the limits, and the required-subset decision with its report
 7. path-based restriction, applied after the re-exec

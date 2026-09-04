@@ -13,6 +13,7 @@ mod detach;
 mod events;
 #[cfg(target_os = "linux")]
 mod pty;
+mod sandbox;
 mod screen;
 #[cfg(target_os = "linux")]
 mod server;
@@ -29,6 +30,28 @@ const EXIT_FAILURE: u8 = 1;
 
 fn version_line() -> String {
     format!("willie-sess {}", willie_core::VERSION)
+}
+
+/// How a spawn failure is recorded. `prepare` checked both the
+/// workspace and the helper, so either failure here is a path that went
+/// away in between — but only the exec one is the helper failing to
+/// start. A working directory that cannot be entered is the same
+/// condition `prepare` refuses as `harness_exec_failed`, and saying the
+/// helper did not start would name the wrong step.
+#[cfg(target_os = "linux")]
+fn spawn_failure(error: &pty::SpawnError) -> (&'static str, String) {
+    match error {
+        pty::SpawnError::Exec { step, .. } if *step == pty::WORKSPACE_STEP => {
+            ("harness_exec_failed", error.to_string())
+        }
+        pty::SpawnError::Exec { .. } => (
+            "sandbox_apply_failed",
+            format!("the namespace helper did not start: {error}"),
+        ),
+        pty::SpawnError::Setup(_) => {
+            ("supervisor_spawn_failed", error.to_string())
+        }
+    }
 }
 
 /// The detached grandchild: set the session up and answer the launcher.
@@ -83,6 +106,24 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
             return ExitCode::from(EXIT_FAILURE);
         }
     };
+    // Fail closed before a PTY exists: an unknown harness, a spec with no
+    // home, a missing helper, a missing binary or workspace, a cache
+    // directory that cannot be made — each refuses with its own code.
+    let prepared = match sandbox::prepare(
+        &spec,
+        Path::new(willie_linux::sandbox::bwrap::BWRAP),
+    ) {
+        Ok(prepared) => prepared,
+        Err(e) => {
+            let text = e.to_string();
+            events.append(SessionEventKind::Failed {
+                code: e.code().into(),
+                message: text.clone(),
+            });
+            let _ = reply.fail(e.code(), &text);
+            return ExitCode::from(EXIT_FAILURE);
+        }
+    };
     let (master, slave) = match pty::open() {
         Ok(pair) => pair,
         Err(e) => {
@@ -95,23 +136,18 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
             return ExitCode::from(EXIT_FAILURE);
         }
     };
+    // argv[0] is now the helper: an exec failure here is the helper's,
+    // never the harness's, which `prepare` already checked.
     let child = match pty::spawn(
         &master,
         slave,
-        &spec.argv,
+        &prepared.argv,
         &spec.workspace,
         &spec.env,
     ) {
         Ok(pid) => pid,
         Err(e) => {
-            let (code, text) = match &e {
-                pty::SpawnError::Exec { .. } => {
-                    ("harness_exec_failed", format!("{e} ({})", spec.workspace))
-                }
-                pty::SpawnError::Setup(_) => {
-                    ("supervisor_spawn_failed", e.to_string())
-                }
-            };
+            let (code, text) = spawn_failure(&e);
             events.append(SessionEventKind::Failed {
                 code: code.into(),
                 message: text.clone(),
@@ -121,20 +157,40 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
         }
     };
     let pid = u32::try_from(child).unwrap_or(0);
+    // Block the shutdown signals now: the fork has happened, so nothing
+    // downstream of it inherits the block, and no supervisor thread
+    // exists yet, so every one of them inherits the mask and the waiter
+    // alone consumes `SIGTERM`/`SIGHUP`. The constraint is *after the
+    // fork*, not after the shared state: a mask survives both fork and
+    // exec, so blocking any earlier would hand the block to the helper
+    // and through it to the harness, and the ladder's `SIGTERM` would
+    // sit pending against the harness instead of being delivered.
+    // Everything from here to the waiter — the wait for the harness
+    // above all — is time in which a signal to the supervisor would
+    // otherwise kill it outright, with no `failed` recorded and no
+    // client told why; blocked, it merely stays pending.
+    signals::block_shutdown_signals();
+    events.append(SessionEventKind::SandboxApplied {
+        mechanisms: prepared.mechanisms,
+    });
+    // The helper builds the namespace before it forks the harness, so
+    // wait for the harness to exist before saying the session started
+    // and before answering ready: both promised a running harness before
+    // the helper stood between them, and a stop that arrives inside that
+    // window must reach the harness, not the group.
+    let harness = sandbox::wait_for_harness(child, sandbox::harness_wait());
+    // The pid a session records is the helper's monitor, the supervisor's
+    // own child (decision 0016); the harness pid is the ladder's business.
     let started = events.append(SessionEventKind::Started { pid });
     let shared = server::Shared::new(
         master,
         child,
+        harness,
         started.at.clone(),
         paths.socket.clone(),
         events,
         server::stop_grace(),
     );
-    // Block the shutdown signals now, after the harness has forked (so it
-    // does not inherit the block) but before any supervisor thread exists,
-    // so every one of them inherits the mask and the waiter alone consumes
-    // `SIGTERM`/`SIGHUP`.
-    signals::block_shutdown_signals();
     if let Err(e) = server::start(&shared, listener) {
         let _ = reply.fail("supervisor_spawn_failed", &e.to_string());
         return ExitCode::from(EXIT_FAILURE);
@@ -145,11 +201,12 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
     let _ = reply.ok(pid);
     reply.close();
     server::serve(&shared);
-    let exit = pty::wait(child).unwrap_or(pty::Exit {
+    let raw = pty::wait(child).unwrap_or(pty::Exit {
         code: None,
         signal: None,
     });
-    server::finish(&shared, exit);
+    let (code, signal) = sandbox::helper_exit(raw.code, raw.signal);
+    server::finish(&shared, pty::Exit { code, signal });
     ExitCode::SUCCESS
 }
 
@@ -207,6 +264,14 @@ fn main() -> ExitCode {
         events::EventLog::append,
         events::epoch_secs,
         EXIT_FAILURE,
+        sandbox::prepare,
+        sandbox::PrepareError::code,
+        sandbox::helper_exit,
+        sandbox::parse_children,
+        sandbox::parse_child_pids,
+        sandbox::children_include,
+        sandbox::parse_state,
+        sandbox::MECHANISMS,
     );
     // `screen` is pure and compiled on every target, yet only the Linux
     // socket code drives it; name its items so the host build checks them.
@@ -236,5 +301,31 @@ mod tests {
             version_line(),
             format!("willie-sess {}", willie_core::VERSION)
         );
+    }
+
+    /// The helper is `argv[0]` now, so an exec failure is the helper's.
+    /// A working directory that cannot be entered is not: the child
+    /// never reached the helper, and the message must say so.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_working_directory_failure_is_not_the_helper_failing_to_start() {
+        let workspace = spawn_failure(&pty::SpawnError::Exec {
+            step: pty::WORKSPACE_STEP,
+            error: std::io::Error::from(std::io::ErrorKind::NotFound),
+        });
+        let helper = spawn_failure(&pty::SpawnError::Exec {
+            step: pty::EXEC_STEP,
+            error: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        });
+
+        assert_eq!(workspace.0, "harness_exec_failed");
+        assert!(
+            workspace.1.starts_with(pty::WORKSPACE_STEP),
+            "{}",
+            workspace.1
+        );
+        assert!(!workspace.1.contains("namespace helper"), "{}", workspace.1);
+        assert_eq!(helper.0, "sandbox_apply_failed");
+        assert!(helper.1.contains("the namespace helper did not start"));
     }
 }

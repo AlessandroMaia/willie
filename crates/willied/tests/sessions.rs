@@ -11,8 +11,14 @@ use std::{path::Path, time::Duration};
 
 use serde_json::{Value, json};
 
-/// Writes an executable fake `claude` under `home/.local/bin` and returns
-/// the home path to pass as WILLIE_HOME.
+/// A home shaped like the one the image provisions: an executable fake
+/// `claude` under `home/.local/bin`, and the harness's state directory
+/// with the two links into it (`distro/provision.sh`). Returns the home
+/// path to pass as WILLIE_HOME.
+///
+/// The state directory is not decoration: `agent.state` is on by default
+/// for Claude Code, and the sandbox binds it without tolerance, so a
+/// home without it is a home no real session would ever find.
 fn fake_home(root: &Path, body: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
     let home = root.join("home");
@@ -29,17 +35,30 @@ fn fake_home(root: &Path, body: &str) -> std::path::PathBuf {
     .unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))
         .unwrap();
+    let state = home.join(".willie/agent-state/claude");
+    std::fs::create_dir_all(state.join("dot-claude")).unwrap();
+    std::fs::write(state.join("claude.json"), b"{}\n").unwrap();
+    std::os::unix::fs::symlink(
+        ".willie/agent-state/claude/dot-claude",
+        home.join(".claude"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        ".willie/agent-state/claude/claude.json",
+        home.join(".claude.json"),
+    )
+    .unwrap();
     home
 }
 
-/// The supervisor pid for a session: the parent of the harness process the
-/// session reports, since `willie-sess` forks the harness directly under
-/// itself. Parsed from `/proc/<pid>/stat`, whose `comm` field may hold
-/// spaces or parentheses, so the numeric fields are read after the last
-/// `)`.
-fn supervisor_pid_of(harness_pid: u64) -> u64 {
+/// The supervisor pid for a session: the parent of the pid the session
+/// reports, which is the namespace helper's monitor — `willie-sess`
+/// forks the helper, and the harness is two levels below it. Parsed
+/// from `/proc/<pid>/stat`, whose `comm` field may hold spaces or
+/// parentheses, so the numeric fields are read after the last `)`.
+fn supervisor_pid_of(monitor_pid: u64) -> u64 {
     let stat =
-        std::fs::read_to_string(format!("/proc/{harness_pid}/stat")).unwrap();
+        std::fs::read_to_string(format!("/proc/{monitor_pid}/stat")).unwrap();
     let after = stat.rsplit(')').next().unwrap();
     let fields: Vec<&str> = after.split_whitespace().collect();
     // After the comm come: state, ppid, pgrp, ...
@@ -313,12 +332,12 @@ fn a_killed_supervisor_finalises_the_session_and_frees_removal() {
     let session = &resp["result"]["session"];
     assert_eq!(session["state"]["state"], "running", "{resp}");
     let sid = session["id"].as_str().unwrap().to_owned();
-    let harness_pid = session["pid"].as_u64().unwrap();
+    let monitor_pid = session["pid"].as_u64().unwrap();
 
-    // SIGKILL the supervisor (the harness's parent) so it dies without
+    // SIGKILL the supervisor (the monitor's parent) so it dies without
     // running finish(): its named socket file lingers, so the daemon must
     // finalise off the control reader ending, not off the file existing.
-    let supervisor = supervisor_pid_of(harness_pid);
+    let supervisor = supervisor_pid_of(monitor_pid);
     let killed = std::process::Command::new("sh")
         .arg("-c")
         .arg(format!("kill -9 {supervisor}"))
