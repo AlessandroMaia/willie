@@ -613,4 +613,35 @@ mod tests {
             ]
         );
     }
+
+    /// `willie-core` cannot depend on this crate, so its sandbox guard
+    /// names the managed tool roots and package caches independently.
+    /// Two lists that must agree can drift; this test is what keeps
+    /// them from drifting apart: a sixth cache added here without a
+    /// matching entry in the guard fails here, not in production.
+    #[test]
+    fn every_tool_root_and_cache_path_is_refused_as_an_extra_path() {
+        const HOME: &str = "/home/willie";
+
+        for root in tool_roots(Path::new(HOME)) {
+            assert!(
+                willie_core::sandbox::guard_extra_path(
+                    &root.to_string_lossy(),
+                    HOME,
+                )
+                .is_some(),
+                "{root:?}"
+            );
+        }
+        for cache in cache_paths(Path::new(HOME)) {
+            assert!(
+                willie_core::sandbox::guard_extra_path(
+                    &cache.path.to_string_lossy(),
+                    HOME,
+                )
+                .is_some(),
+                "{cache:?}"
+            );
+        }
+    }
 }

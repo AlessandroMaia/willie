@@ -120,6 +120,7 @@ impl SessionOps {
         let capabilities = session_capabilities(
             harness::claude().default_capabilities(),
             &project.sandbox,
+            &self.home,
         )?;
         let (mode, resumed_from) = resume_decision(
             params.resume,
@@ -451,8 +452,13 @@ fn resume_decision(
 fn session_capabilities(
     defaults: CapabilitySet,
     profile: &SandboxProfile,
+    home: &std::path::Path,
 ) -> Result<CapabilitySet, OpError> {
-    Ok(willie_core::sandbox::resolve(defaults, profile)?)
+    Ok(willie_core::sandbox::resolve(
+        defaults,
+        profile,
+        &home.to_string_lossy(),
+    )?)
 }
 
 #[derive(Debug)]
@@ -534,6 +540,8 @@ fn finalise_lost(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use willie_core::sandbox::{ExtraPath, PathMode};
 
@@ -614,9 +622,12 @@ mod tests {
 
     #[test]
     fn a_resolved_policy_keeps_the_project_and_the_harness_defaults() {
-        let set =
-            session_capabilities(claude_defaults(), &SandboxProfile::default())
-                .unwrap();
+        let set = session_capabilities(
+            claude_defaults(),
+            &SandboxProfile::default(),
+            Path::new("/home/willie"),
+        )
+        .unwrap();
 
         assert!(set.project_rw);
         assert!(set.agent_state);
@@ -630,7 +641,12 @@ mod tests {
             ..SandboxProfile::default()
         };
 
-        let set = session_capabilities(claude_defaults(), &profile).unwrap();
+        let set = session_capabilities(
+            claude_defaults(),
+            &profile,
+            Path::new("/home/willie"),
+        )
+        .unwrap();
 
         assert!(!set.agent_state);
         assert!(set.tools_ro);
@@ -643,8 +659,12 @@ mod tests {
             ..SandboxProfile::default()
         };
 
-        let err =
-            session_capabilities(claude_defaults(), &profile).unwrap_err();
+        let err = session_capabilities(
+            claude_defaults(),
+            &profile,
+            Path::new("/home/willie"),
+        )
+        .unwrap_err();
 
         assert_eq!(err.code, "sandbox_capability_unsupported");
         assert!(err.message.contains("ssh"), "{}", err.message);
@@ -661,8 +681,12 @@ mod tests {
             ..SandboxProfile::default()
         };
 
-        let err =
-            session_capabilities(claude_defaults(), &profile).unwrap_err();
+        let err = session_capabilities(
+            claude_defaults(),
+            &profile,
+            Path::new("/home/willie"),
+        )
+        .unwrap_err();
 
         assert_eq!(err.code, "sandbox_profile_invalid");
         assert!(err.remediation.contains("absolute"), "{}", err.remediation);

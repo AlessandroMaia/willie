@@ -225,11 +225,19 @@ pub fn sandbox_explain(
         .cloned()
         .ok_or_else(|| op_error(crate::projects::not_found_err(project_id)))?;
     let defaults = crate::harness::claude().default_capabilities();
-    let capabilities =
-        willie_core::sandbox::resolve(defaults.clone(), &project.sandbox)
-            .map_err(capability_error)?;
-    let entries = willie_core::sandbox::explain(defaults, &project.sandbox)
-        .map_err(capability_error)?;
+    let home = crate::harness::home();
+    let capabilities = willie_core::sandbox::resolve(
+        defaults.clone(),
+        &project.sandbox,
+        &home.to_string_lossy(),
+    )
+    .map_err(capability_error)?;
+    let entries = willie_core::sandbox::explain(
+        defaults,
+        &project.sandbox,
+        &home.to_string_lossy(),
+    )
+    .map_err(capability_error)?;
     serde_json::to_value(willie_proto::sandbox::ExplainResult {
         entries,
         capabilities,

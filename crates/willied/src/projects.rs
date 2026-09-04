@@ -869,7 +869,11 @@ impl Ops {
         } = params;
         let mut project = self.get_project(project_id)?;
         let defaults = crate::harness::claude().default_capabilities();
-        willie_core::sandbox::resolve(defaults, &profile)?;
+        willie_core::sandbox::resolve(
+            defaults,
+            &profile,
+            &crate::harness::home().to_string_lossy(),
+        )?;
         project.sandbox = profile;
         store::save(&self.state_dir, &project).map_err(|e| {
             OpError::new(
