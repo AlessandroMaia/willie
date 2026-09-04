@@ -32,6 +32,28 @@ fn version_line() -> String {
     format!("willie-sess {}", willie_core::VERSION)
 }
 
+/// How a spawn failure is recorded. `prepare` checked both the
+/// workspace and the helper, so either failure here is a path that went
+/// away in between — but only the exec one is the helper failing to
+/// start. A working directory that cannot be entered is the same
+/// condition `prepare` refuses as `harness_exec_failed`, and saying the
+/// helper did not start would name the wrong step.
+#[cfg(target_os = "linux")]
+fn spawn_failure(error: &pty::SpawnError) -> (&'static str, String) {
+    match error {
+        pty::SpawnError::Exec { step, .. } if *step == pty::WORKSPACE_STEP => {
+            ("harness_exec_failed", error.to_string())
+        }
+        pty::SpawnError::Exec { .. } => (
+            "sandbox_apply_failed",
+            format!("the namespace helper did not start: {error}"),
+        ),
+        pty::SpawnError::Setup(_) => {
+            ("supervisor_spawn_failed", error.to_string())
+        }
+    }
+}
+
 /// The detached grandchild: set the session up and answer the launcher.
 #[cfg(target_os = "linux")]
 fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
@@ -125,15 +147,7 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
     ) {
         Ok(pid) => pid,
         Err(e) => {
-            let (code, text) = match &e {
-                pty::SpawnError::Exec { .. } => (
-                    "sandbox_apply_failed",
-                    format!("the namespace helper did not start: {e}"),
-                ),
-                pty::SpawnError::Setup(_) => {
-                    ("supervisor_spawn_failed", e.to_string())
-                }
-            };
+            let (code, text) = spawn_failure(&e);
             events.append(SessionEventKind::Failed {
                 code: code.into(),
                 message: text.clone(),
@@ -254,6 +268,8 @@ fn main() -> ExitCode {
         sandbox::PrepareError::code,
         sandbox::helper_exit,
         sandbox::parse_children,
+        sandbox::parse_child_pids,
+        sandbox::children_include,
         sandbox::parse_state,
         sandbox::MECHANISMS,
     );
@@ -285,5 +301,31 @@ mod tests {
             version_line(),
             format!("willie-sess {}", willie_core::VERSION)
         );
+    }
+
+    /// The helper is `argv[0]` now, so an exec failure is the helper's.
+    /// A working directory that cannot be entered is not: the child
+    /// never reached the helper, and the message must say so.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_working_directory_failure_is_not_the_helper_failing_to_start() {
+        let workspace = spawn_failure(&pty::SpawnError::Exec {
+            step: pty::WORKSPACE_STEP,
+            error: std::io::Error::from(std::io::ErrorKind::NotFound),
+        });
+        let helper = spawn_failure(&pty::SpawnError::Exec {
+            step: pty::EXEC_STEP,
+            error: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+        });
+
+        assert_eq!(workspace.0, "harness_exec_failed");
+        assert!(
+            workspace.1.starts_with(pty::WORKSPACE_STEP),
+            "{}",
+            workspace.1
+        );
+        assert!(!workspace.1.contains("namespace helper"), "{}", workspace.1);
+        assert_eq!(helper.0, "sandbox_apply_failed");
+        assert!(helper.1.contains("the namespace helper did not start"));
     }
 }

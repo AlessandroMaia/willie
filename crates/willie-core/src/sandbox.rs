@@ -174,8 +174,11 @@ impl CapabilitySet {
     }
 }
 
-/// A defaulted set means "written before sandboxing", which is not the
-/// same as "reach nothing": the project bind is what makes a session a
+/// What a spec written before sandboxing resolves to. It does not mean
+/// "unconfined": such a session runs inside the boundary like any
+/// other and reaches a private home, its workspace and the harness
+/// binary, and nothing else of the machine. What it must never mean is
+/// "reach nothing" — the project bind is what makes a session a
 /// session, so it is on even here.
 impl Default for CapabilitySet {
     fn default() -> Self {
@@ -307,9 +310,11 @@ enum Flavor {
     /// above it.
     Subtree,
     /// Refuses the location itself and everything above it, but not
-    /// what is under it. Used only for the home: a project must still
-    /// be able to name `~/notes` or `~/projects/other` one path at a
-    /// time, which a `Subtree` flavour on the home would forbid.
+    /// what is under it. For the two locations the base makes private,
+    /// the home and the temporary directory: a project must still be
+    /// able to name `~/notes` or `/tmp/handoff` one path at a time,
+    /// which a `Subtree` flavour would forbid. Also for the two files
+    /// under the home, where "under" means nothing.
     Exact,
 }
 
@@ -317,7 +322,7 @@ enum Flavor {
 /// not name, reach into, or contain. Built per call because the
 /// home-relative half depends on `home`; the list itself is short and
 /// this runs once per `extra_paths` entry, not on a hot path.
-fn guarded_locations(home: &str) -> [(String, Flavor, &'static str); 24] {
+fn guarded_locations(home: &str) -> [(String, Flavor, &'static str); 25] {
     let interop = "the interop interpreter and its sockets are \
                    `windows.interop`, which this version does not apply";
     let kernel = "kernel interfaces are not paths to grant";
@@ -341,6 +346,21 @@ fn guarded_locations(home: &str) -> [(String, Flavor, &'static str); 24] {
         ("/lib64".to_owned(), Flavor::Subtree, system),
         ("/opt/willie".to_owned(), Flavor::Subtree, willie_state),
         ("/var/lib/willie".to_owned(), Flavor::Subtree, willie_state),
+        // The two the base makes private, before what sits under them:
+        // an entry for a path *under* the home matches the home first
+        // through its ancestor half, and would answer with the wrong
+        // reason.
+        (
+            "/tmp".to_owned(),
+            Flavor::Exact,
+            "the temporary directory is private to the session; grant \
+             paths inside it one by one",
+        ),
+        (
+            home.to_owned(),
+            Flavor::Exact,
+            "the home is private; grant paths inside it one by one",
+        ),
         (
             format!("{home}/.willie"),
             Flavor::Subtree,
@@ -362,11 +382,6 @@ fn guarded_locations(home: &str) -> [(String, Flavor, &'static str); 24] {
         (format!("{home}/.npm"), Flavor::Subtree, caches),
         (format!("{home}/.nuget"), Flavor::Subtree, caches),
         (format!("{home}/.cache"), Flavor::Subtree, caches),
-        (
-            home.to_owned(),
-            Flavor::Exact,
-            "the home is private; grant paths inside it one by one",
-        ),
         (
             format!("{home}/.claude.json"),
             Flavor::Exact,
@@ -421,9 +436,10 @@ fn guard_mnt(path: &str) -> Option<&'static str> {
 /// Why an extra path is refused, if it is. An extra path exists to
 /// reach outside the project; it must not name, reach into, or contain
 /// what the base closes (the system, the kernel's interfaces, the
-/// interop interpreter, Willie's own state, the managed tool roots and
-/// package caches) or what a deferred capability grants on its own
-/// terms (a whole Windows drive, the keys, the login). Public so the
+/// interop interpreter, Willie's own state, the private home and
+/// temporary directory, the managed tool roots and package caches) or
+/// what a deferred capability grants on its own terms (a whole Windows
+/// drive, the keys, the login). Public so the
 /// app and `sandbox explain` can ask the same question `resolve`
 /// answers, and so `willie-harness` can assert its own managed paths
 /// are on this list.
@@ -436,9 +452,10 @@ fn guard_mnt(path: &str) -> Option<&'static str> {
 /// refused, everything under it, and everything above it, because an
 /// ancestor of a guarded location contains it (so `/home`, `/var` and
 /// `/opt` are refused along with what they contain, even though none
-/// is itself on the list). The home is the one exception, guarded
-/// exactly rather than as a subtree, or nothing inside it — including
-/// the paths a project is meant to be able to grant — could ever pass.
+/// is itself on the list). The home and the temporary directory are
+/// the exceptions, guarded exactly rather than as subtrees, or nothing
+/// inside them — including the paths a project is meant to be able to
+/// grant — could ever pass.
 ///
 /// This guard does no I/O and cannot see whether an allowed path is
 /// itself a symbolic link into a guarded one. That gap is real and is
@@ -826,9 +843,11 @@ mod tests {
         assert!(err.remediation().contains("absolute"));
     }
 
-    /// A spec written before sandboxing deserialises to this, so it
-    /// must mean "unconfined, as it used to be" and never "reach
-    /// nothing", which would be a session that cannot see its project.
+    /// A spec written before sandboxing deserialises to this. It is the
+    /// tightest policy there is now that the boundary is applied — a
+    /// private home, the workspace, the harness binary — and it must
+    /// still never mean "reach nothing", which would be a session that
+    /// cannot see its project.
     #[test]
     fn a_defaulted_set_still_carries_the_project_bind() {
         let set = CapabilitySet::default();
@@ -1004,6 +1023,15 @@ extra_paths = [{ path = \"/srv/shared\", mode = \"ro\" }]
             "/home/willie/.npm",
             "/home/willie/.nuget",
             "/home/willie/.cache",
+            // The private temporary directory the base gives every
+            // session: an extra path naming it would bind the shared
+            // one over it, because the base renders first and a later
+            // bind at the same destination wins. Every spelling of it,
+            // since the comparison is normalised.
+            "/tmp",
+            "/tmp/",
+            "//tmp",
+            "/tmp/.",
             // Not a Windows drive: a channel to the Windows side in
             // the same family `/run` closes.
             "/mnt/wsl",
@@ -1028,6 +1056,8 @@ extra_paths = [{ path = \"/srv/shared\", mode = \"ro\" }]
             "/mnt/d/out",
             "/home/willie/projects/other",
             "/home/willie/notes",
+            // Inside the private temporary directory, which is guarded
+            // exactly so a hand-off point stays grantable.
             "/tmp/handoff",
             "/var/lib/other-tool",
             "/opt/tools",
@@ -1040,6 +1070,42 @@ extra_paths = [{ path = \"/srv/shared\", mode = \"ro\" }]
             "/homework",
         ] {
             assert!(resolve(defaults(), &extra(path), HOME).is_ok(), "{path}");
+        }
+    }
+
+    /// The reason is not decoration: it is the sentence the dialog and
+    /// the session's failure show. Each flavour of guard must answer
+    /// with its own, and an entry must not be shadowed into answering
+    /// with a neighbour's.
+    #[test]
+    fn each_flavour_of_guard_answers_with_the_reason_a_user_reads() {
+        for (path, expected) in [
+            // A subtree: the location, what is under it, what is above.
+            ("/var/lib/willie", "Willie's own state"),
+            ("/var/lib/willie/projects", "Willie's own state"),
+            ("/var", "Willie's own state"),
+            ("/home/willie/.npm", "one per project"),
+            // Guarded exactly: the location and its ancestors, while
+            // what is under it stays grantable.
+            ("/home/willie", "the home is private"),
+            ("/home", "the home is private"),
+            ("/tmp", "the temporary directory is private"),
+            ("//tmp", "the temporary directory is private"),
+            // The Windows mount root, guarded by its own rules.
+            ("/mnt", "every Windows drive is `mnt.all`"),
+            ("/mnt/c", "a whole Windows drive"),
+            ("/mnt/wsl", "this reaches the Windows side"),
+            // The two answered before the list is walked at all.
+            ("/", "the whole filesystem"),
+            ("/home/willie/notes/../.ssh", "`..` component"),
+        ] {
+            let err = resolve(defaults(), &extra(path), HOME).unwrap_err();
+
+            let CapabilityError::ExtraPathGuarded { reason, .. } = &err else {
+                panic!("{path}: {err:?}");
+            };
+            assert!(reason.contains(expected), "{path}: {reason}");
+            assert!(err.remediation().contains(expected), "{path}");
         }
     }
 

@@ -398,10 +398,12 @@ mod tests {
     }
 
     /// The one thing an inherited environment buys an attacker: the
-    /// interop variables. They can only reach the session if something
-    /// outside the plan puts them there.
+    /// interop variables. The builder reads the plan and nothing else,
+    /// so what is asserted here is that the vector carries the plan's
+    /// environment and names none of them; that an inherited one cannot
+    /// survive is `--clearenv`, asserted above.
     #[test]
-    fn nothing_outside_the_plan_can_put_a_variable_in_the_session() {
+    fn the_vector_sets_the_plan_environment_and_names_no_interop_variable() {
         let mut p = plan();
         p.env = BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]);
 

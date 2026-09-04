@@ -90,7 +90,9 @@ pub struct Shared {
     child: libc::pid_t,
     /// The harness behind the helper's monitor, resolved once before the
     /// session was announced ready. `None` when the shape never
-    /// appeared; the ladder tries again and then signals the group.
+    /// appeared; the ladder resolves again at every rung and stands on
+    /// this one only while the harness is still one of the reaper's
+    /// children, then signals the group.
     harness: Option<libc::pid_t>,
     started_at: String,
     socket: PathBuf,
@@ -324,15 +326,23 @@ pub fn request_stop(shared: &Arc<Shared>, by: &str, cause: CloseReason) {
                 // rung, because the harness is the reaper's child, not
                 // ours: once it exits its number is free to be reused by
                 // any process in the distribution while this session is
-                // still running. The value found at start-up is only the
-                // fallback, for a start-up that never found the shape.
-                // The last rung goes to the whole group, and so does any
-                // rung when the harness cannot be told apart from the
-                // helper any more.
+                // still running. The pid found at start-up stands in
+                // only while the shape is noisy rather than gone, which
+                // is why it is confirmed against the reaper's children
+                // first. The last rung goes to the whole group, and so
+                // does any rung where the harness cannot be found at
+                // all: that ends the session, the closed direction.
                 let harness = if signal == libc::SIGKILL {
                     None
                 } else {
-                    crate::sandbox::harness_pid(owned.child).or(owned.harness)
+                    crate::sandbox::harness_pid(owned.child).or_else(|| {
+                        owned.harness.filter(|&pid| {
+                            crate::sandbox::harness_still_behind(
+                                owned.child,
+                                pid,
+                            )
+                        })
+                    })
                 };
                 // SAFETY: signalling our own child's process, or its
                 // process group.

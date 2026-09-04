@@ -122,6 +122,20 @@ fn is_executable_file(path: &Path) -> bool {
     }
 }
 
+/// Point one extra path's bind at `resolved`, leaving its destination
+/// as configured. The plan appends one bind per extra path after
+/// everything else, so the last op with that destination is that bind.
+fn rebind_source(ops: &mut [plan::Op], destination: &str, resolved: &str) {
+    for op in ops.iter_mut().rev() {
+        if let plan::Op::Bind { src, dest, .. } = op
+            && dest == destination
+        {
+            *src = resolved.to_owned();
+            return;
+        }
+    }
+}
+
 /// Resolve the plan and check what the helper would otherwise report as
 /// a bare exit: the helper exists, the harness binary is executable,
 /// the workspace is a directory, and every source the plan binds
@@ -137,7 +151,7 @@ pub fn prepare(
         .into_iter()
         .find(|h| h.id() == spec.harness)
         .ok_or_else(|| PrepareError::HarnessUnknown(spec.harness.clone()))?;
-    let plan =
+    let mut plan =
         plan::plan(spec, harness.as_ref()).map_err(PrepareError::Plan)?;
     if !helper.is_file() {
         return Err(PrepareError::BackendMissing(
@@ -171,11 +185,9 @@ pub fn prepare(
             }
         })?;
         let resolved = resolved.to_string_lossy().into_owned();
-        if resolved == extra.path {
-            continue;
-        }
-        if let Some(reason) =
-            willie_core::sandbox::guard_extra_path(&resolved, &plan.home)
+        if resolved != extra.path
+            && let Some(reason) =
+                willie_core::sandbox::guard_extra_path(&resolved, &plan.home)
         {
             return Err(PrepareError::ExtraPath {
                 path: extra.path.clone(),
@@ -185,6 +197,12 @@ pub fn prepare(
                 ),
             });
         }
+        // The helper mounts what this check resolved, not the path as
+        // written: a last component that is a symbolic link can be
+        // re-pointed between the two, and a link inside the project is
+        // writable by every session on it. The destination stays as the
+        // policy configured it.
+        rebind_source(&mut plan.ops, &extra.path, &resolved);
     }
     // The caches first: the plan both creates and binds those, so they
     // have to exist before the sources are checked.
@@ -244,17 +262,37 @@ pub fn parse_state(stat: &str) -> Option<char> {
         .next()
 }
 
-/// The one pid a `/proc/<pid>/task/<pid>/children` file names, or none:
-/// the helper's monitor has one child (the reaper) and the reaper one
-/// child (the harness); any other shape is not what we launched.
+/// Every pid a `/proc/<pid>/task/<pid>/children` file names, or none if
+/// it holds anything that is not a pid.
+#[must_use]
+pub fn parse_child_pids(text: &str) -> Option<Vec<i32>> {
+    text.split_whitespace()
+        .map(str::parse::<i32>)
+        .collect::<Result<Vec<_>, _>>()
+        .ok()
+}
+
+/// The one pid such a file names, or none: the helper's monitor has one
+/// child (the reaper) and the reaper one child (the harness); any other
+/// shape is not what we launched.
 #[must_use]
 pub fn parse_children(text: &str) -> Option<i32> {
-    let mut ids = text.split_whitespace().map(str::parse::<i32>);
-    let first = ids.next()?.ok()?;
-    if ids.next().is_some() {
-        return None;
+    match parse_child_pids(text)?.as_slice() {
+        [only] => Some(*only),
+        _ => None,
     }
-    Some(first)
+}
+
+/// Whether such a file still names `harness`. This is what tells a
+/// *noisy* shape from a *gone* one: the reaper is pid 1 inside the
+/// session's namespace, so an orphaned grandchild is reparented onto it
+/// and hides which of its children is the harness, while the harness is
+/// still one of them. A file that no longer names it means the harness
+/// has exited, and its number is then free for any process in the
+/// distribution to take.
+#[must_use]
+pub fn children_include(text: &str, harness: i32) -> bool {
+    parse_child_pids(text).is_some_and(|ids| ids.contains(&harness))
 }
 
 /// The harness process behind the helper's monitor, resolved when a
@@ -267,6 +305,25 @@ pub fn parse_children(text: &str) -> Option<i32> {
 pub fn harness_pid(monitor: libc::pid_t) -> Option<libc::pid_t> {
     let reaper = only_child(monitor)?;
     only_child(reaper)
+}
+
+/// Whether the harness a session recorded at start-up is still one of
+/// the reaper's children, which is the only case where a pid resolved
+/// once may be signalled later: the shape is noisy rather than gone
+/// (see [`children_include`]). False whenever the reaper cannot be
+/// reached or no longer names it — the harness has exited, the number
+/// is stale, and signalling it would reach whatever holds it now.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn harness_still_behind(
+    monitor: libc::pid_t,
+    harness: libc::pid_t,
+) -> bool {
+    let Some(reaper) = only_child(monitor) else {
+        return false;
+    };
+    fs::read_to_string(format!("/proc/{reaper}/task/{reaper}/children"))
+        .is_ok_and(|text| children_include(&text, harness))
 }
 
 /// How long the supervisor waits for the helper to build the namespace
@@ -311,12 +368,9 @@ pub fn wait_for_harness(
 ) -> Option<libc::pid_t> {
     let until = Instant::now() + within;
     loop {
-        if let Some(pid) = harness_pid(monitor) {
-            return Some(pid);
-        }
-        if !can_still_fork(monitor) {
-            return None;
-        }
+        // The deadline is tested first, so a ceiling of zero always
+        // gives up however fast the helper is: a test that asks for no
+        // wait at all must get the branch it asked for, not a race.
         if Instant::now() >= until {
             // The session starts anyway, so say that the promise the
             // wait exists to keep has just been given up: the ladder
@@ -325,6 +379,12 @@ pub fn wait_for_harness(
                 "willie-sess: no harness appeared behind the helper \
                  within {within:?}; starting anyway"
             );
+            return None;
+        }
+        if let Some(pid) = harness_pid(monitor) {
+            return Some(pid);
+        }
+        if !can_still_fork(monitor) {
             return None;
         }
         thread::sleep(HARNESS_POLL);
@@ -515,6 +575,44 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// The guard resolves the path, so the mount must use what it
+    /// resolved: a last component that is a symbolic link can be
+    /// re-pointed between the check and the mount, and a link inside
+    /// the project is writable by every session on it.
+    #[cfg(unix)]
+    #[test]
+    fn an_extra_path_is_bound_from_the_source_the_check_resolved() {
+        use willie_core::sandbox::{ExtraPath, PathMode};
+
+        let root = scratch("resolvedsrc");
+        let helper = root.join("bwrap");
+        touch(&helper);
+        let bin = root.join("claude");
+        touch(&bin);
+        let real = root.join("real");
+        fs::create_dir_all(&real).unwrap();
+        let link = root.join("shared");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let configured = link.to_string_lossy().into_owned();
+        let mut spec =
+            spec_under(&root, &bin.to_string_lossy(), &root.to_string_lossy());
+        spec.capabilities.extra_paths = vec![ExtraPath {
+            path: configured.clone(),
+            mode: PathMode::Ro,
+        }];
+
+        let prepared = prepare(&spec, &helper).expect("prepared");
+
+        let bind = prepared
+            .argv
+            .windows(3)
+            .find(|w| w[0] == "--ro-bind" && w[2] == configured)
+            .expect("the extra path's bind");
+        assert_eq!(bind[1], fs::canonicalize(&real).unwrap().to_string_lossy());
+        assert_ne!(bind[1], configured);
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// An extra path that is not there refuses the session here, with a
     /// code, rather than letting the helper fail with its own message
     /// from inside a namespace nobody is watching.
@@ -663,5 +761,21 @@ mod tests {
         assert_eq!(parse_children(""), None);
         assert_eq!(parse_children("1 2 "), None);
         assert_eq!(parse_children("x"), None);
+    }
+
+    /// The stop ladder may fall back on the pid it resolved at start-up
+    /// only while the shape is noisy — the reaper collected an orphan
+    /// and has more than one child — never once the harness is gone,
+    /// when the number is free for anything in the distribution to
+    /// take.
+    #[test]
+    fn a_cached_harness_counts_only_while_the_children_file_still_names_it() {
+        assert!(children_include("41 42 43\n", 42));
+        assert!(children_include("42\n", 42));
+        assert!(!children_include("41 43\n", 42));
+        assert!(!children_include("", 42));
+        assert!(!children_include("42 x", 42));
+        assert_eq!(parse_child_pids("41 42"), Some(vec![41, 42]));
+        assert_eq!(parse_child_pids("41 x"), None);
     }
 }

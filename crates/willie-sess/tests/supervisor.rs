@@ -697,9 +697,11 @@ fn a_stop_that_arrives_with_the_readiness_line_still_climbs_the_ladder() {
 
 /// The wait for the harness has a ceiling, so a helper that never forks
 /// cannot hold a session open for ever. With the ceiling at zero the
-/// resolution always gives up: the session still starts, and the
-/// supervisor says in its log that the promise readiness carries — the
-/// harness is running — has just been given up.
+/// resolution always gives up — the deadline is tested before the
+/// first attempt, so a fast helper cannot make it succeed anyway: the
+/// session still starts, and the supervisor says in its log that the
+/// promise readiness carries — the harness is running — has just been
+/// given up.
 #[test]
 fn a_resolution_that_gives_up_still_starts_the_session_and_says_so() {
     let root = scratch("nowait");
@@ -716,7 +718,8 @@ fn a_resolution_that_gives_up_still_starts_the_session_and_says_so() {
         log.contains("no harness appeared behind the helper"),
         "{log}"
     );
-    // The ladder finds it anyway, by resolving again at the first rung.
+    // No stop was asked for, so no rung ever ran: end the session the
+    // blunt way, on the monitor the readiness line named.
     kill(pid, libc::SIGKILL);
     let _ = fs::remove_dir_all(&root);
 }

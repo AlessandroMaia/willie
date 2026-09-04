@@ -56,9 +56,9 @@ fn fake_home(root: &Path, body: &str) -> std::path::PathBuf {
 /// forks the helper, and the harness is two levels below it. Parsed
 /// from `/proc/<pid>/stat`, whose `comm` field may hold spaces or
 /// parentheses, so the numeric fields are read after the last `)`.
-fn supervisor_pid_of(harness_pid: u64) -> u64 {
+fn supervisor_pid_of(monitor_pid: u64) -> u64 {
     let stat =
-        std::fs::read_to_string(format!("/proc/{harness_pid}/stat")).unwrap();
+        std::fs::read_to_string(format!("/proc/{monitor_pid}/stat")).unwrap();
     let after = stat.rsplit(')').next().unwrap();
     let fields: Vec<&str> = after.split_whitespace().collect();
     // After the comm come: state, ppid, pgrp, ...
@@ -332,12 +332,12 @@ fn a_killed_supervisor_finalises_the_session_and_frees_removal() {
     let session = &resp["result"]["session"];
     assert_eq!(session["state"]["state"], "running", "{resp}");
     let sid = session["id"].as_str().unwrap().to_owned();
-    let harness_pid = session["pid"].as_u64().unwrap();
+    let monitor_pid = session["pid"].as_u64().unwrap();
 
-    // SIGKILL the supervisor (the harness's parent) so it dies without
+    // SIGKILL the supervisor (the monitor's parent) so it dies without
     // running finish(): its named socket file lingers, so the daemon must
     // finalise off the control reader ending, not off the file existing.
-    let supervisor = supervisor_pid_of(harness_pid);
+    let supervisor = supervisor_pid_of(monitor_pid);
     let killed = std::process::Command::new("sh")
         .arg("-c")
         .arg(format!("kill -9 {supervisor}"))
