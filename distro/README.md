@@ -47,7 +47,7 @@ First run of a freshly installed image (`willie doctor`, exit 0; the
 [ok ]  unprivileged user            uid 1000
 [ok ]  state dir                    /var/lib/willie
 [ok ]  run dir                      /run/willie
-[ok ]  bubblewrap                   bubblewrap 0.11.0
+[ok ]  bubblewrap                   bubblewrap 0.12.0
 [ok ]  git                          git version 2.47.3
 [ok ]  curl                         curl 8.14.1 (x86_64-pc-linux-gnu) …
 [ok ]  user namespaces              ok

@@ -392,7 +392,7 @@ sentence shown in the UI):
 | `extra.paths`      | empty            | additional `ro`/`rw` binds declared in the profile                                                     |
 | `ssh`              | off              | `~/.ssh` ro + agent socket                                                                             |
 | `mnt.all`          | off ⚠            | mounts all of `/mnt/*`                                                                                 |
-| `windows.interop`  | off ⚠⚠           | mounts `/init`, keeps `WSL_INTEROP` — equivalent to no sandbox towards Windows                        |
+| `windows.interop`  | off ⚠⚠           | mounts the interop socket directory (`/run/WSL`) and keeps `WSL_INTEROP`, which names the socket in it — equivalent to no sandbox towards Windows. The interpreter itself is never the question: the kernel holds it open through its binfmt entry (0016) |
 
 `willie sandbox explain <project>` prints the resolved capabilities.
 The mounts and the exact bubblewrap argument vector are built **as
@@ -623,7 +623,7 @@ wizard of §2.4. Code signing is out of scope for now.
 | ----- | ------ | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
 | S1    | F0     | stdio through `wsl.exe`: latency; UTF-16LE of `wsl.exe`'s own messages vs raw bytes of the Linux process; `CREATE_NO_WINDOW`; does the daemon die with its parent? | steady-state round trip < 50 ms (measured ≈0.5 ms); the first request after a spawn is budgeted in seconds (measured 0.2–0.9 s); no console window; a `--exec` child dies with its Windows parent — supervisors detach and confirm it |
 | S2    | F1     | PTY + supervisor + attach in Windows Terminal: resize, 24-bit colour, keys, faithful TUI; supervisor survives the daemon | measured (0012): Claude Code session in a WT tab through `willie attach`, redrawn on reattach; keystroke echo 165 µs median; the session survives its launcher and `willied` — F1 adds a control channel |
-| S3    | F3     | sandbox on the real kernel: `landlock` in `/sys/kernel/security/lsm`; Landlock ABI; `unshare -U`; `.exe` denied inside; CLI logs in with `agent.state` + tmpfs home | matrix of what works, recorded as a decision |
+| S3    | F3     | sandbox on the real kernel: `landlock` in `/sys/kernel/security/lsm`; Landlock ABI; `unshare -U`; `.exe` denied inside; CLI logs in with `agent.state` + tmpfs home | measured (0016): Landlock ABI 3, probed through the syscall because securityfs is not mounted; unprivileged user namespaces, seccomp and its user notification all present; a Windows executable refused because `/run/WSL` is outside the namespace, not because `/init` is; the CLI logged in and answered a prompt with `agent.state` and a tmpfs home — F3 ships the required subset |
 | S4    | F2     | corporate network: what does `autoProxy` inject (PAC or static)? does `curl` to the API work with the imported CA? | exact list of variables/files to propagate |
 | S5    | F1     | `/mnt/c` performance: `git status`, `rg`, CLI startup on a real repository                                 | measured (0011): warm `git status` 511 ms on DrvFs vs 4.9 ms on ext4 (~100×), `rg` 19×, traversal 27× — F1 ships the ext4 workspace |
 
