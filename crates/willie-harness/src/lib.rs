@@ -63,6 +63,72 @@ pub struct Launch {
 /// How long `--version` may take before the binary counts as absent.
 const DETECT_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// A symbolic link the sandbox recreates inside the private home, so a
+/// dot path resolves into the bound state exactly as it does in the
+/// distribution's real home. `target` is what the link says, relative
+/// to the home, because that is how the image writes it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub target: String,
+    pub path: PathBuf,
+}
+
+/// Where a harness keeps its login and settings: one directory the
+/// image places outside the ephemeral home, plus the links that make
+/// the harness find it. `agent.state` binds the directory read-write
+/// and recreates the links; nothing else of the real home is visible.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentState {
+    pub dir: PathBuf,
+    pub links: Vec<Link>,
+}
+
+/// One package cache: the short name a per-project copy is kept under,
+/// and the home-relative path the tools expect to find it at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cache {
+    pub name: &'static str,
+    pub path: PathBuf,
+}
+
+/// `home/<rel>` as a Linux path. `Path::join` would insert the host's
+/// separator when this crate is compiled on Windows; these paths only
+/// ever exist inside the distribution.
+fn under(home: &Path, rel: &str) -> PathBuf {
+    let mut s = home.to_string_lossy().into_owned();
+    s.push('/');
+    s.push_str(rel);
+    PathBuf::from(s)
+}
+
+/// The roots managed tools are installed under, bound read-only by
+/// `tools.ro`: the user-local tree the official installers use, and
+/// the .NET root. A root that does not exist yet is skipped by the
+/// sandbox, so the list names the layout rather than the machine.
+#[must_use]
+pub fn tool_roots(home: &Path) -> Vec<PathBuf> {
+    vec![under(home, ".local"), under(home, ".dotnet")]
+}
+
+/// The package caches `caches.rw` gives a per-project copy of.
+#[must_use]
+pub fn cache_paths(home: &Path) -> Vec<Cache> {
+    vec![
+        Cache {
+            name: "npm",
+            path: under(home, ".npm"),
+        },
+        Cache {
+            name: "nuget",
+            path: under(home, ".nuget"),
+        },
+        Cache {
+            name: "cache",
+            path: under(home, ".cache"),
+        },
+    ]
+}
+
 /// An agent CLI Willie knows how to run.
 pub trait Harness: std::fmt::Debug {
     /// Stable identifier, e.g. `claude-code`.
@@ -85,6 +151,14 @@ pub trait Harness: std::fmt::Debug {
             git_identity: true,
             extra_paths: Vec::new(),
         }
+    }
+
+    /// Where this harness keeps its login under `home`, if it has one to
+    /// keep. `None` means `agent.state` has nothing to bind: safer than
+    /// guessing a directory for a harness that never said.
+    fn agent_state(&self, home: &Path) -> Option<AgentState> {
+        let _ = home;
+        None
     }
 
     /// The version in the binary's `--version` output: the first
@@ -234,6 +308,26 @@ impl Harness for ClaudeCode {
 
     fn installer(&self) -> &'static str {
         "curl -fsSL https://claude.ai/install.sh | bash"
+    }
+
+    /// The layout the image provisions: the CLI's directory and settings
+    /// file live under Willie's per-user state, and `~/.claude` plus
+    /// `~/.claude.json` are links into it.
+    fn agent_state(&self, home: &Path) -> Option<AgentState> {
+        const STATE: &str = ".willie/agent-state/claude";
+        Some(AgentState {
+            dir: under(home, STATE),
+            links: vec![
+                Link {
+                    target: format!("{STATE}/dot-claude"),
+                    path: under(home, ".claude"),
+                },
+                Link {
+                    target: format!("{STATE}/claude.json"),
+                    path: under(home, ".claude.json"),
+                },
+            ],
+        })
     }
 
     /// Without its state directory the CLI cannot log in, so the
@@ -414,36 +508,109 @@ mod tests {
         assert!(set.extra_paths.is_empty());
     }
 
+    /// A harness that overrides nothing: what the trait gives by default.
+    #[derive(Debug)]
+    struct Quiet;
+
+    impl Harness for Quiet {
+        fn id(&self) -> &'static str {
+            "quiet"
+        }
+        fn binary_name(&self) -> &'static str {
+            "quiet"
+        }
+        fn capabilities(&self) -> HarnessCapabilities {
+            HarnessCapabilities {
+                interactive_tui: false,
+                resume: Resume::None,
+                headless_stream: false,
+            }
+        }
+        fn installer(&self) -> &'static str {
+            "true"
+        }
+    }
+
     /// A harness that says nothing gets no credential: a new harness
     /// must ask for the risky bind, never inherit it.
     #[test]
     fn a_harness_that_overrides_nothing_gets_no_credential() {
-        #[derive(Debug)]
-        struct Quiet;
-
-        impl Harness for Quiet {
-            fn id(&self) -> &'static str {
-                "quiet"
-            }
-            fn binary_name(&self) -> &'static str {
-                "quiet"
-            }
-            fn capabilities(&self) -> HarnessCapabilities {
-                HarnessCapabilities {
-                    interactive_tui: false,
-                    resume: Resume::None,
-                    headless_stream: false,
-                }
-            }
-            fn installer(&self) -> &'static str {
-                "true"
-            }
-        }
-
         let set = Quiet.default_capabilities();
 
         assert!(set.project_rw);
         assert!(!set.agent_state);
         assert!(set.tools_ro);
+    }
+
+    /// The image keeps the login under `~/.willie/agent-state/claude` and
+    /// links the two dot paths into it. A sandbox that reproduces the same
+    /// links over a private home gives the CLI the login a plain shell in
+    /// the distribution sees, and nothing else of the real home.
+    #[test]
+    fn claude_code_keeps_its_login_under_the_willie_state_dir() {
+        let state = ClaudeCode
+            .agent_state(Path::new("/home/willie"))
+            .expect("Claude Code has a login to bind");
+
+        assert_eq!(
+            state.dir,
+            PathBuf::from("/home/willie/.willie/agent-state/claude")
+        );
+        assert_eq!(
+            state.links,
+            vec![
+                Link {
+                    target: ".willie/agent-state/claude/dot-claude".into(),
+                    path: PathBuf::from("/home/willie/.claude"),
+                },
+                Link {
+                    target: ".willie/agent-state/claude/claude.json".into(),
+                    path: PathBuf::from("/home/willie/.claude.json"),
+                },
+            ]
+        );
+    }
+
+    /// No layout, no bind: `agent.state` on such a harness grants nothing,
+    /// which is safer than guessing a directory.
+    #[test]
+    fn a_harness_that_says_nothing_has_no_login_to_bind() {
+        assert!(Quiet.agent_state(Path::new("/home/willie")).is_none());
+    }
+
+    /// Where managed tools land today: the user-local tree the official
+    /// installers use, and the .NET root. Bound read-only by `tools.ro`.
+    #[test]
+    fn the_tool_roots_are_the_user_local_tree_and_dotnet() {
+        assert_eq!(
+            tool_roots(Path::new("/home/willie")),
+            vec![
+                PathBuf::from("/home/willie/.local"),
+                PathBuf::from("/home/willie/.dotnet"),
+            ]
+        );
+    }
+
+    /// Each package cache has a short name, so a per-project copy can be
+    /// kept under it, and the home-relative path tools expect it at.
+    #[test]
+    fn each_package_cache_has_a_name_and_a_home_relative_target() {
+        assert_eq!(
+            cache_paths(Path::new("/home/willie")),
+            vec![
+                Cache {
+                    name: "npm",
+                    path: PathBuf::from("/home/willie/.npm"),
+                },
+                Cache {
+                    name: "nuget",
+                    path: PathBuf::from("/home/willie/.nuget"),
+                },
+                Cache {
+                    name: "cache",
+                    path: PathBuf::from("/home/willie/.cache"),
+                },
+            ]
+        );
     }
 }

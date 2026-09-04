@@ -92,7 +92,8 @@ crates/
   willie-core        domain: ids (ULID), Project, Session, CapabilitySet,
                      config — ZERO I/O
   willie-linux       Linux-side helpers shared by willied, willie-sess
-                     and willie-cli (well-known paths, doctor checks)
+                     and willie-cli (well-known paths, doctor checks,
+                     the sandbox plan and argument vector as data)
   willie-proto       JSON-RPC messages (serde), protocol version,
                      snapshot/events
   willie-engine      Windows: wsl.exe wrapper, provisioning, proxy/CA,
@@ -116,7 +117,8 @@ Dependency rules: `core` and `proto` depend on nothing internal; `engine`
 and `willied` never see each other (only `proto`); `willie-sess` depends
 on `core` + `harness`, not on the daemon; plugins depend on `plugin-api`
 + `core` + `harness`, never on `willied`; `willie-linux` depends on
-`proto` only; the UI knows only `proto` (TS mirrors of the types).
+`proto`, `core` and `harness`, never on the daemon or the supervisor;
+the UI knows only `proto` (TS mirrors of the types).
 
 ## 2. The distribution
 
@@ -357,6 +359,8 @@ namespace right before `exec` of the harness) + **rlimits**.
   namespace);
 - `/mnt/*` **not mounted** except the project path and `extra.paths`;
 - `sudo` masked; `/var/lib/willie` and `/run/willie` not mounted;
+- the harness binary (`argv[0]`) bound **ro** at its own path whatever
+  the policy says — a session that cannot start is no session;
 - environment **allowlist**: `PATH`, `HOME`, `USER`, `TERM`, `COLORTERM`,
   `LANG`, `LC_*`, `TZ`, plus the `machine.env` variables;
 - seccomp blocks `ptrace`, `process_vm_*`, `bpf`, `io_uring_*`,
@@ -374,9 +378,9 @@ sentence shown in the UI):
 | Capability         | Default          | Effect                                                                                                 |
 | ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------ |
 | `project.rw`       | always           | bind **rw** of the project directory **at the same path** (`/mnt/c/...` or ext4)                      |
-| `agent.state`      | on (Claude Code) | bind rw of the harness state dir/file → `$HOME/.claude`, `$HOME/.claude.json`; without it no login    |
-| `tools.ro`         | on               | binds **ro** of managed tools (`~/.local`, `~/.dotnet`, Node manager) — the agent cannot alter them   |
-| `caches.rw`        | on               | binds rw of `~/.nuget`, `~/.npm`, `~/.cache` (shared across sessions)                                  |
+| `agent.state`      | on (Claude Code) | bind rw of the harness's state directory under `~/.willie/agent-state/`, plus the `~/.claude` and `~/.claude.json` links into it; without it no login |
+| `tools.ro`         | on               | binds **ro** of the managed tool roots (`~/.local`, `~/.dotnet`; a Node manager when F4 adds one) — the agent cannot alter them |
+| `caches.rw`        | on               | binds rw a **per-project** directory (`~/.willie/caches/<project_id>/…`) over `~/.npm`, `~/.nuget`, `~/.cache` |
 | `git.identity`     | on               | `~/.gitconfig` ro                                                                                      |
 | `home.persistent`  | off              | `$HOME` = `~/.willie/homes/<project_id>` instead of tmpfs                                              |
 | `extra.paths`      | empty            | additional `ro`/`rw` binds declared in the profile                                                     |
@@ -384,10 +388,13 @@ sentence shown in the UI):
 | `mnt.all`          | off ⚠            | mounts all of `/mnt/*`                                                                                 |
 | `windows.interop`  | off ⚠⚠           | mounts `/init`, keeps `WSL_INTEROP` — equivalent to no sandbox towards Windows                        |
 
-`willie sandbox explain <project>` prints the resolved capabilities;
-the exact bubblewrap argument vector, the seccomp summary and the
-Landlock rules arrive with the enforcement slice, which is what builds
-them.
+`willie sandbox explain <project>` prints the resolved capabilities.
+The mounts and the exact bubblewrap argument vector are built **as
+data** by `willie-linux::sandbox` (`plan`, then `bwrap::argv`), so the
+supervisor that applies them and the daemon that explains them share
+one builder and its tests run on any host; the supervisor does not
+launch through them yet. The seccomp summary and the Landlock rules
+arrive with their own commits of the enforcement slice.
 
 ### 3.4 Configuration layers (increasing authority, monotonic)
 

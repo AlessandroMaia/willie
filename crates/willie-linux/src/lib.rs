@@ -6,4 +6,5 @@
 
 pub mod doctor;
 pub mod paths;
+pub mod sandbox;
 pub mod wire;

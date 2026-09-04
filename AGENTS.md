@@ -19,7 +19,8 @@ agents do the work. Full picture: `docs/ARCHITECTURE.md`.
 crates/
   willie-core        domain types (ids, config, capability sets) — zero I/O
   willie-linux       Linux-side helpers shared by willied, willie-sess
-                     and willie-cli (well-known paths, doctor checks)
+                     and willie-cli (well-known paths, doctor checks,
+                     the sandbox plan and argument vector as data)
   willie-proto       JSON-RPC message types; transport-agnostic
   willie-harness     `Harness` trait + capability matrix; `ClaudeCode` impl
   willie-plugin-api  `Plugin` trait and manifest

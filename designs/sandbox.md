@@ -127,7 +127,7 @@ consequence that the UI shows verbatim. Six ship:
 | Capability      | Default          | Binds                                                | If enabled                                                  |
 | --------------- | ---------------- | ---------------------------------------------------- | ----------------------------------------------------------- |
 | `project.rw`    | always           | the workspace, read-write, at the same path          | the agent edits the project, which is the point             |
-| `agent.state`   | on (Claude Code) | the harness's `state_paths()`                        | anything in the session can use the harness's login         |
+| `agent.state`   | on (Claude Code) | the harness's `agent_state()`: its directory under `~/.willie/agent-state/`, read-write, and the links into it | anything in the session can use the harness's login |
 | `tools.ro`      | on               | the managed tool locations, read-only                | the agent runs the tools and cannot alter them              |
 | `caches.rw`     | on               | a per-project directory over each package cache path | downloads survive between this project's sessions           |
 | `git.identity`  | on               | the user's git configuration, read-only              | commits carry the user's name and address                   |
@@ -138,7 +138,13 @@ beside the session types. The four deferred names exist in the same
 enum so the profile format does not change when they arrive; resolving
 one refuses the session.
 
-`caches.rw` binds a **per-project** directory over each cache path
+The harness binary itself, `argv[0]`, is bound read-only at its own
+path whatever the policy says. With `tools.ro` off the tools are
+hidden, but a session that cannot start is not a tighter policy, it is
+no session at all.
+
+`caches.rw` binds a **per-project** directory
+(`~/.willie/caches/<project_id>/<cache>`) over each cache path
 rather than sharing one. A shared writable cache is the single place
 where one project's compromise reaches another: a poisoned package in
 the shared store installs into the next project that asks for it. The
@@ -166,15 +172,21 @@ An unknown key, a wrong type, or a capability not yet implemented
 refuses the session at resolution time, in the daemon, before any
 process exists.
 
-### Applying it — `willie-sess/src/sandbox/`
+### Applying it — `willie-linux/src/sandbox/`, `willie-sess/src/sandbox/`
 
 ```
-sandbox/mod.rs        the required subset, and the report of what applied
-sandbox/bwrap.rs      the argument vector, as data
-sandbox/seccomp.rs    the filter program, and the notification loop
-sandbox/landlock.rs   applied after re-exec, immediately before exec
-sandbox/rlimits.rs    process, descriptor and core limits
+willie-linux/src/sandbox/mod.rs      the plan: policy to mounts, as data
+willie-linux/src/sandbox/bwrap.rs    the argument vector, as data
+willie-sess/src/sandbox/mod.rs       the required subset, and the report of what applied
+willie-sess/src/sandbox/seccomp.rs   the filter program, and the notification loop
+willie-sess/src/sandbox/landlock.rs  applied after re-exec, immediately before exec
+willie-sess/src/sandbox/rlimits.rs   process, descriptor and core limits
 ```
+
+The two data files sit in the shared Linux crate rather than in the
+supervisor because `sandbox explain` prints the same vector from the
+daemon, and the daemon cannot depend on the supervisor binary. The
+supervisor applies a plan; the daemon shows one.
 
 **The base, not configurable:** own user, pid, ipc and uts namespaces,
 dying with the supervisor; no new privileges; system paths read-only; a
@@ -325,7 +337,9 @@ One task, one commit:
 1. `CapabilitySet` and the six capabilities in `willie-core`
 2. the harness defaults, and the profile's format and reader
 3. the daemon's resolution into the spec, with its refusals
-4. the argument vector and the mounts
+4. the argument vector and the mounts, as data; then the launch through
+   them, once spike S3 has said how a stop and the exit status travel
+   through the helper
 5. the syscall filter, denying only
 6. the limits, and the required-subset decision with its report
 7. path-based restriction, applied after the re-exec
