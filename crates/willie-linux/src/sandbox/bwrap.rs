@@ -64,6 +64,15 @@ pub fn argv(plan: &Plan) -> Vec<String> {
             "--die-with-parent",
         ],
     );
+    // Mounts do not clear an environment. Clearing here rather than
+    // relying on how the supervisor was started keeps the boundary
+    // self-contained, and the interop variables are why that matters:
+    // the kernel holds the interop interpreter open, so its address
+    // plus one wrong bind is an escape (decision 0016).
+    push(&mut v, &["--clearenv"]);
+    for (key, value) in &plan.env {
+        push(&mut v, &["--setenv", key, value]);
+    }
     push(&mut v, &["--ro-bind", "/usr", "/usr"]);
     for (target, link) in USR_LINKS {
         push(&mut v, &["--symlink", target, link]);
@@ -118,6 +127,8 @@ fn render(op: &Op, v: &mut Vec<String>) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use willie_core::sandbox::PathMode;
 
     use super::*;
@@ -132,6 +143,7 @@ mod tests {
             home: HOME.into(),
             workspace: WS.into(),
             argv: vec![BIN.into(), "--continue".into()],
+            env: BTreeMap::new(),
             ensure_dirs: Vec::new(),
             ops: vec![
                 Op::Tmpfs {
@@ -175,9 +187,11 @@ mod tests {
         Some(match option {
             "--unshare-user" | "--unshare-pid" | "--unshare-ipc"
             | "--unshare-uts" | "--die-with-parent" => 0,
+            "--clearenv" => 0,
             "--proc" | "--dev" | "--tmpfs" | "--chdir" | "--perms" => 1,
             "--ro-bind" | "--ro-bind-try" | "--bind" | "--bind-try"
             | "--symlink" => 2,
+            "--setenv" => 2,
             _ => return None,
         })
     }
@@ -343,6 +357,7 @@ mod tests {
     fn the_base_names_neither_the_windows_drives_nor_the_interop_nor_willie() {
         let mut bare = plan();
         bare.ops.clear();
+        bare.env = BTreeMap::new();
         bare.workspace = "/w".into();
         bare.argv = vec!["/w/h".into()];
         let v = argv(&bare);
@@ -354,5 +369,62 @@ mod tests {
                 assert!(!arg.starts_with(forbidden), "{arg}");
             }
         }
+    }
+
+    /// `--clearenv` wipes what `--setenv` then sets, so the order is not
+    /// cosmetic: a `--setenv` before it would be erased.
+    #[test]
+    fn the_environment_is_cleared_before_the_allowlist_is_set() {
+        let mut p = plan();
+        p.env = BTreeMap::from([
+            ("HOME".to_owned(), HOME.to_owned()),
+            ("TERM".to_owned(), "xterm-256color".to_owned()),
+        ]);
+
+        let v = argv(&p);
+
+        let clear = v
+            .iter()
+            .position(|a| a == "--clearenv")
+            .expect("the environment is cleared");
+        let first_set = v
+            .iter()
+            .position(|a| a == "--setenv")
+            .expect("the allowlist is set");
+        assert!(clear < first_set, "cleared after being set");
+        assert!(has(&v, &["--setenv", "HOME", HOME]));
+        assert!(has(&v, &["--setenv", "TERM", "xterm-256color"]));
+        assert_eq!(v.iter().filter(|a| *a == "--setenv").count(), 2);
+    }
+
+    /// The one thing an inherited environment buys an attacker: the
+    /// interop variables. They can only reach the session if something
+    /// outside the plan puts them there.
+    #[test]
+    fn nothing_outside_the_plan_can_put_a_variable_in_the_session() {
+        let mut p = plan();
+        p.env = BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]);
+
+        let v = argv(&p);
+
+        assert!(v.contains(&"--clearenv".to_owned()));
+        assert_eq!(v.iter().filter(|a| *a == "--setenv").count(), 1);
+        for leaked in ["WSL_INTEROP", "WSL_DISTRO_NAME", "WSLENV", "WT_SESSION"]
+        {
+            assert!(!v.iter().any(|a| a.contains(leaked)), "{leaked}");
+        }
+    }
+
+    /// A spec with no environment still gets an empty one, never the
+    /// launcher's.
+    #[test]
+    fn an_empty_environment_is_still_cleared() {
+        let mut p = plan();
+        p.env = BTreeMap::new();
+
+        let v = argv(&p);
+
+        assert!(v.contains(&"--clearenv".to_owned()));
+        assert!(!v.contains(&"--setenv".to_owned()));
     }
 }

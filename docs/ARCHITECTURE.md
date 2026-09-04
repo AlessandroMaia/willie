@@ -361,8 +361,10 @@ namespace right before `exec` of the harness) + **rlimits**.
 - `sudo` masked; `/var/lib/willie` and `/run/willie` not mounted;
 - the harness binary (`argv[0]`) bound **ro** at its own path whatever
   the policy says — a session that cannot start is no session;
-- environment **allowlist**: `PATH`, `HOME`, `USER`, `TERM`, `COLORTERM`,
-  `LANG`, `LC_*`, `TZ`, plus the `machine.env` variables;
+- environment **allowlist**, applied by the vector itself (`--clearenv`
+  then one `--setenv` per variable), not by whoever spawns it: `PATH`,
+  `HOME`, `USER`, `TERM`, `COLORTERM`, `LANG`, `LC_*`, `TZ`, plus the
+  `machine.env` variables;
 - seccomp blocks `ptrace`, `process_vm_*`, `bpf`, `io_uring_*`,
   `perf_event_open`, `userfaultfd`, the mount family, `unshare`/`setns`,
   module loading, `kexec_*`, `keyctl`/`add_key`, `ioctl(TIOCSTI)`, packet
