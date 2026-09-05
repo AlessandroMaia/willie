@@ -7,6 +7,7 @@
 //! one without starting a session.
 
 pub mod bwrap;
+pub mod inner;
 
 use std::{collections::BTreeMap, fmt, path::Path};
 
