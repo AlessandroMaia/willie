@@ -109,10 +109,7 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
     // Fail closed before a PTY exists: an unknown harness, a spec with no
     // home, a missing helper, a missing binary or workspace, a cache
     // directory that cannot be made — each refuses with its own code.
-    let prepared = match sandbox::prepare(
-        &spec,
-        Path::new(willie_linux::sandbox::bwrap::BWRAP),
-    ) {
+    let prepared = match sandbox::prepare(&spec, &sandbox::helper_path()) {
         Ok(prepared) => prepared,
         Err(e) => {
             let text = e.to_string();
@@ -170,15 +167,59 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
     // otherwise kill it outright, with no `failed` recorded and no
     // client told why; blocked, it merely stays pending.
     signals::block_shutdown_signals();
-    events.append(SessionEventKind::SandboxApplied {
-        mechanisms: prepared.mechanisms,
-    });
     // The helper builds the namespace before it forks the harness, so
     // wait for the harness to exist before saying the session started
     // and before answering ready: both promised a running harness before
     // the helper stood between them, and a stop that arrives inside that
     // window must reach the harness, not the group.
-    let harness = sandbox::wait_for_harness(child, sandbox::harness_wait());
+    let harness =
+        match sandbox::wait_for_harness(child, sandbox::harness_wait()) {
+            sandbox::HarnessWait::Running(pid) => Some(pid),
+            sandbox::HarnessWait::GaveUp => None,
+            // The helper refused while building the namespace. Everything
+            // visible before it ran is already a coded refusal, so this is
+            // the one class left, and its only channel is the terminal
+            // nobody is attached to yet: drain it, or the session becomes a
+            // start and an exit with no cause anywhere.
+            // Nothing is gone for certain here: a harness that ran and
+            // exited inside one poll leaves the same trace. Only the
+            // helper's own words tell the two apart, so a session whose
+            // harness merely finished first is left to the ordinary
+            // path, with the pid the ladder would have used unknown —
+            // which costs nothing, since it has already exited.
+            sandbox::HarnessWait::HelperGone => {
+                let said = pty::drain(&master, sandbox::HELPER_DRAIN);
+                if !sandbox::is_helper_refusal(&said) {
+                    // Nothing is certain here: a harness that ran and
+                    // exited inside one poll leaves the same trace as a
+                    // helper that never forked one. Only the helper's
+                    // own words tell them apart, so a session whose
+                    // harness merely finished first takes the ordinary
+                    // path, with the pid the ladder would have used
+                    // unknown — which costs nothing, since it is gone.
+                    None
+                } else {
+                    let exit = pty::wait(child).unwrap_or(pty::Exit {
+                        code: None,
+                        signal: None,
+                    });
+                    let text =
+                        sandbox::apply_failure(&said, exit.code, exit.signal);
+                    events.append(SessionEventKind::Failed {
+                        code: "sandbox_apply_failed".into(),
+                        message: text.clone(),
+                    });
+                    let _ = reply.fail("sandbox_apply_failed", &text);
+                    return ExitCode::from(EXIT_FAILURE);
+                }
+            }
+        };
+    // Only now is anything applied: a helper that refused built no
+    // namespace, and an event saying otherwise would be the record
+    // claiming what did not happen.
+    events.append(SessionEventKind::SandboxApplied {
+        mechanisms: prepared.mechanisms,
+    });
     // The pid a session records is the helper's monitor, the supervisor's
     // own child (decision 0016); the harness pid is the ladder's business.
     let started = events.append(SessionEventKind::Started { pid });
@@ -272,6 +313,10 @@ fn main() -> ExitCode {
         sandbox::children_include,
         sandbox::parse_state,
         sandbox::MECHANISMS,
+        sandbox::helper_path,
+        sandbox::apply_failure,
+        sandbox::HELPER_DRAIN,
+        sandbox::is_helper_refusal,
     );
     // `screen` is pure and compiled on every target, yet only the Linux
     // socket code drives it; name its items so the host build checks them.

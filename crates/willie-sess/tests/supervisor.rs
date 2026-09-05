@@ -628,6 +628,61 @@ fn a_session_runs_confined_and_sees_neither_the_real_home_nor_windows() {
     let _ = fs::remove_dir_all(&root);
 }
 
+/// A helper that refuses while building the namespace is the one class
+/// of failure the supervisor cannot see before running it, and its only
+/// channel is the session's terminal, which nothing is attached to yet.
+/// Measured against a real installation this arrived as a session that
+/// recorded a start and an exit with the cause nowhere: the reason had
+/// to be found by rebuilding the argument vector by hand.
+#[test]
+fn a_helper_that_refuses_after_exec_says_why_instead_of_starting() {
+    let root = scratch("helper-refuses");
+    let bin = fake_harness(&root, "exit 0");
+    let helper = root.join("refuser");
+    fs::write(
+        &helper,
+        "#!/bin/sh\necho \"bwrap: Can't mount on symlink destination /x\" >&2\nexit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+
+    let (code, line) = launch_with_env(
+        &spec,
+        &[("WILLIE_SESS_HELPER_BIN", &helper.to_string_lossy())],
+    );
+
+    assert_eq!(code, 1, "{line}");
+    assert!(line.starts_with("fail sandbox_apply_failed: "), "{line}");
+    assert!(
+        line.contains("Can't mount on symlink destination"),
+        "{line}"
+    );
+    let events = read_events(&spec);
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.kind, SessionEventKind::Started { .. })),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e.kind, SessionEventKind::SandboxApplied { .. })),
+        "nothing was applied, so nothing may say it was: {events:?}"
+    );
+    assert!(
+        events.iter().any(|e| matches!(
+            &e.kind,
+            SessionEventKind::Failed { code, message }
+                if code == "sandbox_apply_failed"
+                    && message.contains("Can't mount on symlink destination")
+        )),
+        "{events:?}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn the_applied_mechanisms_are_recorded_before_the_start() {
     let root = scratch("applied");

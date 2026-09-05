@@ -135,6 +135,26 @@ pub fn read(master: &Fd, buf: &mut [u8]) -> io::Result<usize> {
     }
 }
 
+/// Everything still readable on the master, up to `limit` bytes.
+///
+/// Only for a child that has already ended: the supervisor drops the
+/// slave when it forks, so once the child and its own children are gone
+/// nothing holds the other side open, the buffered bytes come back and
+/// the next read ends the loop instead of blocking. Called before any
+/// reader thread exists, so nothing else is competing for them.
+pub fn drain(master: &Fd, limit: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while out.len() < limit {
+        match read(master, &mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(n) => out.extend_from_slice(&chunk[..n]),
+        }
+    }
+    out.truncate(limit);
+    out
+}
+
 /// Write every byte to a descriptor, retrying short writes and `EINTR`.
 pub fn write_all(fd: &Fd, buf: &[u8]) -> io::Result<()> {
     let mut done = 0;

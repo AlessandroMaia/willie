@@ -228,10 +228,28 @@ pub fn prepare(
             return Err(PrepareError::BindSource { path: src.clone() });
         }
     }
+    // The binary that was verified above is the binary that runs: the
+    // vector names where the helper lives, and a test points the
+    // supervisor at another one.
+    let mut argv = bwrap::argv(&plan);
+    if let Some(first) = argv.first_mut() {
+        *first = helper.to_string_lossy().into_owned();
+    }
     Ok(Prepared {
-        argv: bwrap::argv(&plan),
+        argv,
         mechanisms: MECHANISMS.iter().map(|m| (*m).to_owned()).collect(),
     })
+}
+
+/// Where the namespace helper lives. `WILLIE_SESS_HELPER_BIN` points
+/// the supervisor at another one so a test can drive the refusal path
+/// without a kernel that refuses; test-only, like the stop grace and
+/// the harness wait.
+#[must_use]
+pub fn helper_path() -> std::path::PathBuf {
+    std::env::var_os("WILLIE_SESS_HELPER_BIN")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(bwrap::BWRAP))
 }
 
 /// The helper reports a harness killed by signal `n` as exit `128 + n`
@@ -357,15 +375,116 @@ pub fn harness_wait() -> Duration {
 /// afterwards the readiness line and the `started` event both mean the
 /// harness is running, as they did before the helper stood between them.
 ///
-/// `None` when the monitor is already gone or a zombie (the helper
-/// refused, and there is nothing to wait for) or when the deadline
-/// passes; the session starts anyway and the ladder re-resolves.
+/// How the wait for the harness ended. The two ways it can end without
+/// a harness are not the same session: one is a helper that refused
+/// while building the namespace, which is a failure with a cause worth
+/// recording, and the other is a helper still working past the ceiling,
+/// which starts the session with the promise given up.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HarnessWait {
+    Running(libc::pid_t),
+    /// The helper's monitor is gone and no harness ever appeared.
+    HelperGone,
+    /// The ceiling passed with the helper still alive.
+    GaveUp,
+}
+
+/// At most this much of what the helper said reaches the record. The
+/// log is append-only and read by people; one runaway helper must not
+/// fill a screen of it.
+const HELPER_WORDS_LIMIT: usize = 400;
+
+/// How many bytes of the terminal are read back when the helper
+/// refused. Generous against the limit above, because the helper may
+/// have written control sequences the words are buried in.
+pub const HELPER_DRAIN: usize = 16 * 1024;
+
+/// What the helper said, as the one line an event can carry. A terminal
+/// turns each newline into a carriage return and a newline, and a helper
+/// may complain more than once, so the lines are joined and the empty
+/// ones dropped.
+fn helper_words(raw: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(raw);
+    let joined = text
+        .lines()
+        .map(|line| line.trim_end_matches('\r').trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ");
+    if joined.is_empty() {
+        return None;
+    }
+    if joined.chars().count() > HELPER_WORDS_LIMIT {
+        let cut: String = joined.chars().take(HELPER_WORDS_LIMIT).collect();
+        return Some(format!("{cut}…"));
+    }
+    Some(joined)
+}
+
+/// The prefix the helper puts on every message it dies with.
+const HELPER_PREFIX: &str = "bwrap: ";
+
+/// Whether what came back from the terminal is the helper's own refusal
+/// rather than the harness's output.
+///
+/// Nothing the helper offers says "the namespace was built". It forks
+/// the sandboxed child *before* it mounts anything, so a child having
+/// existed proves nothing, and a harness that runs and exits inside one
+/// poll of the wait leaves exactly the same trace as a helper that never
+/// forked one: no grandchild, and a monitor already gone.
+///
+/// What does tell them apart is that the helper prefixes what it says
+/// when it gives up. A harness whose very first line of output were that
+/// prefix would be mislabelled; the cost is one wrong word in one event,
+/// and the session is recorded either way.
+#[must_use]
+pub fn is_helper_refusal(raw: &[u8]) -> bool {
+    String::from_utf8_lossy(raw)
+        .lines()
+        .map(|line| line.trim_end_matches('\r').trim_start())
+        .find(|line| !line.is_empty())
+        .is_some_and(|line| line.starts_with(HELPER_PREFIX))
+}
+
+/// The message for a helper that refused after it was executed.
+///
+/// Everything the supervisor can see before the helper runs is already
+/// a coded refusal (`prepare`). What is left is the helper refusing
+/// while it builds the namespace, and its only channel is the session's
+/// terminal, which nothing is attached to yet. Carrying its words here
+/// is the difference between a session that says why it could not start
+/// and one that merely appears and disappears.
+#[must_use]
+pub fn apply_failure(
+    raw: &[u8],
+    code: Option<i32>,
+    signal: Option<i32>,
+) -> String {
+    match (helper_words(raw), code, signal) {
+        (Some(words), _, _) => {
+            format!("the namespace helper refused: {words}")
+        }
+        (None, Some(code), _) => format!(
+            "the namespace helper exited with {code} before the harness \
+             started, and said nothing"
+        ),
+        (None, None, Some(signal)) => format!(
+            "the namespace helper was killed by signal {signal} before the \
+             harness started"
+        ),
+        (None, None, None) => "the namespace helper ended before the harness \
+             started, and said nothing"
+            .to_owned(),
+    }
+}
+
+/// Waits for the harness the helper forks, so that "ready" and
+/// "started" both mean a running harness, as they did before the helper
+/// stood between the supervisor and it.
 #[cfg(target_os = "linux")]
 #[must_use]
-pub fn wait_for_harness(
-    monitor: libc::pid_t,
-    within: Duration,
-) -> Option<libc::pid_t> {
+pub fn wait_for_harness(monitor: libc::pid_t, within: Duration) -> HarnessWait {
     let until = Instant::now() + within;
     loop {
         // The deadline is tested first, so a ceiling of zero always
@@ -379,13 +498,13 @@ pub fn wait_for_harness(
                 "willie-sess: no harness appeared behind the helper \
                  within {within:?}; starting anyway"
             );
-            return None;
+            return HarnessWait::GaveUp;
         }
         if let Some(pid) = harness_pid(monitor) {
-            return Some(pid);
+            return HarnessWait::Running(pid);
         }
         if !can_still_fork(monitor) {
-            return None;
+            return HarnessWait::HelperGone;
         }
         thread::sleep(HARNESS_POLL);
     }
@@ -475,7 +594,6 @@ mod tests {
 
         let prepared = prepare(&spec, &helper).expect("prepared");
 
-        assert_eq!(prepared.argv[0], bwrap::BWRAP);
         assert_eq!(prepared.mechanisms, vec!["namespaces", "mounts"]);
         let caches = root
             .join(".willie")
@@ -738,18 +856,115 @@ mod tests {
     /// session open for ever. This process is alive and has nothing
     /// behind it shaped like a helper, so the wait can only end by its
     /// deadline — the one branch that gives up the promise it exists to
-    /// keep.
+    /// keep, and the one that still starts the session.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_harness_that_never_appears_ends_the_wait_at_the_ceiling() {
         let me = libc::pid_t::try_from(std::process::id()).unwrap();
         let started = Instant::now();
 
-        let found = wait_for_harness(me, Duration::from_millis(50));
+        let waited = wait_for_harness(me, Duration::from_millis(50));
 
-        assert_eq!(found, None);
+        assert_eq!(waited, HarnessWait::GaveUp);
         assert!(started.elapsed() >= Duration::from_millis(50));
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    /// The helper prefixes what it says when it gives up, and that is
+    /// the only thing separating its refusal from a harness that ran
+    /// and exited before the wait could see it. Both leave a monitor
+    /// already gone and no grandchild.
+    #[test]
+    fn only_the_helper_s_own_prefix_marks_a_refusal() {
+        assert!(is_helper_refusal(
+            b"bwrap: Can't mount on symlink destination /x\r\n"
+        ));
+        assert!(is_helper_refusal(b"\r\n  bwrap: No permitted\r\n"));
+
+        assert!(!is_helper_refusal(b""));
+        assert!(!is_helper_refusal(b"\r\n\r\n"));
+        assert!(!is_helper_refusal(b"hello from the harness\r\n"));
+        // The prefix only counts as the first thing said: a harness
+        // that quotes the helper later has not refused anything.
+        assert!(!is_helper_refusal(b"building\r\nbwrap: quoted\r\n"));
+    }
+
+    /// The helper's own complaint goes to the terminal, which is the
+    /// session's only output channel and which nothing is attached to
+    /// when it refuses while building the namespace. Carrying it into
+    /// the record is the difference between a session that says why it
+    /// could not start and one that merely disappears.
+    #[test]
+    fn a_refusal_carries_the_helper_s_own_words() {
+        let raw = b"bwrap: Can't mount on symlink destination /home/w/.local/bin/claude\r\n";
+
+        let text = apply_failure(raw, Some(1), None);
+
+        assert!(
+            text.contains("Can't mount on symlink destination"),
+            "{text}"
+        );
+        assert!(text.contains("/home/w/.local/bin/claude"), "{text}");
+        assert!(!text.contains('\r'), "{text}");
+        assert!(!text.contains('\n'), "{text}");
+    }
+
+    /// A terminal turns every newline into a carriage return and a
+    /// newline, and a helper may say several things. The record takes
+    /// one line, so the lines are joined and the blank ones dropped.
+    #[test]
+    fn several_lines_become_one_and_blank_ones_are_dropped() {
+        let raw = b"bwrap: first\r\n\r\nbwrap: second\r\n";
+
+        let text = apply_failure(raw, Some(1), None);
+
+        assert!(text.contains("bwrap: first; bwrap: second"), "{text}");
+    }
+
+    /// A helper that says nothing at all still has to produce a record
+    /// someone can act on, so the exit stands in for the words.
+    #[test]
+    fn a_silent_refusal_is_reported_by_its_exit() {
+        let text = apply_failure(b"", Some(1), None);
+
+        assert!(text.contains('1'), "{text}");
+        assert!(text.contains("before the harness"), "{text}");
+
+        let killed = apply_failure(b"   \r\n", None, Some(9));
+
+        assert!(killed.contains('9'), "{killed}");
+    }
+
+    /// An event log is append-only and read by people, so one runaway
+    /// helper must not put a screenful into it.
+    #[test]
+    fn a_helper_that_will_not_stop_talking_is_cut_short() {
+        let raw = "bwrap: ".repeat(400);
+
+        let text = apply_failure(raw.as_bytes(), Some(1), None);
+
+        assert!(text.len() < 600, "{}", text.len());
+        assert!(text.ends_with('…'), "{text}");
+    }
+
+    /// The path that was checked is the path that runs: `prepare`
+    /// verifies a helper and the vector must then execute that one, or
+    /// the check answers for a different binary than the launch.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_vector_runs_the_helper_that_was_verified() {
+        let root = scratch("helper-argv");
+        let helper = root.join("bwrap");
+        touch(&helper);
+        let bin = root.join("claude");
+        touch(&bin);
+        let spec =
+            spec_under(&root, &bin.to_string_lossy(), &root.to_string_lossy());
+
+        let prepared = prepare(&spec, &helper).expect("prepared");
+
+        assert_eq!(prepared.argv[0], helper.to_string_lossy());
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// The helper's monitor has one child, the reaper; the reaper has one
