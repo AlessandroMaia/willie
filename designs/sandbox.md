@@ -360,6 +360,29 @@ One task, one commit:
 11. the capability editor, and the session's applied and denied state
 12. `docs/ARCHITECTURE.md`, the acceptance checklist, the release note
 
+**Enforcement part 1** (items 1–4, 10 and most of 11) landed as
+`docs/superpowers/plans/2026-09-04-sandbox-enforcement.md`. **Part 2**
+delivers the rest as five stacked phases, each with its own design and
+plan and each green on its own — the re-executed supervisor comes first,
+against the item order above, because the syscall filter and Landlock
+both need a process inside the namespace to apply and report themselves,
+and every later phase then plugs into a machine that already works:
+
+1. `designs/sandbox-report.md` — the re-exec (`willie-sess --inner`), the
+   limits, and the measured report of what applied (items 6, 7's
+   scaffolding).
+2. `designs/sandbox-seccomp.md` — the syscall filter and the coalesced
+   denial log (items 5, 8).
+3. `designs/sandbox-landlock.md` — Landlock through the re-exec, and the
+   doctor's probe by syscall (item 7).
+4. `designs/sandbox-terminal-filter.md` — the terminal output filter
+   (item 9).
+5. `designs/sandbox-session-state.md` — the applied and denied state on
+   the Sessions screen (item 11's remainder).
+
+Extending `sandbox explain` (item 10) with the filter summary and the
+path rules is a named follow-up, not one of the five.
+
 ## Open questions
 
 - Does the per-project cache want a size ceiling? Favoured: no, until a
