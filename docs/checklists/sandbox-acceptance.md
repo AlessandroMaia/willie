@@ -60,5 +60,36 @@ Before the walk:
 
 ## Results
 
+Walked by the user on 2026-09-05 against `0.1.0+26e7f7d` in the
+distribution, on a project whose workspace is `projteste`.
+
+A first attempt the day before was **void** and is not recorded here: it
+ran against a distribution whose binaries were 97 commits old, so every
+row failed for that one reason. It is the reason the preamble now opens
+with a check of what is actually installed. It also found the two
+defects fixed in `bb491e1` and `26e7f7d`: the harness binary is a
+symbolic link, which the plan tried to mount over, and a helper that
+refused after being executed left no diagnosis anywhere.
+
 | # | Date | Result | Notes |
 | - | ---- | ------ | ----- |
+| 1 | 2026-09-05 | pass | every row below ran inside the session it opened |
+| 2 | 2026-09-05 | pass | `bwrap` |
+| 3 | 2026-09-05 | pass | |
+| 4 | 2026-09-05 | pass | both absent |
+| 5 | 2026-09-05 | pass | no output |
+| 6 | 2026-09-05 | pass | `cmd.exe: command not found`, and the path under `/mnt/c` does not exist either |
+| 7 | 2026-09-05 | pass | a home created at session start, `drwx------`; `.claude` and `.claude.json` are the links into the bound state. The agent inside, asked to describe its own environment, concluded it was "an isolated Linux sandbox with no Windows host access" — it could not tell it was on Windows |
+| 8 | 2026-09-05 | pass | `Read-only file system` |
+| 9 | 2026-09-05 | pass | |
+| 10 | 2026-09-05 | pass | the commit carried the user's name and the reset left the repository clean |
+| 11 | 2026-09-05 | pass | both absent |
+| 12 | 2026-09-05 | pass | written inside, absent from a plain shell |
+| 13 | 2026-09-05 | pass | observed in the event log rather than on screen: the stop was requested and the harness ended one second later with code 0 — the polite rung reached the harness through the helper, rather than the group kill ending it by signal |
+| 14 | 2026-09-05 | pass | `sandbox_applied` naming both mechanisms above `started`, and `exited` with code 0 |
+| 15 | | not walked | |
+| 16 | | not walked | the two refusals below were exercised; granting a legitimate extra path and using it was not |
+| 17 | 2026-09-05 | pass | refused at save, naming `mnt.all`. The remediation repeats the reason verbatim under the message, so the same sentence is read twice |
+| 18 | | not walked | |
+| 19 | 2026-09-05 | pass | accepted at save, as it must be, then refused at launch: `` `…/looks-safe`: resolves to `/etc`, which cannot be an extra path ``. The two-stage guard earning its keep — a link inside the project is writable by every session on it, so only the resolved path can be trusted |
+| 20 | 2026-09-05 | pass | Claude Code opened on its first-run screen: no login, no settings |
