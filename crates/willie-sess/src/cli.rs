@@ -9,12 +9,15 @@ pub enum Command {
     Run {
         spec: String,
     },
+    /// Run as the in-namespace stage on the inherited descriptor `fd`.
+    Inner {
+        fd: i32,
+    },
     /// Usage error, with the reason to print on stderr.
     Usage(String),
 }
 
-pub const USAGE: &str =
-    "usage: willie-sess run --spec <path> | willie-sess --version";
+pub const USAGE: &str = "usage: willie-sess run --spec <path> | willie-sess --inner <fd> | willie-sess --version";
 
 /// Parse the arguments after the program name.
 pub fn parse(args: &[String]) -> Command {
@@ -24,6 +27,15 @@ pub fn parse(args: &[String]) -> Command {
         ["run", "--spec", spec] => Command::Run {
             spec: (*spec).to_owned(),
         },
+        ["--inner", fd] => match fd.parse::<i32>() {
+            Ok(fd) => Command::Inner { fd },
+            Err(_) => {
+                Command::Usage("--inner takes a descriptor number".into())
+            }
+        },
+        ["--inner", ..] => {
+            Command::Usage("--inner takes exactly one descriptor number".into())
+        }
         ["run", ..] => Command::Usage("run takes exactly --spec <path>".into()),
         [other, ..] => Command::Usage(format!("unknown command `{other}`")),
         [] => Command::Usage("no command".into()),
@@ -66,5 +78,16 @@ mod tests {
         ));
         assert!(matches!(parse(&args(&[])), Command::Usage(_)));
         assert!(matches!(parse(&args(&["serve"])), Command::Usage(_)));
+    }
+
+    #[test]
+    fn inner_parses_a_descriptor_number() {
+        assert_eq!(parse(&args(&["--inner", "7"])), Command::Inner { fd: 7 });
+        assert!(matches!(parse(&args(&["--inner"])), Command::Usage(_)));
+        assert!(matches!(parse(&args(&["--inner", "x"])), Command::Usage(_)));
+        assert!(matches!(
+            parse(&args(&["--inner", "7", "extra"])),
+            Command::Usage(_)
+        ));
     }
 }

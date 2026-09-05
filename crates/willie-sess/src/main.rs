@@ -286,6 +286,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         cli::Command::Run { spec } => run(&spec),
+        cli::Command::Inner { fd } => sandbox::inner::run_inner(fd),
         cli::Command::Usage(reason) => {
             eprintln!("willie-sess: {reason}");
             eprintln!("{}", cli::USAGE);
@@ -318,6 +319,8 @@ fn main() -> ExitCode {
         sandbox::apply_failure,
         sandbox::HELPER_DRAIN,
         sandbox::is_helper_refusal,
+        sandbox::inner::not_in_namespace,
+        sandbox::inner::clamp,
     );
     // `screen` is pure and compiled on every target, yet only the Linux
     // socket code drives it; name its items so the host build checks them.

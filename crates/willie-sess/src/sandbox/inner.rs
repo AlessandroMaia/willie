@@ -1,0 +1,285 @@
+//! The in-namespace stage: reached by re-executing `willie-sess --inner`
+//! as bwrap's command. It proves the namespace is real, sets the resource
+//! limits from inside it (NPROC is counted per user namespace), reports
+//! over the inherited socket what applied, then execs the harness. Later
+//! phases add the syscall filter and Landlock here, before the report.
+
+/// Why this process is not inside a fresh session namespace, if it is
+/// not. `uid_map` is `/proc/self/uid_map`, `status` is
+/// `/proc/self/status`, `outer_uid` the uid the supervisor runs as. A
+/// fresh user namespace remaps the outer uid (bwrap's default maps it to
+/// 0 inside) and the base sets no_new_privs; either missing means the
+/// helper never built the namespace, and the stage refuses — fail closed,
+/// so an unreadable or empty file is "not a namespace" too.
+#[must_use]
+pub fn not_in_namespace(
+    uid_map: &str,
+    status: &str,
+    outer_uid: u32,
+) -> Option<String> {
+    let inside_uid = uid_map
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse::<u32>().ok());
+    let no_new_privs = status
+        .lines()
+        .find_map(|l| l.strip_prefix("NoNewPrivs:"))
+        .map(|rest| rest.trim() == "1")
+        .unwrap_or(false);
+    match inside_uid {
+        Some(inside) if inside != outer_uid && no_new_privs => None,
+        _ => Some(
+            "not inside the sandbox namespace: the helper did not build it"
+                .to_owned(),
+        ),
+    }
+}
+
+/// `min(requested, hard)`, with `u64::MAX` as the hard limit meaning
+/// "unlimited", so a host that does not cap a resource takes the request.
+#[must_use]
+pub fn clamp(requested: u64, hard: u64) -> u64 {
+    if hard == u64::MAX {
+        requested
+    } else {
+        requested.min(hard)
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod imp {
+    use std::{
+        ffi::CString,
+        io::{Read, Write},
+        os::{fd::FromRawFd, unix::net::UnixStream},
+        process::ExitCode,
+    };
+
+    use willie_linux::sandbox::inner::{Report, Request};
+
+    use super::{clamp, not_in_namespace};
+
+    /// The stage. Reads the request from `fd`, verifies the namespace,
+    /// applies the limits, reports over the same socket, marks the socket
+    /// close-on-exec, and execs the harness. Any failure before the exec
+    /// is a `Refused` report and a non-zero exit; an exec failure is a
+    /// `Refused` after ready was sent, so the session ends as an ordinary
+    /// exit.
+    #[must_use]
+    pub fn run_inner(fd: i32) -> ExitCode {
+        // SAFETY: the supervisor passed us this socketpair end as `fd`,
+        // open and ours to own.
+        let mut sock = unsafe { UnixStream::from_raw_fd(fd) };
+
+        let request = match read_request(&mut sock) {
+            Ok(request) => request,
+            Err(msg) => {
+                return refuse(&mut sock, "sandbox_apply_failed", &msg);
+            }
+        };
+
+        let uid_map =
+            std::fs::read_to_string("/proc/self/uid_map").unwrap_or_default();
+        let status =
+            std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+        // SAFETY: getuid is always safe.
+        let outer = unsafe { libc::getuid() };
+        if let Some(reason) = not_in_namespace(&uid_map, &status, outer) {
+            return refuse(&mut sock, "sandbox_apply_failed", &reason);
+        }
+
+        if let Err(msg) = apply_rlimits(&request.rlimits) {
+            return refuse(
+                &mut sock,
+                "sandbox_apply_failed",
+                &format!("cannot set {msg}"),
+            );
+        }
+
+        let report = Report::Applied {
+            mechanisms: vec![
+                "namespaces".to_owned(),
+                "mounts".to_owned(),
+                "rlimits".to_owned(),
+            ],
+            unavailable: vec![],
+        };
+        if let Err(msg) = write_report(&mut sock, &report) {
+            eprintln!("willie-sess --inner: cannot report: {msg}");
+            return ExitCode::FAILURE;
+        }
+
+        set_cloexec(fd);
+        exec_harness(&request.argv, &mut sock)
+    }
+
+    fn read_request(sock: &mut UnixStream) -> Result<Request, String> {
+        let mut buf = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            match sock.read(&mut byte) {
+                Ok(0) => {
+                    return Err(
+                        "the supervisor closed the request socket".to_owned()
+                    );
+                }
+                Ok(_) if byte[0] == b'\n' => break,
+                Ok(_) => buf.push(byte[0]),
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        serde_json::from_slice(&buf).map_err(|e| e.to_string())
+    }
+
+    fn write_report(
+        sock: &mut UnixStream,
+        report: &Report,
+    ) -> Result<(), String> {
+        let mut line = serde_json::to_vec(report).map_err(|e| e.to_string())?;
+        line.push(b'\n');
+        sock.write_all(&line).map_err(|e| e.to_string())?;
+        sock.flush().map_err(|e| e.to_string())
+    }
+
+    fn refuse(sock: &mut UnixStream, code: &str, message: &str) -> ExitCode {
+        let _ = write_report(
+            sock,
+            &Report::Refused {
+                code: code.to_owned(),
+                message: message.to_owned(),
+            },
+        );
+        ExitCode::FAILURE
+    }
+
+    /// Apply one `RLIMIT_*` as `min(value, current hard)`, keeping the
+    /// hard limit where it is.
+    fn set_one(resource: libc::c_int, value: u64) -> Result<(), String> {
+        let mut current = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: getrlimit writes a valid rlimit through the pointer.
+        if unsafe { libc::getrlimit(resource, &mut current) } != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let hard = current.rlim_max;
+        let soft = clamp(value, hard);
+        let limit = libc::rlimit {
+            rlim_cur: soft,
+            rlim_max: current.rlim_max,
+        };
+        // SAFETY: setrlimit reads a valid rlimit through the pointer.
+        if unsafe { libc::setrlimit(resource, &limit) } != 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        Ok(())
+    }
+
+    fn apply_rlimits(
+        r: &willie_linux::sandbox::inner::Rlimits,
+    ) -> Result<(), String> {
+        set_one(libc::RLIMIT_NPROC, r.nproc)
+            .map_err(|e| format!("NPROC: {e}"))?;
+        set_one(libc::RLIMIT_NOFILE, r.nofile)
+            .map_err(|e| format!("NOFILE: {e}"))?;
+        set_one(libc::RLIMIT_CORE, r.core).map_err(|e| format!("CORE: {e}"))?;
+        Ok(())
+    }
+
+    /// Set `FD_CLOEXEC` so the harness never inherits the report socket: a
+    /// process that held it could answer the supervisor in the stage's
+    /// place.
+    fn set_cloexec(fd: i32) {
+        // SAFETY: fcntl on a descriptor we own.
+        unsafe {
+            let flags = libc::fcntl(fd, libc::F_GETFD);
+            if flags >= 0 {
+                libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
+        }
+    }
+
+    /// Exec the harness command. Returns only on failure, after reporting
+    /// it; by then ready was sent, so the session ends as an ordinary exit.
+    fn exec_harness(argv: &[String], sock: &mut UnixStream) -> ExitCode {
+        let Some(program) = argv.first() else {
+            return refuse(sock, "harness_exec_failed", "no harness command");
+        };
+        let c_args: Result<Vec<CString>, _> =
+            argv.iter().map(|a| CString::new(a.as_bytes())).collect();
+        let (Ok(program_c), Ok(c_args)) =
+            (CString::new(program.as_bytes()), c_args)
+        else {
+            return refuse(
+                sock,
+                "harness_exec_failed",
+                "a harness argument holds a NUL",
+            );
+        };
+        let mut ptrs: Vec<*const libc::c_char> =
+            c_args.iter().map(|a| a.as_ptr()).collect();
+        ptrs.push(std::ptr::null());
+        // SAFETY: execv with a valid program path and NULL-terminated
+        // argv. The environment is already exactly what the vector set
+        // (--clearenv + --setenv), so execv, which keeps environ, is right.
+        unsafe {
+            libc::execv(program_c.as_ptr(), ptrs.as_ptr());
+        }
+        let errno = std::io::Error::last_os_error();
+        refuse(
+            sock,
+            "harness_exec_failed",
+            &format!("cannot exec the harness: {errno}"),
+        )
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub use imp::run_inner;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A real session namespace maps the session uid to 0 inside (bwrap
+    /// --unshare-user with the default single mapping), and NoNewPrivs
+    /// is 1. The outer identity unchanged, or NoNewPrivs 0, means the
+    /// namespace was never built.
+    #[test]
+    fn an_unmapped_identity_or_missing_no_new_privs_is_not_a_namespace() {
+        assert_eq!(
+            not_in_namespace(
+                "         0       1000          1\n",
+                "NoNewPrivs:\t1\n",
+                1000
+            ),
+            None
+        );
+        assert!(
+            not_in_namespace(
+                "      1000       1000          1\n",
+                "NoNewPrivs:\t1\n",
+                1000,
+            )
+            .is_some()
+        );
+        assert!(
+            not_in_namespace(
+                "         0       1000          1\n",
+                "NoNewPrivs:\t0\n",
+                1000
+            )
+            .is_some()
+        );
+        assert!(not_in_namespace("", "", 1000).is_some());
+    }
+
+    #[test]
+    fn clamp_never_raises_a_stricter_host_limit() {
+        assert_eq!(clamp(4096, 8192), 4096);
+        assert_eq!(clamp(4096, 1000), 1000);
+        assert_eq!(clamp(0, 0), 0);
+        assert_eq!(clamp(65536, u64::MAX), 65536);
+    }
+}

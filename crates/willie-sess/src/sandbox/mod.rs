@@ -3,6 +3,8 @@
 //! ladder map back to the harness. The plan itself is data in
 //! `willie_linux::sandbox`; this is the I/O around it.
 
+pub mod inner;
+
 use std::{fmt, fs, io, path::Path};
 #[cfg(target_os = "linux")]
 use std::{
