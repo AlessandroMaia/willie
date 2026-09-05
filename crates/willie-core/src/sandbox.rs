@@ -322,7 +322,7 @@ enum Flavor {
 /// not name, reach into, or contain. Built per call because the
 /// home-relative half depends on `home`; the list itself is short and
 /// this runs once per `extra_paths` entry, not on a hot path.
-fn guarded_locations(home: &str) -> [(String, Flavor, &'static str); 25] {
+fn guarded_locations(home: &str) -> [(String, Flavor, &'static str); 26] {
     let interop = "the interop interpreter and its sockets are \
                    `windows.interop`, which this version does not apply";
     let kernel = "kernel interfaces are not paths to grant";
@@ -360,6 +360,14 @@ fn guarded_locations(home: &str) -> [(String, Flavor, &'static str); 25] {
             home.to_owned(),
             Flavor::Exact,
             "the home is private; grant paths inside it one by one",
+        ),
+        // After the home, so the home keeps its own reason: this entry
+        // matches the home too, through its ancestor half.
+        (
+            format!("{home}/projects"),
+            Flavor::Exact,
+            "every project lives under it; grant the one you mean, not \
+             all of them at once",
         ),
         (
             format!("{home}/.willie"),
@@ -1036,6 +1044,15 @@ extra_paths = [{ path = \"/srv/shared\", mode = \"ro\" }]
             // the same family `/run` closes.
             "/mnt/wsl",
             "/mnt/wslg/runtime-dir",
+            // Every workspace lives directly under this one, and an
+            // extra path renders after the workspace's own bind, so
+            // naming it would mount the whole tree over the session's
+            // project and hand that session every other project at
+            // once. The last place a single entry could still override
+            // what the base mounted.
+            "/home/willie/projects",
+            "/home/willie/projects/",
+            "//home/willie/projects",
         ] {
             let err = resolve(defaults(), &extra(path), HOME).unwrap_err();
 
@@ -1091,6 +1108,11 @@ extra_paths = [{ path = \"/srv/shared\", mode = \"ro\" }]
             ("/home", "the home is private"),
             ("/tmp", "the temporary directory is private"),
             ("//tmp", "the temporary directory is private"),
+            ("/home/willie/projects", "every project lives under it"),
+            // Still the home's own answer, not the projects root's:
+            // the home is guarded first precisely so that the nearest
+            // reason is the one a user reads.
+            ("/home/willie/", "the home is private"),
             // The Windows mount root, guarded by its own rules.
             ("/mnt", "every Windows drive is `mnt.all`"),
             ("/mnt/c", "a whole Windows drive"),

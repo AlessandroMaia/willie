@@ -236,4 +236,28 @@ mod tests {
     fn version_line_names_the_binary_and_version() {
         assert_eq!(version_line(), format!("willied {}", willie_core::VERSION));
     }
+
+    /// Every workspace this daemon creates lives directly under the
+    /// root below, and an extra path renders after the workspace's own
+    /// bind, so granting that root would mount the whole tree over the
+    /// session's project and hand it every other project at once. The
+    /// guard that refuses it lives in `willie-core`, which cannot see
+    /// this constant, so the two are held together here: moving the
+    /// root without teaching the guard fails this test rather than
+    /// quietly reopening what the base closed.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_workspaces_root_is_refused_as_an_extra_path() {
+        let home = harness::home();
+
+        assert!(
+            willie_core::sandbox::guard_extra_path(
+                DEFAULT_PROJECTS_DIR,
+                &home.to_string_lossy(),
+            )
+            .is_some(),
+            "{DEFAULT_PROJECTS_DIR} is grantable under {}",
+            home.display()
+        );
+    }
 }
