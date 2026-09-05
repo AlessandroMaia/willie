@@ -24,18 +24,21 @@ pub fn willied_bin() -> String {
     willie_core::paths::windows_to_drvfs(raw).unwrap_or_else(|| raw.to_owned())
 }
 
-/// The Linux path of the built `willie-sess`, which lives beside `willied`
-/// in the same target directory. There is no `CARGO_BIN_EXE_*` for a
-/// sibling crate's binary, so derive it from `willied`'s already-DrvFs
-/// path: that uses `/` separators, so `with_file_name` works here (this
-/// runs inside the distro), whereas the raw baked Windows path does not.
-/// The daemon reads the result from `WILLIE_SESS_BIN`.
+/// The path of the built `willie-sess`, which the daemon reads from
+/// `WILLIE_SESS_BIN` and spawns.
+///
+/// There is no `CARGO_BIN_EXE_*` for a sibling crate's binary, so the
+/// name is put beside `willied`'s own path. It then goes through the
+/// same staging every test binary does: the daemon spawns this one, and
+/// a binary spawned from the Windows mount is not reliably executable —
+/// a supervisor that faults before `main` reaches the daemon only as
+/// "did not report readiness", which names the wrong cause entirely.
 pub fn sess_bin() -> String {
-    let willied = willied_bin();
-    Path::new(&willied)
+    let beside = Path::new(&willied_bin())
         .with_file_name("willie-sess")
         .to_string_lossy()
-        .into_owned()
+        .into_owned();
+    willie_linux::paths::test_binary(&beside)
 }
 
 /// Whether `git` can be run; prints the one skip reason when it cannot.

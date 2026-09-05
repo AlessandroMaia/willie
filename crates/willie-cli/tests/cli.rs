@@ -22,9 +22,7 @@ fn run(args: &[&str]) -> io::Result<Output> {
 /// own compiled-in Windows path is used unchanged.
 #[cfg(target_os = "linux")]
 fn binary_path() -> String {
-    let compiled = env!("CARGO_BIN_EXE_willie");
-    willie_core::paths::windows_to_drvfs(compiled)
-        .unwrap_or_else(|| compiled.to_owned())
+    willie_linux::paths::test_binary(env!("CARGO_BIN_EXE_willie"))
 }
 
 #[cfg(not(target_os = "linux"))]

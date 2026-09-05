@@ -48,8 +48,22 @@ its checklist has been walked and the results recorded in it.
   harness to appear behind the namespace helper (zero reaches the branch
   that gives that wait up), `WILLIE_SESS_BIN` points the daemon at a
   freshly built supervisor instead of the installed one, and
+  `WILLIE_SESS_HELPER_BIN` points the supervisor at another namespace
+  helper, so the refusal a real one gives while building the namespace
+  has a test, and
   `WILLIE_HOME`/`WILLIE_RUN_DIR` isolate a test daemon's home and
   sockets. All are test-only.
+- **Never execute a built binary from the Windows mount.**
+  `cargo xtask test-linux` copies every test binary, and every workspace
+  binary a test launches, into the distribution first, and names that
+  directory in `WILLIE_TEST_BIN_DIR`; a test that needs one asks
+  `willie_linux::paths::test_binary`. Measured on 2026-09-05: the
+  identical bytes of one debug binary faulted before `main` on every
+  run from the mount and ran correctly the moment they were copied onto
+  the distribution's own filesystem. Reading from the mount is fine, so
+  the copy itself works. A test that resolves a binary any other way
+  will look like the program under test crashing, which is exactly the
+  wrong place to go looking.
 
 ## Sandbox tests (Linux, inside the distro)
 

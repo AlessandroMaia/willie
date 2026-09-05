@@ -19,8 +19,7 @@ use willie_core::{
 };
 
 pub fn sess_bin() -> String {
-    let raw = env!("CARGO_BIN_EXE_willie-sess");
-    willie_core::paths::windows_to_drvfs(raw).unwrap_or_else(|| raw.to_owned())
+    willie_linux::paths::test_binary(env!("CARGO_BIN_EXE_willie-sess"))
 }
 
 pub fn scratch(name: &str) -> PathBuf {
