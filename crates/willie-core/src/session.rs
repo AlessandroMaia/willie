@@ -69,6 +69,23 @@ pub struct Session {
     /// The session this one continues, if it was opened as a resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_from: Option<SessionId>,
+    /// What the sandbox applied for this session; empty until the applied
+    /// event is folded, and on a session from a pre-part-2 log.
+    #[serde(default)]
+    pub sandbox: SandboxState,
+}
+
+/// What the sandbox reported for one session. Empty until the
+/// `sandbox_applied` event is folded; a session from a pre-part-2 log
+/// leaves it default. Phase 2 adds `denied` and `degraded`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxState {
+    /// The mechanisms measured to apply.
+    #[serde(default)]
+    pub applied: Vec<String>,
+    /// The required-optional mechanisms this kernel does not offer.
+    #[serde(default)]
+    pub unavailable: Vec<String>,
 }
 
 /// `spec.json`: immutable once written by the daemon. Everything the
@@ -115,6 +132,8 @@ pub enum SessionEventKind {
     /// before `started`. A session that ran with less says so forever.
     SandboxApplied {
         mechanisms: Vec<String>,
+        #[serde(default)]
+        unavailable: Vec<String>,
     },
     Attached {
         client: u64,
@@ -146,9 +165,14 @@ pub fn apply_event(session: &mut Session, event: &SessionEvent) {
         return;
     }
     match &event.kind {
-        SessionEventKind::Created
-        | SessionEventKind::Resized { .. }
-        | SessionEventKind::SandboxApplied { .. } => {}
+        SessionEventKind::Created | SessionEventKind::Resized { .. } => {}
+        SessionEventKind::SandboxApplied {
+            mechanisms,
+            unavailable,
+        } => {
+            session.sandbox.applied = mechanisms.clone();
+            session.sandbox.unavailable = unavailable.clone();
+        }
         SessionEventKind::Started { pid } => {
             session.state = SessionState::Running;
             session.pid = Some(*pid);
@@ -201,6 +225,7 @@ pub fn from_log(spec: &SessionSpec, events: &[SessionEvent]) -> Session {
         pid: None,
         clients: 0,
         resumed_from: spec.resumed_from,
+        sandbox: SandboxState::default(),
     };
     for event in events {
         apply_event(&mut session, event);
@@ -462,11 +487,13 @@ mod tests {
         assert_eq!(s.resumed_from, origin.resumed_from);
     }
 
+    /// The applied event does not touch the lifecycle fields (state, pid,
+    /// clients); it only fills the sandbox record.
     #[test]
-    fn a_sandbox_applied_event_changes_nothing_about_the_state() {
+    fn a_sandbox_applied_event_fills_the_sandbox_record_only() {
         let spec = spec();
         let mut session = from_log(&spec, &[]);
-        let before = session.clone();
+        let lifecycle = session.state.clone();
 
         apply_event(
             &mut session,
@@ -474,23 +501,38 @@ mod tests {
                 at: "2".into(),
                 kind: SessionEventKind::SandboxApplied {
                     mechanisms: vec!["namespaces".into(), "mounts".into()],
+                    unavailable: vec!["landlock".into()],
                 },
             },
         );
 
-        assert_eq!(session, before);
+        assert_eq!(session.state, lifecycle);
+        assert_eq!(session.sandbox.applied, ["namespaces", "mounts"]);
+        assert_eq!(session.sandbox.unavailable, ["landlock"]);
+    }
+
+    /// A session from a pre-part-2 log carries no sandbox field; it
+    /// defaults to empty rather than failing to deserialise.
+    #[test]
+    fn a_session_without_a_sandbox_field_defaults_to_empty() {
+        let mut v = serde_json::to_value(from_log(&spec(), &[])).unwrap();
+        v.as_object_mut().unwrap().remove("sandbox");
+        let back: Session = serde_json::from_value(v).unwrap();
+        assert!(back.sandbox.applied.is_empty());
+        assert!(back.sandbox.unavailable.is_empty());
     }
 
     #[test]
     fn a_sandbox_applied_event_serialises_with_its_mechanisms() {
         let text = serde_json::to_string(&SessionEventKind::SandboxApplied {
             mechanisms: vec!["namespaces".into()],
+            unavailable: vec![],
         })
         .unwrap();
 
         assert_eq!(
             text,
-            r#"{"kind":"sandbox_applied","mechanisms":["namespaces"]}"#
+            r#"{"kind":"sandbox_applied","mechanisms":["namespaces"],"unavailable":[]}"#
         );
     }
 

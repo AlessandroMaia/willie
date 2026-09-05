@@ -696,7 +696,7 @@ fn the_applied_mechanisms_are_recorded_before_the_start() {
     let applied = events
         .iter()
         .position(|e| {
-            matches!(&e.kind, SessionEventKind::SandboxApplied { mechanisms }
+            matches!(&e.kind, SessionEventKind::SandboxApplied { mechanisms, .. }
             if mechanisms == &["namespaces".to_owned(), "mounts".to_owned()])
         })
         .expect("a sandbox_applied event");

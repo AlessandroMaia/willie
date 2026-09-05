@@ -219,6 +219,7 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
     // claiming what did not happen.
     events.append(SessionEventKind::SandboxApplied {
         mechanisms: prepared.mechanisms,
+        unavailable: vec![],
     });
     // The pid a session records is the helper's monitor, the supervisor's
     // own child (decision 0016); the harness pid is the ladder's business.

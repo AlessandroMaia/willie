@@ -506,6 +506,7 @@ fn placeholder(id: SessionId) -> Session {
         pid: None,
         clients: 0,
         resumed_from: None,
+        sandbox: Default::default(),
     }
 }
 
@@ -807,6 +808,7 @@ mod create_tests {
             pid: Some(1),
             clients: 0,
             resumed_from: None,
+            sandbox: Default::default(),
         };
         crate::lock(&state).sessions.insert(live.id, live);
 
