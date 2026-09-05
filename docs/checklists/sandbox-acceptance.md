@@ -11,9 +11,23 @@ records what the kernel and the helper do.
 Before the walk:
 
 - The `willie` distribution is registered and healthy (F0 acceptance).
-- Install the current build: `$env:WILLIE_TEST_DISTRO = "willie";
-  just app-build`; install
-  `target\release\bundle\nsis\Willie_0.1.0_x64-setup.exe`.
+- **Put the current binaries in the distribution, and check that they
+  are there.** Installing the app does not touch an already-registered
+  distribution, and nothing warns when its binaries are behind, so a
+  walk run without this step silently tests an older build and every row
+  below fails for that one reason. Run `just distro-push`, which keeps
+  projects and agent state, then confirm:
+
+  ```powershell
+  wsl -d willie --user willie -- sh -c 'cat /etc/willie/image-version; grep -c -a sandbox_applied /opt/willie/bin/willie-sess'
+  ```
+
+  The version must name the commit you are testing and the count must
+  not be zero. If the app is already open, close and reopen it so the
+  daemon restarts on the new binary.
+- Install the current build if you are also walking the app's own
+  screens: `$env:WILLIE_TEST_DISTRO = "willie"; just app-build`, then
+  install `target\release\bundle\nsis\Willie_0.1.0_x64-setup.exe`.
 - One registered project with a `ready` workspace under
   `/home/willie/projects/<slug>`, Claude Code installed and logged in.
 - Every command below is typed **inside the Claude Code session**,

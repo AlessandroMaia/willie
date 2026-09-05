@@ -132,6 +132,7 @@ releases/            curated release notes, one file per version
 | `just distro-fetch`     | download and verify the pinned base root filesystem     |
 | `just distro-build`     | build the distribution image (runs `build-linux` first) |
 | `just distro-install`   | register the image as the `willie` distribution         |
+| `just distro-push`      | replace the registered distribution's Willie binaries with the ones just built, keeping projects and agent state |
 | `just distro-uninstall` | unregister it, discarding its disk                      |
 | `just app-build`        | build the Windows installer (runs `distro-build` first) |
 

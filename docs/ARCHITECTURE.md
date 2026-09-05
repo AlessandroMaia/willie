@@ -195,7 +195,7 @@ Willie **never writes the user's `.wslconfig`** (it is global).
 
 | Rhythm                         | What changes                              | How                                                                                                                      |
 | ------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Willie binaries (frequent)     | `/opt/willie/bin/*`, `/opt/willie/libexec/*` | engine streams a tar to `wsl.exe --user root --exec tar -x …` into a temp dir, atomic rename, daemon restart; running supervisors keep the old binary until they exit. |
+| Willie binaries (frequent)     | `/opt/willie/bin/*`, `/opt/willie/libexec/*` | **Not implemented in the app.** Designed as: engine streams a tar to `wsl.exe --user root --exec tar -x …` into a temp dir, atomic rename, daemon restart; running supervisors keep the old binary until they exit. Today only the development recipe `just distro-push` does this, staging each binary beside its target and renaming over it as root. |
 | Base image (rare)              | packages, `/etc`                          | wizard: `wsl --export` backup → `tar` of `/var/lib/willie` and `/home/willie` to Windows → `--unregister` → `--import` → restore both zones → reinstall managed tools from the manifest → `doctor`. |
 | Factory reset                  | everything                                | `--unregister` + `--import`, double confirmation, backup offered.                                                        |
 
@@ -203,6 +203,15 @@ Reinstalling validates the new image before unregistering the old
 distribution; a data-preserving upgrade (export/restore of the two
 data zones) is a later slice, so today a reinstall replaces the
 distribution wholesale.
+
+**Nothing detects a stale distribution.** The engine compares the
+version the daemon reports at `hello` against its own, and both are the
+workspace's crate version, which does not move between releases — so a
+distribution whose binaries are many commits behind answers the check
+and passes. `/etc/willie/image-version` carries the commit and would
+tell them apart, but no check reads it. Until one does, a build being
+tested is only as current as the last `distro-push` or `distro-install`,
+and an acceptance walk must say so.
 
 Never `wsl --mount` (administrator) and never a second distribution.
 

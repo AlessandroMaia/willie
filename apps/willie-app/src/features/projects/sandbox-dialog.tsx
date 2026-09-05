@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Item, ItemContent, ItemGroup } from "@/components/ui/item";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Tooltip,
   TooltipContent,
@@ -99,7 +100,14 @@ export function SandboxDialog({
         if (!open) onCancel();
       }}
     >
-      <DialogContent>
+      {/* One row per capability in the catalogue, each with the sentence
+       * that says what it costs, is taller than a small window. The
+       * popup is centred, not scrolled, so a dialog that grows with its
+       * content pushes Save past the bottom edge where nothing reaches
+       * it: the dialog is held to the window instead and the rows
+       * scroll inside it. The width is the extra-path row's, which
+       * carries a path, a mode and a remove button on one line. */}
+      <DialogContent className="max-h-[calc(100dvh-4rem)] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Sandbox for “{project?.name}”</DialogTitle>
           <DialogDescription>
@@ -108,131 +116,133 @@ export function SandboxDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-3">
-          {catalogue.map((info) => {
-            if (info.capability === "extra_paths") {
-              return (
-                <div key="extra_paths" className="flex flex-col gap-2">
-                  <FieldLabel>{info.display_name}</FieldLabel>
-                  <FieldDescription>{info.consequence}</FieldDescription>
-                  <ItemGroup className="gap-1">
-                    {/* Rows have no identity of their own: they are only
-                     * appended and removed, never reordered, so the
-                     * index is stable for the row a user is editing. */}
-                    {(local.extra_paths ?? []).map((entry, index) => {
-                      const modeId = `sandbox-extra-path-${index}-mode`;
-                      return (
-                        // biome-ignore lint/suspicious/noArrayIndexKey: see comment above
-                        <Item key={index} size="xs" variant="outline">
-                          <ItemContent className="flex-row items-center gap-2">
-                            <Input
-                              value={entry.path}
-                              onChange={(e) =>
-                                updatePath(index, { path: e.target.value })
-                              }
-                              placeholder="/srv/shared"
-                              aria-label={`extra path ${index + 1}`}
-                            />
-                            <Field
-                              orientation="horizontal"
-                              className="w-fit whitespace-nowrap"
-                            >
-                              <Checkbox
-                                id={modeId}
-                                checked={entry.mode === "rw"}
-                                onCheckedChange={(value) =>
-                                  updatePath(index, {
-                                    mode: value === true ? "rw" : "ro",
-                                  })
+        <ScrollArea className="min-h-0">
+          <div className="flex flex-col gap-3 pr-3">
+            {catalogue.map((info) => {
+              if (info.capability === "extra_paths") {
+                return (
+                  <div key="extra_paths" className="flex flex-col gap-2">
+                    <FieldLabel>{info.display_name}</FieldLabel>
+                    <FieldDescription>{info.consequence}</FieldDescription>
+                    <ItemGroup className="gap-1">
+                      {/* Rows have no identity of their own: they are only
+                       * appended and removed, never reordered, so the
+                       * index is stable for the row a user is editing. */}
+                      {(local.extra_paths ?? []).map((entry, index) => {
+                        const modeId = `sandbox-extra-path-${index}-mode`;
+                        return (
+                          // biome-ignore lint/suspicious/noArrayIndexKey: see comment above
+                          <Item key={index} size="xs" variant="outline">
+                            <ItemContent className="flex-row items-center gap-2">
+                              <Input
+                                value={entry.path}
+                                onChange={(e) =>
+                                  updatePath(index, { path: e.target.value })
                                 }
+                                placeholder="/srv/shared"
+                                aria-label={`extra path ${index + 1}`}
                               />
-                              <FieldLabel htmlFor={modeId}>
-                                read-write
-                              </FieldLabel>
-                            </Field>
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              aria-label="Remove path"
-                              onClick={() => removePath(index)}
-                            >
-                              <Trash2Icon />
-                            </Button>
-                          </ItemContent>
-                        </Item>
-                      );
-                    })}
-                  </ItemGroup>
-                  <div>
-                    <Button variant="outline" size="sm" onClick={addPath}>
-                      <PlusIcon /> Add path
-                    </Button>
+                              <Field
+                                orientation="horizontal"
+                                className="w-fit whitespace-nowrap"
+                              >
+                                <Checkbox
+                                  id={modeId}
+                                  checked={entry.mode === "rw"}
+                                  onCheckedChange={(value) =>
+                                    updatePath(index, {
+                                      mode: value === true ? "rw" : "ro",
+                                    })
+                                  }
+                                />
+                                <FieldLabel htmlFor={modeId}>
+                                  read-write
+                                </FieldLabel>
+                              </Field>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label="Remove path"
+                                onClick={() => removePath(index)}
+                              >
+                                <Trash2Icon />
+                              </Button>
+                            </ItemContent>
+                          </Item>
+                        );
+                      })}
+                    </ItemGroup>
+                    <div>
+                      <Button variant="outline" size="sm" onClick={addPath}>
+                        <PlusIcon /> Add path
+                      </Button>
+                    </div>
                   </div>
-                </div>
+                );
+              }
+
+              const capability = info.capability;
+              const id = `sandbox-${capability}`;
+              const forced = capability === "project_rw";
+              /* An absent override means "whatever the harness decided",
+               * and only the catalogue knows what that is: the trait's
+               * default leaves `agent.state` off where Claude Code turns
+               * it on, so a guess here would show a credential as
+               * mounted for a harness that never asked for it. */
+              const checked = forced
+                ? true
+                : info.implemented
+                  ? (local[capability] ?? info.default_enabled)
+                  : false;
+
+              const content = (
+                <>
+                  <Checkbox
+                    id={id}
+                    checked={checked}
+                    disabled={forced || !info.implemented}
+                    onCheckedChange={(value) =>
+                      setFlag(capability, value === true)
+                    }
+                  />
+                  <FieldContent>
+                    <div className="flex items-center gap-2">
+                      <FieldLabel htmlFor={id}>{info.display_name}</FieldLabel>
+                      {!info.implemented && (
+                        <StatusBadge tone="muted">not available</StatusBadge>
+                      )}
+                    </div>
+                    <FieldDescription>{info.consequence}</FieldDescription>
+                  </FieldContent>
+                </>
               );
-            }
 
-            const capability = info.capability;
-            const id = `sandbox-${capability}`;
-            const forced = capability === "project_rw";
-            /* An absent override means "whatever the harness decided",
-             * and only the catalogue knows what that is: the trait's
-             * default leaves `agent.state` off where Claude Code turns
-             * it on, so a guess here would show a credential as
-             * mounted for a harness that never asked for it. */
-            const checked = forced
-              ? true
-              : info.implemented
-                ? (local[capability] ?? info.default_enabled)
-                : false;
-
-            const content = (
-              <>
-                <Checkbox
-                  id={id}
-                  checked={checked}
-                  disabled={forced || !info.implemented}
-                  onCheckedChange={(value) =>
-                    setFlag(capability, value === true)
-                  }
-                />
-                <FieldContent>
-                  <div className="flex items-center gap-2">
-                    <FieldLabel htmlFor={id}>{info.display_name}</FieldLabel>
-                    {!info.implemented && (
-                      <StatusBadge tone="muted">not available</StatusBadge>
-                    )}
-                  </div>
-                  <FieldDescription>{info.consequence}</FieldDescription>
-                </FieldContent>
-              </>
-            );
-
-            if (info.implemented) {
-              return (
-                <Field key={capability} orientation="horizontal">
-                  {content}
-                </Field>
-              );
-            }
-
-            return (
-              <Tooltip key={capability}>
-                <TooltipTrigger render={deferredRowTrigger}>
-                  <Field
-                    orientation="horizontal"
-                    className="pointer-events-none"
-                  >
+              if (info.implemented) {
+                return (
+                  <Field key={capability} orientation="horizontal">
                     {content}
                   </Field>
-                </TooltipTrigger>
-                <TooltipContent side="right">
-                  This version cannot apply it yet
-                </TooltipContent>
-              </Tooltip>
-            );
-          })}
-        </div>
+                );
+              }
+
+              return (
+                <Tooltip key={capability}>
+                  <TooltipTrigger render={deferredRowTrigger}>
+                    <Field
+                      orientation="horizontal"
+                      className="pointer-events-none"
+                    >
+                      {content}
+                    </Field>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">
+                    This version cannot apply it yet
+                  </TooltipContent>
+                </Tooltip>
+              );
+            })}
+          </div>
+        </ScrollArea>
 
         {problem && <ProblemAlert problem={problem} />}
 

@@ -195,4 +195,55 @@ describe("SandboxDialog", () => {
     expect(dialog.contains(alert)).toBe(true);
     expect(alert.textContent).toContain("sandbox_profile_invalid");
   });
+
+  /* Ten capabilities, each with the sentence that says what it costs,
+   * are taller than a small window. A dialog that grows with them puts
+   * Save past the bottom edge, where no amount of scrolling reaches it,
+   * because the popup is centred rather than scrolled. So the rows
+   * scroll inside a frame the dialog holds fixed, and the footer sits
+   * outside that frame. */
+  it("scrolls the capability rows and leaves the footer outside", () => {
+    render(
+      <SandboxDialog
+        project={project()}
+        catalogue={catalogue()}
+        problem={null}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog");
+    const rows = dialog.querySelector('[data-slot="scroll-area"]');
+    const save = screen.getByRole("button", { name: "Save" });
+
+    expect(rows).not.toBeNull();
+    expect(rows?.textContent).toContain("agent.state");
+    expect(rows?.contains(save)).toBe(false);
+  });
+
+  /* A refusal is the answer to pressing Save, so it belongs beside the
+   * button and not in the part that scrolls, where it could be out of
+   * sight at the moment it appears. */
+  it("keeps a refusal out of the scrolling rows", () => {
+    render(
+      <SandboxDialog
+        project={project()}
+        catalogue={catalogue()}
+        problem={{
+          code: "sandbox_profile_invalid",
+          message: "`srv/x` is not an absolute path",
+          remediation: "give the path starting with /",
+        }}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    const dialog = screen.getByRole("dialog");
+    const rows = dialog.querySelector('[data-slot="scroll-area"]');
+    const alert = screen.getByRole("alert");
+
+    expect(rows?.contains(alert)).toBe(false);
+  });
 });

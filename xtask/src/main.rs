@@ -51,7 +51,7 @@ usage: cargo xtask <command>
                                 willie for x86_64-unknown-linux-musl
   test-linux                    build the Linux crates' test binaries
                                 and run them inside WILLIE_TEST_DISTRO
-  distro pin|fetch|build|clean|install|uninstall
+  distro pin|fetch|build|clean|install|push|uninstall
                                 manage the distribution image
 ";
 

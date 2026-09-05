@@ -458,6 +458,96 @@ fn write_sidecar(
 /// Registers the built image under `%LOCALAPPDATA%\Willie\data\distro`.
 /// Any distribution left by an earlier install is replaced, so the
 /// developer always runs the image currently in `target/distro`.
+/// The shell the push runs as root inside the distribution.
+///
+/// Every binary is staged beside its target before any is renamed over
+/// it, so a failure halfway leaves the set that was already there rather
+/// than a mixture of two builds. A rename within one directory is atomic
+/// and does not disturb a process already executing the old file: the
+/// daemon and any running supervisor keep the inode they started with
+/// until they exit, which is what `docs/ARCHITECTURE.md` §2.4 describes.
+/// The version stamp goes last, so it never names a build that is not
+/// yet in place.
+fn push_script(binaries: &[(&str, String)], version: &str) -> String {
+    let mut script = String::from("set -e\n");
+    for (name, source) in binaries {
+        script.push_str(&format!(
+            "install -m 0755 {source} /opt/willie/bin/.{name}.new\n"
+        ));
+    }
+    for (name, _) in binaries {
+        script.push_str(&format!(
+            "mv -f /opt/willie/bin/.{name}.new /opt/willie/bin/{name}\n"
+        ));
+    }
+    script.push_str(&format!(
+        "printf '%s\\n' '{version}' > /etc/willie/image-version\n"
+    ));
+    script
+}
+
+/// Replace the registered distribution's Willie binaries with the ones
+/// in `target/`, without recreating it.
+///
+/// `distro install` imports an image, and importing replaces the
+/// distribution wholesale — projects, agent state and all. During
+/// development the binaries change many times for every image change,
+/// and an acceptance walk run against a stale distribution silently
+/// tests the wrong build, so this is the rhythm that matches how often
+/// they actually move. Run `build-linux` first; the `just` recipe does.
+pub fn push(root: &Path) -> Result<(), String> {
+    let dir = root
+        .join("target")
+        .join(crate::linux::TARGET)
+        .join("release");
+    let root_drvfs =
+        willie_core::paths::windows_to_drvfs(&root.to_string_lossy())
+            .ok_or_else(|| {
+                format!("cannot map {} to a distro path", root.display())
+            })?;
+
+    let mut binaries = Vec::new();
+    for name in crate::linux::BINARIES {
+        let source = dir.join(name);
+        if !source.is_file() {
+            return Err(format!(
+                "no {name} at {}; run `just build-linux` first",
+                source.display()
+            ));
+        }
+        let rel = source
+            .strip_prefix(root)
+            .map_err(|_| {
+                format!("{} is not under the workspace", source.display())
+            })?
+            .to_string_lossy()
+            .replace('\\', "/");
+        binaries.push((*name, format!("{root_drvfs}/{rel}")));
+    }
+
+    let version = image_version(root);
+    let script = push_script(&binaries, &version);
+    let exec = WslExec::new(DISTRO_NAME, "sh")
+        .user("root")
+        .arg("-c")
+        .arg(&script);
+    let status = Command::new("wsl.exe")
+        .args(exec.to_args())
+        .status()
+        .map_err(|e| format!("cannot run wsl.exe: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "cannot write into {DISTRO_NAME} ({status}); is it registered? \
+             run `just distro-install` to create it"
+        ));
+    }
+    eprintln!("pushed {} into {DISTRO_NAME} {version}", version);
+    eprintln!(
+        "close and reopen the app so the daemon restarts on the new binary"
+    );
+    Ok(())
+}
+
 pub fn install(root: &Path) -> Result<(), String> {
     let out_dir = root.join("target/distro");
     let image = out_dir.join(IMAGE_NAME);
@@ -507,10 +597,11 @@ pub fn run(root: &Path, args: &[String]) -> crate::TaskResult {
         Some("build") => build(root),
         Some("clean") => clean(root),
         Some("install") => install(root),
+        Some("push") => push(root),
         Some("uninstall") => uninstall(root),
         other => Err(format!(
             "unknown distro command {other:?}; expected \
-             pin|fetch|build|clean|install|uninstall"
+             pin|fetch|build|clean|install|push|uninstall"
         )),
     }
 }
@@ -633,5 +724,59 @@ mod tests {
             r#"{"mediaType":"application/vnd.oci.image.layer.v1.tar","digest":"sha256:dddd"}"#,
         );
         assert!(select_layer(&manifest).is_err());
+    }
+
+    /// The push replaces binaries the running daemon is executing, so
+    /// every file is staged beside its target first and only then
+    /// renamed over it. A failure halfway then leaves the distribution
+    /// with the set it already had, never a mixture of two builds.
+    #[test]
+    fn the_push_stages_every_binary_before_it_renames_any() {
+        let script = push_script(
+            &[
+                ("willied", "/mnt/c/w/willied".to_owned()),
+                ("willie-sess", "/mnt/c/w/willie-sess".to_owned()),
+            ],
+            "0.1.0+abcdef1",
+        );
+
+        let last_stage = script.rfind("install -m 0755").unwrap();
+        let first_rename = script.find("mv -f").unwrap();
+
+        assert!(script.starts_with("set -e\n"), "{script}");
+        assert!(last_stage < first_rename, "{script}");
+        for name in ["willied", "willie-sess"] {
+            assert!(
+                script.contains(&format!(
+                    "install -m 0755 /mnt/c/w/{name} \
+                     /opt/willie/bin/.{name}.new"
+                )),
+                "{script}"
+            );
+            assert!(
+                script.contains(&format!(
+                    "mv -f /opt/willie/bin/.{name}.new /opt/willie/bin/{name}"
+                )),
+                "{script}"
+            );
+        }
+    }
+
+    /// The stamp is what tells a reader which commit the distribution's
+    /// binaries came from, so it is written only once they are all in
+    /// place: a stamp ahead of the files would name a build that is not
+    /// there.
+    #[test]
+    fn the_push_stamps_the_version_after_the_last_rename() {
+        let script = push_script(
+            &[("willied", "/mnt/c/w/willied".to_owned())],
+            "0.1.0+abcdef1",
+        );
+
+        let last_rename = script.rfind("mv -f").unwrap();
+        let stamp = script.find("image-version").unwrap();
+
+        assert!(last_rename < stamp, "{script}");
+        assert!(script.contains("0.1.0+abcdef1"), "{script}");
     }
 }

@@ -125,6 +125,14 @@ distro-build: build-linux
 distro-install:
     cargo xtask distro install
 
+# Replace the registered distribution's Willie binaries with the ones
+# just built, keeping projects and agent state. Use this after changing
+# daemon, supervisor or CLI code; `distro-install` recreates the
+# distribution and discards both.
+[group('dev')]
+distro-push: build-linux
+    cargo xtask distro push
+
 # Terminate and unregister the `willie` distribution.
 [group('dev')]
 distro-uninstall:
