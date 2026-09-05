@@ -94,6 +94,22 @@ fn text(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// Whether `path` is `prefix` or lies under it. Deliberately a plain
+/// comparison: both sides come from the plan itself, which the daemon
+/// resolved and wrote into the spec, so there is nothing here to
+/// normalise. Not the policy's guard, which answers a different
+/// question about a string a user typed.
+fn under(path: &str, prefix: &str) -> bool {
+    path == prefix
+        || path
+            .strip_prefix(prefix)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
+/// The system tree the base binds read-only whatever the policy says,
+/// so anything installed inside it is already reachable.
+const SYSTEM_TREE: &str = "/usr";
+
 /// The mounts a session gets under its policy. The private home comes
 /// first, because everything the policy grants inside it is mounted on
 /// top; the project follows, because a session is its project; the
@@ -132,14 +148,24 @@ pub fn plan(
         }
     }
 
+    let mut carried = vec![SYSTEM_TREE.to_owned()];
     if policy.tools_ro {
         for root in tool_roots(home_path) {
             let root = text(&root);
             ops.push(bind(&root, &root, PathMode::Ro, true));
+            carried.push(root);
         }
     }
 
-    if let Some(binary) = spec.argv.first() {
+    // The harness is what the session runs, so a policy that hides the
+    // tools must still let it start. Where something already carries it
+    // the bind is not merely redundant, it refuses the session: the
+    // official installer makes the binary a symbolic link into a
+    // versioned directory, and the helper will not mount over a symlink
+    // that a read-only bind has already put there.
+    if let Some(binary) = spec.argv.first()
+        && !carried.iter().any(|root| under(binary, root))
+    {
         ops.push(bind(binary, binary, PathMode::Ro, false));
     }
 
@@ -287,6 +313,54 @@ mod tests {
         let (spec, plan) = planned(all_on());
 
         assert_eq!(plan.env, spec.env);
+    }
+
+    /// Binding the harness again over a directory that already carries
+    /// it is not merely redundant, it refuses the session: the official
+    /// installer makes the binary a symbolic link into a versioned
+    /// directory, and the helper will not mount over a symlink. Measured
+    /// against a real installation, where it read
+    /// `Can't mount on symlink destination`.
+    #[test]
+    fn the_harness_binary_is_left_to_the_tool_root_that_already_carries_it() {
+        let (_, plan) = planned(all_on());
+
+        assert!(plan.ops.contains(&bind(
+            "/home/willie/.local",
+            "/home/willie/.local",
+            PathMode::Ro,
+            true
+        )));
+        assert!(
+            !plan
+                .ops
+                .iter()
+                .any(|op| matches!(op, Op::Bind { dest, .. } if dest == BIN)),
+            "{:?}",
+            plan.ops
+        );
+    }
+
+    /// The base binds the system tree read-only whatever the policy
+    /// says, so a harness installed there is already reachable and the
+    /// same refusal would apply to a symlink under it.
+    #[test]
+    fn a_harness_under_the_system_tree_is_left_to_the_base() {
+        let mut spec = spec_with(CapabilitySet {
+            tools_ro: false,
+            ..all_on()
+        });
+        spec.argv = vec!["/usr/local/bin/claude".into()];
+
+        let plan = plan(&spec, &ClaudeCode).expect("a plan");
+
+        assert!(
+            !plan.ops.iter().any(|op| matches!(
+                op, Op::Bind { dest, .. } if dest == "/usr/local/bin/claude"
+            )),
+            "{:?}",
+            plan.ops
+        );
     }
 
     /// The harness is what the session runs; a policy that hides the
