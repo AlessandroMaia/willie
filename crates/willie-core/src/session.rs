@@ -536,6 +536,26 @@ mod tests {
         );
     }
 
+    /// The event gained `unavailable` in part 2. A part-1 `sandbox_applied`
+    /// line was written without it, so the old shape gets a regression
+    /// test (docs/TESTING.md): it must still parse, with `unavailable`
+    /// defaulting to empty rather than failing to deserialise.
+    #[test]
+    fn a_part_one_sandbox_applied_line_without_unavailable_still_parses() {
+        let back: SessionEventKind = serde_json::from_str(
+            r#"{"kind":"sandbox_applied","mechanisms":["namespaces","mounts"]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            back,
+            SessionEventKind::SandboxApplied {
+                mechanisms: vec!["namespaces".into(), "mounts".into()],
+                unavailable: vec![],
+            }
+        );
+    }
+
     #[test]
     fn event_lines_use_a_flat_kind_tag() {
         let line = serde_json::to_string(&ev(

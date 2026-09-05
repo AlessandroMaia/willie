@@ -68,10 +68,12 @@ mod imp {
 
     /// The stage. Reads the request from `fd`, verifies the namespace,
     /// applies the limits, reports over the same socket, marks the socket
-    /// close-on-exec, and execs the harness. Any failure before the exec
-    /// is a `Refused` report and a non-zero exit; an exec failure is a
-    /// `Refused` after ready was sent, so the session ends as an ordinary
-    /// exit.
+    /// close-on-exec, and execs the harness. A failure before the report
+    /// is a `Refused` line the supervisor reads, and a non-zero exit. A
+    /// failure at or after the exec is past the report — the supervisor
+    /// already read `Applied` and replied ready — so a `Refused` there
+    /// would never be read: the cause goes to stderr, which bwrap wired to
+    /// the session's PTY, and the stage exits 127 (0017).
     #[must_use]
     pub fn run_inner(fd: i32) -> ExitCode {
         // SAFETY: the supervisor passed us this socketpair end as `fd`,
@@ -115,7 +117,7 @@ mod imp {
         }
 
         set_cloexec(fd);
-        exec_harness(&request.argv, &mut sock)
+        exec_harness(&request.argv)
     }
 
     fn read_request(sock: &mut UnixStream) -> Result<Request, String> {
@@ -157,8 +159,16 @@ mod imp {
         ExitCode::FAILURE
     }
 
-    /// Apply one `RLIMIT_*` as `min(value, current hard)`, keeping the
-    /// hard limit where it is.
+    /// Ratchet one `RLIMIT_*` down to `min(value, current hard)` on BOTH
+    /// the soft and the hard limit. Lowering only the soft limit would
+    /// leave the inherited hard limit as a ceiling a confined harness
+    /// could raise its soft limit back up to — raising a soft limit up to
+    /// the hard one needs no privilege — undoing the bound. Lowering the
+    /// hard limit needs no privilege either and cannot be reversed without
+    /// `CAP_SYS_RESOURCE`, so the ceiling is real. Clamping to the current
+    /// hard limit keeps a stricter host from being loosened: the new value
+    /// is `min(value, current hard)`, never above the limit already in
+    /// force, so it only ever ratchets down.
     fn set_one(resource: libc::c_int, value: u64) -> Result<(), String> {
         let mut current = libc::rlimit {
             rlim_cur: 0,
@@ -172,7 +182,7 @@ mod imp {
         let soft = clamp(value, hard);
         let limit = libc::rlimit {
             rlim_cur: soft,
-            rlim_max: current.rlim_max,
+            rlim_max: soft,
         };
         // SAFETY: setrlimit reads a valid rlimit through the pointer.
         if unsafe { libc::setrlimit(resource, &limit) } != 0 {
@@ -205,22 +215,25 @@ mod imp {
         }
     }
 
-    /// Exec the harness command. Returns only on failure, after reporting
-    /// it; by then ready was sent, so the session ends as an ordinary exit.
-    fn exec_harness(argv: &[String], sock: &mut UnixStream) -> ExitCode {
+    /// Exec the harness command. Returns only on failure, and every
+    /// failure here is past the report: `run_inner` sent `Applied` and the
+    /// supervisor replied ready before this ran, so a `Refused` would be
+    /// written into a socket nothing reads again. The cause goes to stderr
+    /// instead — bwrap wired the stage's stderr to the session's PTY, so
+    /// an attached user sees it — and the stage exits 127, the documented
+    /// "exec failed inside the stage" code (0017).
+    fn exec_harness(argv: &[String]) -> ExitCode {
         let Some(program) = argv.first() else {
-            return refuse(sock, "harness_exec_failed", "no harness command");
+            eprintln!("willie-sess --inner: no harness command");
+            return ExitCode::from(127);
         };
         let c_args: Result<Vec<CString>, _> =
             argv.iter().map(|a| CString::new(a.as_bytes())).collect();
         let (Ok(program_c), Ok(c_args)) =
             (CString::new(program.as_bytes()), c_args)
         else {
-            return refuse(
-                sock,
-                "harness_exec_failed",
-                "a harness argument holds a NUL",
-            );
+            eprintln!("willie-sess --inner: a harness argument holds a NUL");
+            return ExitCode::from(127);
         };
         let mut ptrs: Vec<*const libc::c_char> =
             c_args.iter().map(|a| a.as_ptr()).collect();
@@ -232,11 +245,8 @@ mod imp {
             libc::execv(program_c.as_ptr(), ptrs.as_ptr());
         }
         let errno = std::io::Error::last_os_error();
-        refuse(
-            sock,
-            "harness_exec_failed",
-            &format!("cannot exec the harness: {errno}"),
-        )
+        eprintln!("willie-sess --inner: cannot exec the harness: {errno}");
+        ExitCode::from(127)
     }
 }
 

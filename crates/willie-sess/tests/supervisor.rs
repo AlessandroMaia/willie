@@ -782,12 +782,16 @@ fn the_stage_reports_the_three_mechanisms_and_sets_the_limits() {
     let root = scratch("report");
     let ws = root.join("ws");
     fs::create_dir_all(&ws).unwrap();
-    // `ulimit -c` is portable; NPROC has no portable `ulimit` letter (the
-    // distro's `/bin/sh` is not bash), so the process limit is read from
-    // `/proc/self/limits`, whose soft column is the third field.
+    // The distro's `/bin/sh` is dash, whose `ulimit` supports `-c` (core,
+    // 512-byte blocks) and `-n` (descriptors) but not `-u`. The process
+    // limits — both soft and hard, to prove the hard one is ratcheted down
+    // to the soft value and not left at whatever the namespace inherited —
+    // come from `/proc/self/limits`, whose "Max processes" row carries
+    // `soft hard` in its third and fourth fields.
     let bin = fake_harness(
         &root,
-        "{ ulimit -c; awk '/^Max processes/ {print $3}' /proc/self/limits; } \
+        "{ ulimit -c; ulimit -n; \
+         awk '/^Max processes/ {print $3, $4}' /proc/self/limits; } \
          > \"$PWD/limits.txt\" 2>&1",
     );
     let spec = write_spec(&root, &[&bin.to_string_lossy()], &ws);
@@ -805,9 +809,15 @@ fn the_stage_reports_the_three_mechanisms_and_sets_the_limits() {
     );
     let limits = fs::read_to_string(ws.join("limits.txt")).unwrap();
     let lines: Vec<&str> = limits.lines().collect();
-    // ulimit -c is the core limit in 512-byte blocks: 0. NPROC soft: 4096.
+    // ulimit -c: the core limit in 512-byte blocks, 0. ulimit -n: the
+    // descriptor soft limit, 65536. The process limits are `soft hard`:
+    // 4096 4096 — the hard limit ratcheted down to the soft value, not
+    // left at whatever the namespace inherited, which is what proves a
+    // confined harness cannot raise its soft limit back up to an unbounded
+    // process count.
     assert_eq!(lines[0].trim(), "0", "core: {limits}");
-    assert_eq!(lines[1].trim(), "4096", "nproc: {limits}");
+    assert_eq!(lines[1].trim(), "65536", "nofile: {limits}");
+    assert_eq!(lines[2].trim(), "4096 4096", "nproc soft/hard: {limits}");
     let _ = fs::remove_dir_all(&root);
 }
 

@@ -299,14 +299,20 @@ pub fn write_request(
 
 /// How long the supervisor waits for the stage's report before refusing.
 /// `WILLIE_SESS_HARNESS_WAIT_MS` shortens it for the tests; default two
-/// seconds, far inside the daemon's ten-second readiness budget.
+/// seconds, far inside the daemon's ten-second readiness budget. An
+/// overriding value is floored to one millisecond: `set_read_timeout`
+/// rejects `Duration::ZERO` with `InvalidInput` and leaves the socket
+/// blocking, so a `0` override still means "time out almost at once" —
+/// its intent — rather than block until the daemon's own budget runs out.
 #[cfg(target_os = "linux")]
 #[must_use]
 pub fn report_wait() -> Duration {
     std::env::var("WILLIE_SESS_HARNESS_WAIT_MS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
-        .map_or(Duration::from_secs(2), Duration::from_millis)
+        .map_or(Duration::from_secs(2), |v| {
+            Duration::from_millis(v).max(Duration::from_millis(1))
+        })
 }
 
 /// What reading the stage's report resolved to.

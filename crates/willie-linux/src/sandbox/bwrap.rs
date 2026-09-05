@@ -55,6 +55,13 @@ fn push(v: &mut Vec<String>, args: &[&str]) {
 #[must_use]
 pub fn argv(plan: &Plan, inner_fd: i32) -> Vec<String> {
     let mut v = vec![BWRAP.to_owned()];
+    // No `--no-new-privs`: bubblewrap has no such option (0.12.0 rejects
+    // it) — it sets `PR_SET_NO_NEW_PRIVS` itself for an unprivileged user
+    // namespace. The in-namespace stage does not assume that: it reads
+    // `NoNewPrivs` from `/proc/self/status` and refuses the session, fail
+    // closed, unless it is 1. That runtime check is the intentional
+    // dependency; a base change that ever suppressed the bit would be
+    // caught there rather than silently accepted.
     push(
         &mut v,
         &[
@@ -253,6 +260,20 @@ mod tests {
         ] {
             assert!(!v.contains(&absent.to_owned()), "{absent}");
         }
+    }
+
+    /// The base does not pass `--no-new-privs`: bubblewrap has no such
+    /// option (0.12.0 refuses it as unknown, which would break every
+    /// session), because it sets `PR_SET_NO_NEW_PRIVS` itself for an
+    /// unprivileged user namespace. The in-namespace stage depends on that
+    /// bit and refuses fail-closed when it is not set, so the guard is a
+    /// runtime check, not a flag. This test keeps the flag from being
+    /// re-added under the belief that it exists.
+    #[test]
+    fn the_base_omits_no_new_privs_because_bwrap_has_no_such_flag() {
+        let v = argv(&plan(), 4);
+
+        assert!(!v.contains(&"--no-new-privs".to_owned()));
     }
 
     #[test]
