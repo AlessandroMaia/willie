@@ -48,11 +48,12 @@ fn push(v: &mut Vec<String>, args: &[&str]) {
 }
 
 /// The complete command line: helper, base, plan, working directory,
-/// separator, harness. The network stays shared, because the harness is
-/// an API client; a new terminal session is not requested, because it
-/// would detach the harness from the terminal that is the whole point.
+/// separator, and the re-executed supervisor on `inner_fd`. The network
+/// stays shared, because the harness is an API client; a new terminal
+/// session is not requested, because it would detach the harness from the
+/// terminal that is the whole point.
 #[must_use]
-pub fn argv(plan: &Plan) -> Vec<String> {
+pub fn argv(plan: &Plan, inner_fd: i32) -> Vec<String> {
     let mut v = vec![BWRAP.to_owned()];
     push(
         &mut v,
@@ -95,8 +96,22 @@ pub fn argv(plan: &Plan) -> Vec<String> {
     for op in &plan.ops {
         render(op, &mut v);
     }
-    push(&mut v, &["--chdir", &plan.workspace, "--"]);
-    v.extend(plan.argv.iter().cloned());
+    // The command is the re-executed supervisor, not the harness: it
+    // applies what only a process inside the namespace can, then execs
+    // the harness command the request carries. The harness argv is
+    // therefore absent from the vector.
+    let fd = inner_fd.to_string();
+    push(
+        &mut v,
+        &[
+            "--chdir",
+            &plan.workspace,
+            "--",
+            &plan.inner_exe,
+            "--inner",
+            &fd,
+        ],
+    );
     v
 }
 
@@ -137,6 +152,7 @@ mod tests {
     const HOME: &str = "/home/willie";
     const WS: &str = "/home/willie/projects/x";
     const BIN: &str = "/home/willie/.local/bin/claude";
+    const INNER: &str = "/opt/willie/bin/willie-sess";
 
     fn plan() -> Plan {
         Plan {
@@ -144,6 +160,7 @@ mod tests {
             workspace: WS.into(),
             argv: vec![BIN.into(), "--continue".into()],
             env: BTreeMap::new(),
+            inner_exe: INNER.into(),
             ensure_dirs: Vec::new(),
             ops: vec![
                 Op::Tmpfs {
@@ -216,7 +233,7 @@ mod tests {
     #[test]
     fn the_vector_starts_with_the_helper_and_unshares_everything_but_the_network()
      {
-        let v = argv(&plan());
+        let v = argv(&plan(), 4);
 
         assert_eq!(v[0], BWRAP);
         for flag in [
@@ -240,7 +257,7 @@ mod tests {
 
     #[test]
     fn the_system_tree_is_read_only_with_the_merged_usr_links() {
-        let v = argv(&plan());
+        let v = argv(&plan(), 4);
 
         assert!(has(&v, &["--ro-bind", "/usr", "/usr"]));
         assert!(!has(&v, &["--bind", "/usr", "/usr"]));
@@ -256,7 +273,7 @@ mod tests {
 
     #[test]
     fn the_process_device_and_temporary_trees_are_fresh() {
-        let v = argv(&plan());
+        let v = argv(&plan(), 4);
 
         assert!(has(&v, &["--proc", "/proc"]));
         assert!(has(&v, &["--dev", "/dev"]));
@@ -270,7 +287,7 @@ mod tests {
     #[test]
     fn the_selected_etc_files_come_one_by_one_and_the_optional_ones_may_be_absent()
      {
-        let v = argv(&plan());
+        let v = argv(&plan(), 4);
 
         for name in [
             "resolv.conf",
@@ -302,7 +319,7 @@ mod tests {
 
     #[test]
     fn sudo_is_masked_behind_the_null_device() {
-        let v = argv(&plan());
+        let v = argv(&plan(), 4);
 
         assert!(has(&v, &["--ro-bind", "/dev/null", "/usr/bin/sudo"]));
     }
@@ -311,7 +328,7 @@ mod tests {
     /// working directory, then the separator and the harness untouched.
     #[test]
     fn the_plan_follows_the_base_in_order_then_chdir_then_the_harness() {
-        let v = argv(&plan());
+        let v = argv(&plan(), 4);
 
         let usr = index_of(&v, &["--ro-bind", "/usr", "/usr"]).unwrap();
         let home = index_of(&v, &["--perms", "0700", "--tmpfs", HOME]).unwrap();
@@ -339,16 +356,29 @@ mod tests {
         assert!(local < link && link < chdir);
         let tail: Vec<&str> =
             v[chdir + 2..].iter().map(String::as_str).collect();
-        assert_eq!(tail, ["--", BIN, "--continue"]);
+        assert_eq!(tail, ["--", INNER, "--inner", "4"]);
+        assert!(
+            !v.contains(&BIN.to_owned()),
+            "the harness argv is not in the vector"
+        );
     }
 
     #[test]
     fn every_option_has_its_arity_and_the_command_follows_the_separator() {
-        let v = argv(&plan());
+        let v = argv(&plan(), 4);
 
         let (options, command) = parse(&v);
         assert!(options.len() > 10);
-        assert_eq!(command, [BIN, "--continue"]);
+        assert_eq!(command, [INNER, "--inner", "4"]);
+    }
+
+    #[test]
+    fn the_inner_fd_is_the_number_the_supervisor_passed() {
+        let v = argv(&plan(), 7);
+        assert!(
+            index_of(&v, &["--", INNER, "--inner", "7"]).is_some(),
+            "{v:?}"
+        );
     }
 
     /// What the base never names, so the plan alone decides what of the
@@ -360,9 +390,13 @@ mod tests {
         bare.env = BTreeMap::new();
         bare.workspace = "/w".into();
         bare.argv = vec!["/w/h".into()];
-        let v = argv(&bare);
+        let v = argv(&bare, 4);
 
-        for arg in &v[1..] {
+        // The inner binary lives under /opt and is rendered in the command
+        // tail, after `--`; the base binds nothing there, so scan only the
+        // options.
+        let sep = v.iter().position(|a| a == "--").unwrap();
+        for arg in &v[1..sep] {
             for forbidden in
                 ["/mnt", "/init", "/run", "/var", "/home", "/opt", "/root"]
             {
@@ -381,7 +415,7 @@ mod tests {
             ("TERM".to_owned(), "xterm-256color".to_owned()),
         ]);
 
-        let v = argv(&p);
+        let v = argv(&p, 4);
 
         let clear = v
             .iter()
@@ -407,7 +441,7 @@ mod tests {
         let mut p = plan();
         p.env = BTreeMap::from([("PATH".to_owned(), "/usr/bin".to_owned())]);
 
-        let v = argv(&p);
+        let v = argv(&p, 4);
 
         assert!(v.contains(&"--clearenv".to_owned()));
         assert_eq!(v.iter().filter(|a| *a == "--setenv").count(), 1);
@@ -424,7 +458,7 @@ mod tests {
         let mut p = plan();
         p.env = BTreeMap::new();
 
-        let v = argv(&p);
+        let v = argv(&p, 4);
 
         assert!(v.contains(&"--clearenv".to_owned()));
         assert!(!v.contains(&"--setenv".to_owned()));

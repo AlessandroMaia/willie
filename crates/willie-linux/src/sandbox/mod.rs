@@ -42,6 +42,11 @@ pub struct Plan {
     pub workspace: String,
     /// The harness command, untouched.
     pub argv: Vec<String>,
+    /// The re-executed supervisor, `willie-sess --inner`, which the vector
+    /// runs in place of the harness; it applies the limits (and, in later
+    /// phases, the syscall filter and Landlock) from inside the namespace
+    /// and then execs the harness command in `argv`.
+    pub inner_exe: String,
     /// The session's whole environment, from the spec. The helper clears
     /// what it inherits and sets exactly this, so the boundary does not
     /// depend on how the supervisor was started.
@@ -119,6 +124,7 @@ const SYSTEM_TREE: &str = "/usr";
 pub fn plan(
     spec: &SessionSpec,
     harness: &dyn Harness,
+    inner_exe: &str,
 ) -> Result<Plan, PlanError> {
     let home = spec
         .env
@@ -190,10 +196,18 @@ pub fn plan(
         ops.push(bind(&extra.path, &extra.path, extra.mode, false));
     }
 
+    // The vector runs the re-executed supervisor, so it must be reachable
+    // read-only at its own path, after everything the policy grants — the
+    // same reason part 1 binds the harness binary. It lives under
+    // /opt/willie, which the base never mounts, so the bind is
+    // unconditional.
+    ops.push(bind(inner_exe, inner_exe, PathMode::Ro, false));
+
     Ok(Plan {
         home,
         workspace: spec.workspace.clone(),
         argv: spec.argv.clone(),
+        inner_exe: inner_exe.to_owned(),
         env: spec.env.clone(),
         ensure_dirs,
         ops,
@@ -216,6 +230,7 @@ mod tests {
     const HOME: &str = "/home/willie";
     const WS: &str = "/home/willie/projects/x";
     const BIN: &str = "/home/willie/.local/bin/claude";
+    const INNER: &str = "/opt/willie/bin/willie-sess";
 
     fn spec_with(capabilities: CapabilitySet) -> SessionSpec {
         let mut env = BTreeMap::new();
@@ -245,8 +260,22 @@ mod tests {
 
     fn planned(capabilities: CapabilitySet) -> (SessionSpec, Plan) {
         let spec = spec_with(capabilities);
-        let plan = plan(&spec, &ClaudeCode).expect("a plan");
+        let plan = plan(&spec, &ClaudeCode, INNER).expect("a plan");
         (spec, plan)
+    }
+
+    /// The re-executed supervisor is the vector's command, so it is
+    /// reachable read-only at its own path, after everything the policy
+    /// grants — the same reason part 1 binds the harness binary.
+    #[test]
+    fn the_inner_binary_is_bound_read_only() {
+        let (_spec, plan) = planned(all_on());
+        assert_eq!(plan.inner_exe, INNER);
+        assert!(plan.ops.iter().any(|op| matches!(
+            op,
+            Op::Bind { src, dest, mode: PathMode::Ro, optional: false }
+                if src == INNER && dest == INNER
+        )));
     }
 
     fn bind(src: &str, dest: &str, mode: PathMode, optional: bool) -> Op {
@@ -353,7 +382,7 @@ mod tests {
         });
         spec.argv = vec!["/usr/local/bin/claude".into()];
 
-        let plan = plan(&spec, &ClaudeCode).expect("a plan");
+        let plan = plan(&spec, &ClaudeCode, INNER).expect("a plan");
 
         assert!(
             !plan.ops.iter().any(|op| matches!(
@@ -531,6 +560,7 @@ mod tests {
                 },
                 bind(WS, WS, PathMode::Rw, false),
                 bind(BIN, BIN, PathMode::Ro, false),
+                bind(INNER, INNER, PathMode::Ro, false),
             ]
         );
         assert!(plan.ensure_dirs.is_empty());
@@ -558,7 +588,7 @@ mod tests {
         spec.env.remove("HOME");
 
         assert_eq!(
-            plan(&spec, &ClaudeCode).unwrap_err(),
+            plan(&spec, &ClaudeCode, INNER).unwrap_err(),
             PlanError::HomeMissing
         );
     }
@@ -594,9 +624,10 @@ mod tests {
             ..CapabilitySet::default()
         });
 
-        let plan = plan(&spec, &Quiet).expect("a plan");
+        let plan = plan(&spec, &Quiet, INNER).expect("a plan");
 
         assert!(!plan.ops.iter().any(|op| matches!(op, Op::Symlink { .. })));
-        assert_eq!(plan.ops.len(), 3);
+        // The home, the workspace, the harness, and the inner binary.
+        assert_eq!(plan.ops.len(), 4);
     }
 }

@@ -6,32 +6,39 @@
 
 /// Why this process is not inside a fresh session namespace, if it is
 /// not. `uid_map` is `/proc/self/uid_map`, `status` is
-/// `/proc/self/status`, `outer_uid` the uid the supervisor runs as. A
-/// fresh user namespace remaps the outer uid (bwrap's default maps it to
-/// 0 inside) and the base sets no_new_privs; either missing means the
-/// helper never built the namespace, and the stage refuses — fail closed,
-/// so an unreadable or empty file is "not a namespace" too.
+/// `/proc/self/status`. The helper builds the namespace with a bounded
+/// uid mapping — bwrap's default is the single-uid identity map
+/// `<uid> <uid> 1` — whereas the initial user namespace maps the whole
+/// uid space (length 4294967295); the base also sets no_new_privs. A
+/// bounded mapping together with no_new_privs is the helper's
+/// fingerprint. Comparing the mapped uid to the caller's own is not it:
+/// the mapping is the identity, so inside and outside read the same
+/// number. Either signal missing means the helper never built the
+/// namespace, and the stage refuses — fail closed, so an unreadable or
+/// empty file is "not a namespace" too.
 #[must_use]
-pub fn not_in_namespace(
-    uid_map: &str,
-    status: &str,
-    outer_uid: u32,
-) -> Option<String> {
-    let inside_uid = uid_map
+pub fn not_in_namespace(uid_map: &str, status: &str) -> Option<String> {
+    // The range length is the third field. The initial namespace maps the
+    // whole uid space (u32::MAX); a namespace the helper built maps a
+    // bounded range. A zero-length, whole-space or unreadable map is no
+    // fresh namespace at all.
+    let mapped = uid_map
         .split_whitespace()
-        .next()
-        .and_then(|s| s.parse::<u32>().ok());
+        .nth(2)
+        .and_then(|len| len.parse::<u64>().ok())
+        .is_some_and(|len| (1..u64::from(u32::MAX)).contains(&len));
     let no_new_privs = status
         .lines()
         .find_map(|l| l.strip_prefix("NoNewPrivs:"))
         .map(|rest| rest.trim() == "1")
         .unwrap_or(false);
-    match inside_uid {
-        Some(inside) if inside != outer_uid && no_new_privs => None,
-        _ => Some(
+    if mapped && no_new_privs {
+        None
+    } else {
+        Some(
             "not inside the sandbox namespace: the helper did not build it"
                 .to_owned(),
-        ),
+        )
     }
 }
 
@@ -82,9 +89,7 @@ mod imp {
             std::fs::read_to_string("/proc/self/uid_map").unwrap_or_default();
         let status =
             std::fs::read_to_string("/proc/self/status").unwrap_or_default();
-        // SAFETY: getuid is always safe.
-        let outer = unsafe { libc::getuid() };
-        if let Some(reason) = not_in_namespace(&uid_map, &status, outer) {
+        if let Some(reason) = not_in_namespace(&uid_map, &status) {
             return refuse(&mut sock, "sandbox_apply_failed", &reason);
         }
 
@@ -242,37 +247,45 @@ pub use imp::run_inner;
 mod tests {
     use super::*;
 
-    /// A real session namespace maps the session uid to 0 inside (bwrap
-    /// --unshare-user with the default single mapping), and NoNewPrivs
-    /// is 1. The outer identity unchanged, or NoNewPrivs 0, means the
-    /// namespace was never built.
+    /// A real session namespace has a bounded uid mapping — bwrap's
+    /// default is the single-uid identity map — and NoNewPrivs is 1. The
+    /// initial namespace maps the whole uid space; a missing NoNewPrivs
+    /// or an empty map means the namespace was never built.
     #[test]
-    fn an_unmapped_identity_or_missing_no_new_privs_is_not_a_namespace() {
+    fn a_bounded_uid_map_with_no_new_privs_is_a_namespace() {
+        // bwrap's identity single-uid map is a real namespace.
         assert_eq!(
             not_in_namespace(
-                "         0       1000          1\n",
-                "NoNewPrivs:\t1\n",
-                1000
+                "      1000       1000          1\n",
+                "NoNewPrivs:\t1\n"
             ),
             None
         );
+        // A remapped single-uid map is one too.
+        assert_eq!(
+            not_in_namespace(
+                "         0       1000          1\n",
+                "NoNewPrivs:\t1\n"
+            ),
+            None
+        );
+        // The initial namespace maps the whole range: not a fresh one.
+        assert!(
+            not_in_namespace(
+                "         0          0 4294967295\n",
+                "NoNewPrivs:\t1\n"
+            )
+            .is_some()
+        );
+        // NoNewPrivs missing, or an empty map, is no namespace.
         assert!(
             not_in_namespace(
                 "      1000       1000          1\n",
-                "NoNewPrivs:\t1\n",
-                1000,
+                "NoNewPrivs:\t0\n"
             )
             .is_some()
         );
-        assert!(
-            not_in_namespace(
-                "         0       1000          1\n",
-                "NoNewPrivs:\t0\n",
-                1000
-            )
-            .is_some()
-        );
-        assert!(not_in_namespace("", "", 1000).is_some());
+        assert!(not_in_namespace("", "").is_some());
     }
 
     #[test]

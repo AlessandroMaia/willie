@@ -278,13 +278,6 @@ impl TestClient {
     }
 }
 
-// A lifecycle helper kept beside `exited`.
-fn started(events: &[SessionEvent]) -> bool {
-    events
-        .iter()
-        .any(|e| matches!(e.kind, SessionEventKind::Started { .. }))
-}
-
 fn socket_of(root: &Path) -> PathBuf {
     root.join("s.sock")
 }
@@ -697,7 +690,7 @@ fn the_applied_mechanisms_are_recorded_before_the_start() {
         .iter()
         .position(|e| {
             matches!(&e.kind, SessionEventKind::SandboxApplied { mechanisms, .. }
-            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned()])
+            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned()])
         })
         .expect("a sandbox_applied event");
     let started = events
@@ -749,31 +742,98 @@ fn a_stop_that_arrives_with_the_readiness_line_still_climbs_the_ladder() {
     let _ = fs::remove_dir_all(&root);
 }
 
-/// The wait for the harness has a ceiling, so a helper that never forks
-/// cannot hold a session open for ever. With the ceiling at zero the
-/// resolution always gives up — the deadline is tested before the
-/// first attempt, so a fast helper cannot make it succeed anyway: the
-/// session still starts, and the supervisor says in its log that the
-/// promise readiness carries — the harness is running — has just been
-/// given up.
+/// The supervisor waits a bounded time for the in-namespace stage to
+/// report. A stage that never reports — here a fake helper that ignores
+/// its arguments and just sleeps, so nothing is ever written to the
+/// report socket — refuses the session. The part-1 "start anyway" path
+/// is gone.
 #[test]
-fn a_resolution_that_gives_up_still_starts_the_session_and_says_so() {
-    let root = scratch("nowait");
-    let bin = fake_harness(&root, "exec cat");
+fn a_stage_that_never_reports_refuses_the_session() {
+    let root = scratch("noreport");
+    let bin = fake_harness(&root, "exit 0");
+    let helper = root.join("mute");
+    fs::write(&helper, "#!/bin/sh\nsleep 30\n").unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
     let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
-    let (code, line) =
-        launch_with_env(&spec, &[("WILLIE_SESS_HARNESS_WAIT_MS", "0")]);
-    assert_eq!(code, 0, "{line}");
-    let pid: u32 = line.strip_prefix("ok ").unwrap().parse().unwrap();
-    assert!(started(&read_events(&spec)));
-    let log =
-        fs::read_to_string(spec.with_file_name("supervisor.log")).unwrap();
-    assert!(
-        log.contains("no harness appeared behind the helper"),
-        "{log}"
+
+    let (code, line) = launch_with_env(
+        &spec,
+        &[
+            ("WILLIE_SESS_HELPER_BIN", &helper.to_string_lossy()),
+            ("WILLIE_SESS_HARNESS_WAIT_MS", "300"),
+        ],
     );
-    // No stop was asked for, so no rung ever ran: end the session the
-    // blunt way, on the monitor the readiness line named.
-    kill(pid, libc::SIGKILL);
+
+    assert_eq!(code, 1, "{line}");
+    assert!(line.starts_with("fail sandbox_apply_failed: "), "{line}");
+    assert!(
+        !read_events(&spec)
+            .iter()
+            .any(|e| matches!(e.kind, SessionEventKind::Started { .. })),
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The measured report, end to end: the stage names all three required
+/// mechanisms and the supervisor records them, and the limits it set are
+/// visible to the harness it exec'd.
+#[test]
+fn the_stage_reports_the_three_mechanisms_and_sets_the_limits() {
+    let root = scratch("report");
+    let ws = root.join("ws");
+    fs::create_dir_all(&ws).unwrap();
+    // `ulimit -c` is portable; NPROC has no portable `ulimit` letter (the
+    // distro's `/bin/sh` is not bash), so the process limit is read from
+    // `/proc/self/limits`, whose soft column is the third field.
+    let bin = fake_harness(
+        &root,
+        "{ ulimit -c; awk '/^Max processes/ {print $3}' /proc/self/limits; } \
+         > \"$PWD/limits.txt\" 2>&1",
+    );
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &ws);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    assert!(wait_until(Duration::from_secs(10), || {
+        exited(&read_events(&spec)).is_some()
+    }));
+    assert!(
+        read_events(&spec).iter().any(|e| matches!(&e.kind,
+            SessionEventKind::SandboxApplied { mechanisms, .. }
+            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned()])),
+        "{:?}",
+        read_events(&spec)
+    );
+    let limits = fs::read_to_string(ws.join("limits.txt")).unwrap();
+    let lines: Vec<&str> = limits.lines().collect();
+    // ulimit -c is the core limit in 512-byte blocks: 0. NPROC soft: 4096.
+    assert_eq!(lines[0].trim(), "0", "core: {limits}");
+    assert_eq!(lines[1].trim(), "4096", "nproc: {limits}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// A stage that finds it is not inside a namespace refuses. Forced by a
+/// fake helper that drops bubblewrap's options and execs the inner
+/// command after the `--` directly, with no bwrap and so no namespace
+/// around it.
+#[test]
+fn a_stage_outside_a_namespace_refuses() {
+    let root = scratch("nons");
+    let bin = fake_harness(&root, "exit 0");
+    let helper = root.join("nobwrap");
+    fs::write(
+        &helper,
+        "#!/bin/sh\nwhile [ \"$1\" != \"--\" ]; do shift; done\nshift\nexec \"$@\"\n",
+    )
+    .unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+
+    let (code, line) = launch_with_env(
+        &spec,
+        &[("WILLIE_SESS_HELPER_BIN", &helper.to_string_lossy())],
+    );
+
+    assert_eq!(code, 1, "{line}");
+    assert!(line.contains("not inside the sandbox namespace"), "{line}");
     let _ = fs::remove_dir_all(&root);
 }
