@@ -264,9 +264,14 @@ a rebuildable index (`willie reindex`).
    **detached** (setsid; stdio to `sessions/<id>/supervisor.log`).
 3. `willie-sess` opens the PTY, builds the sandbox, runs the harness on
    the PTY slave, listens on `/run/willie/sessions/<id>.sock` (0600) and
-   records `started`; the daemon rides the session socket as a control
-   client (decision 0014) — the supervisor never calls the daemon and
-   never depends on it.
+   records `started`. The supervisor runs the harness by re-executing
+   itself as `willie-sess --inner` inside the namespace, which applies
+   the resource limits and reports which mechanisms took effect before
+   the harness's `exec` (decision 0017); the supervisor records that
+   report as `sandbox_applied` and refuses the session if it names less
+   than the required subset. The daemon rides the session socket as a
+   control client (decision 0014) — the supervisor never calls the
+   daemon and never depends on it.
 4. `willied` replies `{ session }` once the supervisor reports ready;
    the engine opens a Windows Terminal tab running `wsl.exe -d willie
    --user willie --exec /opt/willie/bin/willie attach <id>` — there is
@@ -382,7 +387,8 @@ namespace right before `exec` of the harness) + **rlimits**.
   `perf_event_open`, `userfaultfd`, the mount family, `unshare`/`setns`,
   module loading, `kexec_*`, `keyctl`/`add_key`, `ioctl(TIOCSTI)`, packet
   and raw sockets — *second enforcement plan*;
-- rlimits `NPROC`, `NOFILE`, `CORE=0` — *second enforcement plan*;
+- rlimits `NPROC`, `NOFILE`, `CORE=0`, applied by the re-executed
+  supervisor inside the session's own user namespace;
 - **network on** (no `--unshare-net`): the harness needs it; Landlock at
   this kernel version has no network rules; fine-grained egress is a
   growth item.
@@ -408,9 +414,10 @@ The mounts and the exact bubblewrap argument vector are built **as
 data** by `willie-linux::sandbox` (`plan`, then `bwrap::argv`), so the
 supervisor that applies them and the daemon that explains them share
 one builder and its tests run on any host; the supervisor launches
-every session through them and records `sandbox_applied { mechanisms }`
-in the event log before `started`. The seccomp summary and the Landlock
-rules arrive with their own commits of the enforcement slice.
+every session through them and records `sandbox_applied { mechanisms,
+unavailable }`, measured by the in-namespace stage in the event log
+before `started`. The seccomp summary and the Landlock rules arrive
+with their own commits of the enforcement slice.
 
 ### 3.4 Configuration layers (increasing authority, monotonic)
 
