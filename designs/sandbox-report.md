@@ -146,16 +146,19 @@ not parse is a refusal, never a panic.
 ### The vector — `willie-linux/src/sandbox/{mod.rs,bwrap.rs}`
 
 `Plan` gains `inner_exe: String`: where the re-executed supervisor lives.
-The daemon would pass `paths::SUPERVISOR_BIN`; the supervisor passes its
-own resolved `/proc/self/exe`, so a test drives the staged binary rather
-than the installed one. `plan()` no longer copies the harness argv into
-`Plan.argv`; that argv travels in the `Request`. The plan's ops gain one
-final bind: `inner_exe` read-only at its own path.
+`plan()` takes it as a parameter — the supervisor passes its own resolved
+`/proc/self/exe`, so a test drives the staged binary rather than the
+installed one; a daemon that ever renders a vector would pass
+`paths::SUPERVISOR_BIN`. `Plan.argv` stays the harness command, the source
+the supervisor builds the `Request` from; what changes is that
+`bwrap::argv` no longer appends it. The plan's ops gain one final bind:
+`inner_exe` read-only at its own path.
 
 `bwrap::argv(plan, inner_fd)` renders the base, the ops (the inner binary
-bind last), then `--chdir <workspace> -- <inner_exe> --inner <inner_fd>`.
-The `--chdir` still puts the harness in its workspace, because the inner
-`exec`s without changing directory.
+bind last), then `--chdir <workspace> -- <inner_exe> --inner <inner_fd>` —
+the harness argv is absent from the rendered vector; it travels in the
+`Request` instead. The `--chdir` still puts the harness in its workspace,
+because the inner `exec`s without changing directory.
 
 ### The inner stage — `willie-sess/src/sandbox/inner.rs` (Linux)
 
