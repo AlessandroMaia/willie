@@ -256,6 +256,13 @@ impl VtFilter {
                     // A C0 the emulator ignores inside the OSC number: skip
                     // it, or a control spliced into the number would keep
                     // us from recognising an id the emulator still parses.
+                    // CAN (0x18) and SUB (0x1a) are deliberately excluded:
+                    // the emulator aborts the whole sequence on them, while
+                    // this filter lets them end the number and then swallows
+                    // to the string terminator. The divergence is always in
+                    // the fail-safe direction — an OSC followed by CAN/SUB
+                    // can only over-drop trailing text, never pass an acting
+                    // OSC.
                 } else {
                     // Any other byte ends the number: `;`, a terminator, or
                     // a non-digit payload. Decide on the number seen. A
@@ -449,13 +456,14 @@ fn csi_decision(prefix: &[u8], final_byte: u8) -> Option<&'static str> {
 }
 
 /// Whether an OSC whose number resolved to `num` acts on the host: the
-/// clipboard (52) and the title/icon (0, 1, 2). `seen` is false when the
-/// number position held no digit at all (an unnumbered OSC), which passes
-/// like every other OSC that draws or reports a fixed form.
+/// clipboard (52) and the title/icon (0, 1, 2). An unnumbered OSC (no
+/// digit in the number position, `seen == false`) is treated as selector
+/// 0 (set icon and title) and dropped as a title sequence: at least one
+/// supported output path defaults the empty selector to 0, so it must be
+/// dropped, not passed. Every other numbered OSC draws or reports a fixed
+/// form and passes.
 fn osc_decision(seen: bool, num: u32) -> Option<&'static str> {
-    if !seen {
-        return None;
-    }
+    let num = if seen { num } else { 0 };
     match num {
         52 => Some("clipboard"),
         0..=2 => Some("title"),
@@ -690,8 +698,9 @@ mod tests {
         // padding and dispatch the `t` op; withholding it closes that.
         let mut input = Vec::new();
         input.extend_from_slice(b"\x1b[");
-        input.resize(input.len() + 200, b'1');
+        input.resize(input.len() + 300, b'1');
         input.push(b't');
+        assert!(input.len() > 256, "the CSI is past the cap");
 
         let (out, dropped) = once(&input);
 
@@ -699,8 +708,50 @@ mod tests {
         assert_eq!(dropped, ["window"]);
     }
 
+    #[test]
+    fn an_over_cap_csi_that_would_pass_is_dropped_closed() {
+        // A CSI whose final byte would otherwise pass (`m`, an SGR), but
+        // past the cap: it cannot be reproduced, so it is withheld and,
+        // being a would-pass final, recorded as nothing.
+        let mut input = Vec::new();
+        input.extend_from_slice(b"\x1b[");
+        for _ in 0..140 {
+            input.extend_from_slice(b"0;");
+        }
+        input.push(b'm');
+        assert!(input.len() > 256, "the CSI is past the cap");
+
+        let (out, dropped) = once(&input);
+
+        assert!(out.is_empty(), "the over-cap CSI is withheld: {out:?}");
+        assert!(dropped.is_empty(), "a would-pass final is not recorded");
+    }
+
     // --- Non-canonical encodings: the emulator accepts these forms, so
     //     the filter must recognise them too, or they are bypasses. ---
+
+    #[test]
+    fn an_unnumbered_osc_is_dropped_as_title() {
+        // An OSC with no digit in its selector position defaults to 0 on a
+        // supported output path (set icon and title), so it must drop.
+        let (out, dropped) = once(b"\x1b];pwned\x07");
+        assert!(
+            out.is_empty(),
+            "the empty-selector title set is gone: {out:?}"
+        );
+        assert_eq!(dropped, ["title"]);
+
+        // No `;` at all, a bare non-digit body: still selector 0.
+        let (out, dropped) = once(b"\x1b]pwned\x07");
+        assert!(out.is_empty(), "the unnumbered title set is gone: {out:?}");
+        assert_eq!(dropped, ["title"]);
+
+        // A real numbered drawing OSC still passes byte-for-byte.
+        let link = b"\x1b]8;;https://x\x07";
+        let (out, dropped) = once(link);
+        assert_eq!(out, link, "the hyperlink is drawing and passes");
+        assert!(dropped.is_empty());
+    }
 
     #[test]
     fn an_osc_52_with_a_leading_zero_is_still_dropped() {

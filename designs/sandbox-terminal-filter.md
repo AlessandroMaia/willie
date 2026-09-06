@@ -79,7 +79,7 @@ what it dropped, which `serve()` feeds to the shared `Tally`.
 | Dropped | Passed |
 | --- | --- |
 | OSC 52 (clipboard write and read) | OSC 4, 10, 11, 12 including the `?` queries |
-| OSC 0, 1, 2 (title and icon) | OSC 7, 8, 9, 133, and every unlisted OSC |
+| OSC 0, 1, 2 (title and icon), and the unnumbered OSC (empty selector defaults to 0 on a supported output path) | OSC 7, 8, 9, 133, and every unlisted numbered OSC |
 | `CSI … t` except the size/position reports 11, 13, 14, 16, 18, 19; and every `CSI > … t` (title modes) | DA1/2/3, DSR, DECRQM, XTVERSION, `CSI ? u` (kitty) |
 | DCS `$q` (DECRQSS) and DCS `+q` (XTGETTCAP) | every other DCS, tmux passthrough included |
 
@@ -98,14 +98,22 @@ that cannot.
 
 ### Bounded memory
 
-- **CSI** accumulates until the final byte, capped at 64 bytes; past the cap
-  it passes raw (a malformed CSI is the emulator's problem).
-- **OSC / DCS** accumulate only until the type is identified — the number
-  before the first `;`, or the DCS's two intro bytes — capped at 16 bytes.
-  After that the sequence is either streamed-and-dropped until its
-  terminator (BEL or ST) or streamed-through: a 100 KiB OSC 8 hyperlink or
-  an inline image passes without buffering. An unidentified type at the cap
-  passes.
+- **CSI** accumulates until the final byte, capped at 256 bytes (clear of
+  the longest real sequence — a truecolor SGR combining a 24-bit
+  foreground, background and underline colour is on the order of fifty
+  bytes). Past the cap the buffer freezes and the CSI is **dropped
+  closed** at its final byte: nothing of it is forwarded, so leading-zero
+  or padding bytes cannot re-form an acting `… t` op past the cap. The
+  first parameter is read numerically, so `018 t` is the 18 size report.
+- **OSC / DCS** accumulate only until the type is identified — the OSC
+  number (parsed numerically, as the emulator parses it, so leading zeros
+  collapse and never grow the buffer), or the DCS's params and
+  intermediate before the `q` final — capped at 16 bytes. Once identified
+  the sequence is either streamed-and-dropped until its terminator (BEL or
+  ST) or streamed-through: a 100 KiB OSC 8 hyperlink or an inline image
+  passes without buffering. An OSC number or a DCS identify window that
+  runs past the cap is **dropped closed**, not passed: an id or query that
+  long is only ever adversarial padding.
 - A sequence truncated at the end of the stream emits nothing and waits for
   the next chunk; it never forwards a half-sequence.
 
@@ -124,7 +132,8 @@ next to the syscall denials.
 | --- | --- |
 | a sequence split across reads | state survives; forwarded or dropped whole when complete |
 | a 100 KiB OSC 8 or inline image | streamed through, internal buffer stays under the identify cap |
-| a malformed / never-terminated sequence | passes raw once the cap is hit; the emulator decides |
+| an acting sequence padded past the cap | dropped closed once the cap is hit — nothing of it is forwarded |
+| a malformed / never-terminated non-acting sequence | withheld at end of stream; a filter never forwards a half-sequence |
 | a C1 control as raw `0x9D` | passed as a UTF-8 continuation byte, never treated as an introducer |
 | a C1 control as `C2 9D` | treated as the OSC introducer, filtered like `ESC ]` |
 

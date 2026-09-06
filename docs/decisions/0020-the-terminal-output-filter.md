@@ -50,11 +50,14 @@ plus the names of what it dropped, which `serve()` feeds to the same
 `Tally` the syscall denials use.
 
 It drops OSC 52 (the clipboard write and read), OSC 0/1/2 (the title and
-icon), the acting `CSI … t` window-manipulation subfunctions and every
-`CSI > … t` title mode, and DCS `$q` (DECRQSS) and DCS `+q` (XTGETTCAP);
-it records these as `clipboard`, `title`, `window` and `query_echo`. It
-passes everything else byte-for-byte: OSC 4/7/8/9/10/11/12/133 and every
-unlisted OSC, the read-only size and position report subfunctions of
+icon) — including the unnumbered OSC, whose empty selector a supported
+output path defaults to 0 (set icon and title), so it is dropped as
+`title` rather than passed — the acting `CSI … t` window-manipulation
+subfunctions and every `CSI > … t` title mode, and DCS `$q` (DECRQSS) and
+DCS `+q` (XTGETTCAP); it records these as `clipboard`, `title`, `window`
+and `query_echo`. It passes everything else byte-for-byte: OSC
+4/7/8/9/10/11/12/133 and every unlisted numbered OSC, the read-only size
+and position report subfunctions of
 `CSI … t` (11, 13, 14, 16, 18, 19), the device-attributes, cursor-position,
 mode and version queries, the extended-keyboard query (`CSI ? u`), and
 every other DCS — the fixed-form queries the harness needs and the
@@ -112,3 +115,12 @@ flushed before `exited`.
 - A per-project switch to restore the acting sequences (above): a
   capability that widens the one channel the boundary cannot otherwise
   defend, left out until something needs it.
+- The completeness of the drop set is tied to the supported terminal set:
+  a sequence that no supported emulator acts on is passed, and is revisited
+  only if that set changes. Three are known and deliberately passed today —
+  a user-defined-keys DCS (the `|` final, a key-redefinition primitive no
+  supported path honours), a terminal-specific clipboard selector
+  (`OSC 1337`, a clipboard variant outside the supported set), and a
+  notification/progress selector (`OSC 9`, passed on purpose so a
+  notification still reaches the user). Each moves into the drop set only
+  when a supported output path begins to act on it.
