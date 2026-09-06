@@ -690,7 +690,7 @@ fn the_applied_mechanisms_are_recorded_before_the_start() {
         .iter()
         .position(|e| {
             matches!(&e.kind, SessionEventKind::SandboxApplied { mechanisms, .. }
-            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned()])
+            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned(), "seccomp".to_owned()])
         })
         .expect("a sandbox_applied event");
     let started = events
@@ -774,11 +774,11 @@ fn a_stage_that_never_reports_refuses_the_session() {
     let _ = fs::remove_dir_all(&root);
 }
 
-/// The measured report, end to end: the stage names all three required
+/// The measured report, end to end: the stage names all the required
 /// mechanisms and the supervisor records them, and the limits it set are
 /// visible to the harness it exec'd.
 #[test]
-fn the_stage_reports_the_three_mechanisms_and_sets_the_limits() {
+fn the_stage_reports_the_required_mechanisms_and_sets_the_limits() {
     let root = scratch("report");
     let ws = root.join("ws");
     fs::create_dir_all(&ws).unwrap();
@@ -803,7 +803,7 @@ fn the_stage_reports_the_three_mechanisms_and_sets_the_limits() {
     assert!(
         read_events(&spec).iter().any(|e| matches!(&e.kind,
             SessionEventKind::SandboxApplied { mechanisms, .. }
-            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned()])),
+            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned(), "seccomp".to_owned()])),
         "{:?}",
         read_events(&spec)
     );
@@ -818,6 +818,40 @@ fn the_stage_reports_the_three_mechanisms_and_sets_the_limits() {
     assert_eq!(lines[0].trim(), "0", "core: {limits}");
     assert_eq!(lines[1].trim(), "65536", "nofile: {limits}");
     assert_eq!(lines[2].trim(), "4096 4096", "nproc soft/hard: {limits}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The filter denies the dangerous classes: from inside a session,
+/// unshare and a raw socket fail, an ordinary interface query works, and
+/// /proc/self/status shows the filter active.
+#[test]
+fn the_syscall_filter_denies_and_stays_out_of_the_way() {
+    let root = scratch("seccomp");
+    let ws = root.join("ws");
+    fs::create_dir_all(&ws).unwrap();
+    let bin = fake_harness(
+        &root,
+        "{ unshare -U true 2>&1 && echo NESTED_OK || echo nested_denied; \
+           ip -o link show >/dev/null 2>&1 && echo ip_ok || echo IP_FAIL; \
+           grep -E '^Seccomp:' /proc/self/status; } > \"$PWD/out.txt\" 2>&1",
+    );
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &ws);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    assert!(wait_until(Duration::from_secs(10), || exited(
+        &read_events(&spec)
+    )
+    .is_some()));
+    let out = fs::read_to_string(ws.join("out.txt")).unwrap();
+    assert!(out.contains("nested_denied"), "{out}"); // --disable-userns + the filter
+    assert!(out.contains("ip_ok"), "{out}"); // netlink route passes
+    assert!(out.contains("Seccomp:\t2"), "{out}"); // filter mode active
+    assert!(
+        read_events(&spec).iter().any(|e| matches!(&e.kind,
+        SessionEventKind::SandboxApplied { mechanisms, .. }
+        if mechanisms.contains(&"seccomp".to_owned()))),
+        "seccomp in the applied list"
+    );
     let _ = fs::remove_dir_all(&root);
 }
 

@@ -4,6 +4,8 @@
 //! `willie_linux::sandbox`; this is the I/O around it.
 
 pub mod inner;
+#[cfg(target_os = "linux")]
+pub mod seccomp;
 
 #[cfg(target_os = "linux")]
 use std::time::Duration;

@@ -200,17 +200,33 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
     // sit pending against the harness instead of being delivered.
     signals::block_shutdown_signals();
     // Read the stage's report with the ceiling. Four outcomes; three of
-    // them refuse the session and end it, one starts it.
-    let (mechanisms, unavailable) =
+    // them refuse the session and end it, one starts it and carries the
+    // filter's listener out to be served.
+    let (mechanisms, unavailable, filter_listener) =
         match sandbox::read_report(&mut ours, sandbox::report_wait()) {
             sandbox::ReportOutcome::Applied {
                 mechanisms,
                 unavailable,
                 listener: filter_listener,
             } => {
-                // The filter's listener, once the stage sends one; nothing
-                // serves it yet, so it is closed here.
-                drop(filter_listener);
+                // A report that names the filter but carries no listener is
+                // a broken stage: refuse rather than run a session whose
+                // denied syscalls nothing would ever answer.
+                if mechanisms.iter().any(|m| m == "seccomp")
+                    && filter_listener.is_none()
+                {
+                    let text = "the sandbox reported seccomp but sent no \
+                                listener"
+                        .to_owned();
+                    events.append(SessionEventKind::Failed {
+                        code: "sandbox_apply_failed".into(),
+                        message: text.clone(),
+                    });
+                    // SAFETY: signalling our own child's process group.
+                    unsafe { libc::kill(-child, libc::SIGKILL) };
+                    let _ = reply.fail("sandbox_apply_failed", &text);
+                    return ExitCode::from(EXIT_FAILURE);
+                }
                 if let Some(missing) =
                     willie_linux::sandbox::inner::required_missing(&mechanisms)
                 {
@@ -224,7 +240,7 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
                     let _ = reply.fail("sandbox_backend_missing", &text);
                     return ExitCode::from(EXIT_FAILURE);
                 }
-                (mechanisms, unavailable)
+                (mechanisms, unavailable, filter_listener)
             }
             sandbox::ReportOutcome::Refused { code, message } => {
                 events.append(SessionEventKind::Failed {
@@ -267,6 +283,16 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
                 return ExitCode::from(EXIT_FAILURE);
             }
         };
+    // Serve the filter from before the session is announced ready, so a
+    // denial from the very first syscall is answered with EPERM. The
+    // thread owns the listener and runs for the session's life; the
+    // recorder is a no-op this task, and Task 5 makes it record. The
+    // handle is held so the thread stays owned rather than orphaned.
+    let _notifications = filter_listener.map(|listener| {
+        std::thread::spawn(move || {
+            sandbox::seccomp::serve_notifications(listener, |_nr| {});
+        })
+    });
     // The stage reported success, so the harness is running behind it.
     let harness = sandbox::harness_pid(child);
     events.append(SessionEventKind::SandboxApplied {
