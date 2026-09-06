@@ -16,7 +16,7 @@ use willie_core::session::SessionSpec;
 // request/report types cross-linked from `willie_linux` are pulled in by
 // name rather than under a clashing `inner` alias.
 use willie_linux::sandbox::inner::{Request, Rlimits};
-use willie_linux::sandbox::{self as plan, bwrap};
+use willie_linux::sandbox::{self as plan, bwrap, landlock};
 
 /// Everything the supervisor needs to spawn the confined session, bar the
 /// report descriptor it creates at spawn time.
@@ -233,12 +233,15 @@ pub fn prepare(
     // The vector is rendered in `session_main`, where the report
     // descriptor exists; here the plan and the request the stage will read
     // are all that is settled. The request carries the harness argv the
-    // stage execs and the default limits it sets. The helper verified
-    // above becomes the vector's `argv[0]` there.
+    // stage execs, the default limits it sets and the Landlock rules,
+    // derived from the plan as finally mounted so the writable set has
+    // one source. The helper verified above becomes the vector's
+    // `argv[0]` there.
     Ok(Prepared {
         request: Request {
             argv: plan.argv.clone(),
             rlimits: Rlimits::DEFAULT,
+            landlock: landlock::rules(&plan),
         },
         plan,
     })
@@ -857,6 +860,16 @@ mod tests {
             &bin.to_string_lossy()
         );
         assert_eq!(prepared.request.rlimits, Rlimits::DEFAULT);
+        // The stage grants writing where the plan mounted read-write —
+        // the workspace, at its own path — and under the base's `/tmp`;
+        // the set is the plan's, not a second derivation.
+        let write = &prepared.request.landlock.write;
+        assert!(
+            write.iter().any(|p| p == &ws.to_string_lossy()),
+            "{write:?}"
+        );
+        assert!(write.iter().any(|p| p == "/tmp"), "{write:?}");
+        assert_eq!(prepared.request.landlock, landlock::rules(&prepared.plan));
         let caches = root
             .join(".willie")
             .join("caches")
