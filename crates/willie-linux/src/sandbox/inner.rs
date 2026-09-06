@@ -1,18 +1,24 @@
 //! The request the supervisor hands its in-namespace stage, and the
 //! report that stage hands back. Pure data: one JSON line each, framed by
-//! the newline the way the event log is. Phases 2 and 3 add fields to
-//! both; a message written before them deserialises with those absent.
+//! the newline the way the event log is. A field added to either after
+//! a message was written deserialises as its default.
 
 use serde::{Deserialize, Serialize};
 
+use crate::sandbox::landlock::Rules;
+
 /// What the in-namespace stage must do before it execs the harness.
-/// Phases 2 and 3 add fields (the seccomp program, the Landlock rules);
-/// a message written before them deserialises with those absent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Request {
     /// The harness command the stage execs.
     pub argv: Vec<String>,
     pub rlimits: Rlimits,
+    /// What Landlock adds to the mounts: the paths the stage grants
+    /// writing beneath. The supervisor derives them from the plan, so
+    /// the stage applies what it is told rather than a plan it cannot
+    /// see. A request written without them is an empty set.
+    #[serde(default)]
+    pub landlock: Rules,
 }
 
 /// The three resource limits, each applied as `min(value, current hard
@@ -40,7 +46,7 @@ impl Rlimits {
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum Report {
     /// The mechanisms that took effect, and the required-optional ones
-    /// (phase 3's Landlock) this kernel does not offer.
+    /// (Landlock) this kernel does not offer.
     Applied {
         mechanisms: Vec<String>,
         #[serde(default)]
@@ -82,10 +88,28 @@ mod tests {
         let req = Request {
             argv: vec!["/bin/claude".into(), "--continue".into()],
             rlimits: Rlimits::DEFAULT,
+            landlock: Rules {
+                write: vec!["/home/willie/ws".into(), "/tmp".into()],
+            },
         };
         let line = serde_json::to_string(&req).unwrap();
         assert!(!line.contains('\n'));
+        assert!(line.contains("\"landlock\""), "{line}");
         assert_eq!(serde_json::from_str::<Request>(&line).unwrap(), req);
+    }
+
+    /// A request written before the rules travelled in it still parses:
+    /// the set is empty, not a refusal.
+    #[test]
+    fn a_request_without_landlock_parses_with_an_empty_set() {
+        let req: Request = serde_json::from_str(
+            r#"{"argv":["/bin/claude"],"rlimits":{"nproc":4096,"nofile":65536,"core":0}}"#,
+        )
+        .unwrap();
+        assert_eq!(req.argv, vec!["/bin/claude".to_owned()]);
+        assert_eq!(req.rlimits, Rlimits::DEFAULT);
+        assert_eq!(req.landlock, Rules::default());
+        assert!(req.landlock.write.is_empty());
     }
 
     #[test]

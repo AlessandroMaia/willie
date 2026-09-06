@@ -2,13 +2,15 @@
 //!
 //! `plan` turns the policy a spec carries into the mounts the session
 //! gets; `bwrap::argv` turns those into the helper's argument vector;
-//! `seccomp::program` is the syscall filter the stage inside installs.
-//! Nothing here forks, mounts or reads the disk, so all of it is tested
-//! on any host: the supervisor applies a plan, and the daemon can show
-//! one without starting a session.
+//! `seccomp::program` is the syscall filter the stage inside installs;
+//! `landlock::rules` is what that stage lets the session write, derived
+//! from the same plan. Nothing here forks, mounts or reads the disk, so
+//! all of it is tested on any host: the supervisor applies a plan, and
+//! the daemon can show one without starting a session.
 
 pub mod bwrap;
 pub mod inner;
+pub mod landlock;
 pub mod seccomp;
 
 use std::{collections::BTreeMap, fmt, path::Path};
@@ -216,25 +218,27 @@ pub fn plan(
     })
 }
 
+/// The spec the sandbox tests plan from: one home, one workspace, one
+/// harness binary, so every module's assertions name the same paths.
 #[cfg(test)]
-mod tests {
+pub(crate) mod fixtures {
     use std::collections::BTreeMap;
 
     use willie_core::{
         id::{ProjectId, SessionId},
-        sandbox::{CapabilitySet, ExtraPath, PathMode},
+        sandbox::CapabilitySet,
         session::SessionSpec,
     };
     use willie_harness::{ClaudeCode, Harness};
 
-    use super::*;
+    use super::{Plan, plan};
 
-    const HOME: &str = "/home/willie";
-    const WS: &str = "/home/willie/projects/x";
-    const BIN: &str = "/home/willie/.local/bin/claude";
-    const INNER: &str = "/opt/willie/bin/willie-sess";
+    pub(crate) const HOME: &str = "/home/willie";
+    pub(crate) const WS: &str = "/home/willie/projects/x";
+    pub(crate) const BIN: &str = "/home/willie/.local/bin/claude";
+    pub(crate) const INNER: &str = "/opt/willie/bin/willie-sess";
 
-    fn spec_with(capabilities: CapabilitySet) -> SessionSpec {
+    pub(crate) fn spec_with(capabilities: CapabilitySet) -> SessionSpec {
         let mut env = BTreeMap::new();
         env.insert("HOME".to_owned(), HOME.to_owned());
         env.insert(
@@ -256,15 +260,23 @@ mod tests {
         }
     }
 
-    fn all_on() -> CapabilitySet {
+    pub(crate) fn all_on() -> CapabilitySet {
         ClaudeCode.default_capabilities()
     }
 
-    fn planned(capabilities: CapabilitySet) -> (SessionSpec, Plan) {
+    pub(crate) fn planned(capabilities: CapabilitySet) -> (SessionSpec, Plan) {
         let spec = spec_with(capabilities);
         let plan = plan(&spec, &ClaudeCode, INNER).expect("a plan");
         (spec, plan)
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use willie_core::sandbox::{CapabilitySet, ExtraPath, PathMode};
+    use willie_harness::{ClaudeCode, Harness};
+
+    use super::{fixtures::*, *};
 
     /// The re-executed supervisor is the vector's command, so it is
     /// reachable read-only at its own path, after everything the policy

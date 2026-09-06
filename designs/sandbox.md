@@ -189,10 +189,11 @@ process exists.
 willie-linux/src/sandbox/mod.rs      the plan: policy to mounts, as data
 willie-linux/src/sandbox/bwrap.rs    the argument vector, as data
 willie-linux/src/sandbox/seccomp.rs  the filter program, as data
+willie-linux/src/sandbox/landlock.rs the path rules, as data, derived from the plan
 willie-sess/src/sandbox/mod.rs       the required subset, and the report of what applied
 willie-sess/src/sandbox/seccomp.rs   installing the filter, and the notification loop
 willie-sess/src/tally.rs             the coalesced denial counts
-willie-sess/src/sandbox/landlock.rs  applied after re-exec, immediately before exec
+willie-sess/src/sandbox/landlock.rs  applied after re-exec, between the limits and the filter
 willie-sess/src/sandbox/rlimits.rs   process, descriptor and core limits
 ```
 
@@ -357,7 +358,8 @@ One task, one commit:
 5. the syscall filter, denying only — *landed (part 2 phase 2)*
 6. the limits, and the required-subset decision with its report —
    *landed (part 2 phase 1)*
-7. path-based restriction, applied after the re-exec
+7. path-based restriction, applied after the re-exec — *landed (part 2
+   phase 3)*
 8. the notification loop and the denial event — *landed (part 2 phase 2)*
 9. the terminal filter
 10. `sandbox explain`
