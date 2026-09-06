@@ -51,14 +51,16 @@ First run of a freshly installed image (`willie doctor`, exit 0; the
 [ok ]  git                          git version 2.47.3
 [ok ]  curl                         curl 8.14.1 (x86_64-pc-linux-gnu) …
 [ok ]  user namespaces              ok
-[skip] landlock LSM
+[ok ]  landlock                     ABI 3
 [ok ]  network (api.anthropic.com)  ok
 ```
 
-`landlock LSM` shows `[skip] landlock LSM` because the WSL kernel
-exposes no `/sys/kernel/security/lsm`, so the list naming the module is
-empty; F0 renders no reason text for it. The check is not required, but
-the sandbox slice has to account for it. `/run/willie` is created by the
+`landlock` is asked of the kernel directly, through the version query of
+`landlock_create_ruleset`: the WSL kernel mounts no securityfs, so a
+check reading `/sys/kernel/security/lsm` would report the mechanism
+absent while it is built in and active (decision 0016). The check is not
+required; a kernel without Landlock, or one at ABI 1, is a skip whose
+detail says how the sandbox is reduced. `/run/willie` is created by the
 `wsl.conf` boot command as `drwxr-x--- willie willie`.
 
 The daemon answers on stdio, one JSON-RPC line in, one out, and exits 0
