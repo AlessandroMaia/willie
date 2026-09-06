@@ -1,13 +1,15 @@
 //! The boundary a session runs inside, as data.
 //!
 //! `plan` turns the policy a spec carries into the mounts the session
-//! gets; `bwrap::argv` turns those into the helper's argument vector.
+//! gets; `bwrap::argv` turns those into the helper's argument vector;
+//! `seccomp::program` is the syscall filter the stage inside installs.
 //! Nothing here forks, mounts or reads the disk, so all of it is tested
 //! on any host: the supervisor applies a plan, and the daemon can show
 //! one without starting a session.
 
 pub mod bwrap;
 pub mod inner;
+pub mod seccomp;
 
 use std::{collections::BTreeMap, fmt, path::Path};
 

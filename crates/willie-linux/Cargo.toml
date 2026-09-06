@@ -13,5 +13,10 @@ willie-proto = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+# The tests compare the syscall filter's numbers and encodings with this
+# libc's; the library itself stays libc-free on every target.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = { workspace = true }
+
 [lints]
 workspace = true
