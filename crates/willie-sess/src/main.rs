@@ -206,7 +206,11 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
             sandbox::ReportOutcome::Applied {
                 mechanisms,
                 unavailable,
+                listener: filter_listener,
             } => {
+                // The filter's listener, once the stage sends one; nothing
+                // serves it yet, so it is closed here.
+                drop(filter_listener);
                 if let Some(missing) =
                     willie_linux::sandbox::inner::required_missing(&mechanisms)
                 {

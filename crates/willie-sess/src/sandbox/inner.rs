@@ -103,21 +103,37 @@ mod imp {
             );
         }
 
-        let report = Report::Applied {
-            mechanisms: vec![
-                "namespaces".to_owned(),
-                "mounts".to_owned(),
-                "rlimits".to_owned(),
-            ],
-            unavailable: vec![],
-        };
-        if let Err(msg) = write_report(&mut sock, &report) {
+        let mechanisms = vec![
+            "namespaces".to_owned(),
+            "mounts".to_owned(),
+            "rlimits".to_owned(),
+        ];
+        if let Err(msg) = write_applied(&mut sock, mechanisms, vec![], None) {
             eprintln!("willie-sess --inner: cannot report: {msg}");
             return ExitCode::FAILURE;
         }
 
         set_cloexec(fd);
         exec_harness(&request.argv)
+    }
+
+    /// The `Applied` report, with the filter's listener riding alongside
+    /// as `SCM_RIGHTS` when there is one, so the supervisor reads the
+    /// descriptor and the words that describe it together. `None` is the
+    /// plain line.
+    fn write_applied(
+        sock: &mut UnixStream,
+        mechanisms: Vec<String>,
+        unavailable: Vec<String>,
+        listener: Option<i32>,
+    ) -> Result<(), String> {
+        let report = Report::Applied {
+            mechanisms,
+            unavailable,
+        };
+        let line = serde_json::to_vec(&report).map_err(|e| e.to_string())?;
+        crate::sandbox::send_report_with_fd(sock, &line, listener)
+            .map_err(|e| e.to_string())
     }
 
     fn read_request(sock: &mut UnixStream) -> Result<Request, String> {

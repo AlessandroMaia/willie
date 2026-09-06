@@ -297,6 +297,181 @@ pub fn write_request(
     sock.flush()
 }
 
+/// Room for one control message carrying one descriptor, by the kernel's
+/// own arithmetic. It is more than one int: `CMSG_SPACE` rounds the
+/// payload up to a long, so two ints fit without the kernel flagging
+/// truncation, and the receiver counts what arrived rather than assume.
+#[cfg(target_os = "linux")]
+// SAFETY: a pure size computation.
+const CONTROL_SPACE: usize =
+    unsafe { libc::CMSG_SPACE(size_of::<libc::c_int>() as u32) } as usize;
+
+/// The control buffer for one `SCM_RIGHTS` message. A `cmsghdr` is
+/// written and read through a pointer into it, so it is aligned the way
+/// the kernel aligns control messages: to a long.
+#[cfg(target_os = "linux")]
+#[repr(C, align(8))]
+struct Control([u8; CONTROL_SPACE]);
+
+/// `sendmsg` on `sock`: `bytes` as the one buffer and, when `carry` is
+/// `Some`, that descriptor as the one `SCM_RIGHTS` control message.
+/// Returns how many bytes the socket took; the descriptor travels with
+/// the first of them.
+#[cfg(target_os = "linux")]
+fn sendmsg_with_fd(
+    sock: libc::c_int,
+    bytes: &[u8],
+    carry: Option<libc::c_int>,
+) -> io::Result<usize> {
+    let mut iov = libc::iovec {
+        iov_base: bytes.as_ptr().cast_mut().cast(),
+        iov_len: bytes.len(),
+    };
+    let mut control = Control([0; CONTROL_SPACE]);
+    // SAFETY: all-zero is a valid msghdr — no name, no data, no control —
+    // and every pointer set below outlives the call.
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &raw mut iov;
+    msg.msg_iovlen = 1;
+    if let Some(fd) = carry {
+        msg.msg_control = control.0.as_mut_ptr().cast();
+        msg.msg_controllen = CONTROL_SPACE as _;
+        // SAFETY: `msg_control` is `control`: CMSG_SPACE(int) bytes,
+        // long-aligned, so the first header lies inside it, aligned, and
+        // its data slot has room for one int.
+        unsafe {
+            let hdr = libc::CMSG_FIRSTHDR(&raw const msg);
+            if hdr.is_null() {
+                return Err(io::Error::other(
+                    "no room for the descriptor's control message",
+                ));
+            }
+            (*hdr).cmsg_level = libc::SOL_SOCKET;
+            (*hdr).cmsg_type = libc::SCM_RIGHTS;
+            (*hdr).cmsg_len =
+                libc::CMSG_LEN(size_of::<libc::c_int>() as u32) as _;
+            std::ptr::write_unaligned(
+                libc::CMSG_DATA(hdr).cast::<libc::c_int>(),
+                fd,
+            );
+        }
+    }
+    loop {
+        // SAFETY: msg is fully initialised and the buffers it points at
+        // live for the call. A peer that went away is an error to report,
+        // never a signal.
+        let n =
+            unsafe { libc::sendmsg(sock, &raw const msg, libc::MSG_NOSIGNAL) };
+        if let Ok(n) = usize::try_from(n) {
+            return Ok(n);
+        }
+        let e = io::Error::last_os_error();
+        if e.kind() != io::ErrorKind::Interrupted {
+            return Err(e);
+        }
+    }
+}
+
+/// Write one report line over the stage's socket end, framed by its
+/// newline, with at most one descriptor riding alongside as `SCM_RIGHTS`.
+/// The stage reports `Applied` this way so the filter's listener reaches
+/// the supervisor together with the words that describe it; `None` is the
+/// plain line, and nothing else changes on the wire.
+#[cfg(target_os = "linux")]
+pub fn send_report_with_fd(
+    sock: &mut std::os::unix::net::UnixStream,
+    line: &[u8],
+    fd: Option<i32>,
+) -> io::Result<()> {
+    use std::{io::Write, os::fd::AsRawFd};
+    let mut framed = Vec::with_capacity(line.len() + 1);
+    framed.extend_from_slice(line);
+    framed.push(b'\n');
+    let sent = sendmsg_with_fd(sock.as_raw_fd(), &framed, fd)?;
+    // A stream socket may take fewer bytes than offered. The descriptor
+    // went with the first of them, so the rest is a plain write.
+    sock.write_all(framed.get(sent..).unwrap_or_default())?;
+    sock.flush()
+}
+
+/// What the first `recvmsg` on the report socket delivered.
+#[cfg(target_os = "linux")]
+struct FirstRead {
+    /// How much of the buffer was filled; zero is EOF.
+    len: usize,
+    /// Every descriptor the control message carried, each owned so none
+    /// leaks whatever the caller decides about them.
+    fds: Vec<std::os::fd::OwnedFd>,
+    /// The kernel had more ancillary data than the buffer holds.
+    truncated: bool,
+}
+
+/// One `recvmsg` into `buf`, with room for a control message carrying
+/// one descriptor. Over a stream socket the ancillary data comes with the
+/// first bytes of the message it was sent with, so this is the read that
+/// captures it; the bytes after those carry none.
+#[cfg(target_os = "linux")]
+fn recvmsg_with_fd(sock: libc::c_int, buf: &mut [u8]) -> io::Result<FirstRead> {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let mut iov = libc::iovec {
+        iov_base: buf.as_mut_ptr().cast(),
+        iov_len: buf.len(),
+    };
+    let mut control = Control([0; CONTROL_SPACE]);
+    // SAFETY: all-zero is a valid msghdr; every pointer set below outlives
+    // the call.
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &raw mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.0.as_mut_ptr().cast();
+    msg.msg_controllen = CONTROL_SPACE as _;
+    let len = loop {
+        // SAFETY: msg is fully initialised and its buffers live for the
+        // call. A received descriptor is close-on-exec from the start, so
+        // it never leaks into anything this process executes.
+        let n = unsafe {
+            libc::recvmsg(sock, &raw mut msg, libc::MSG_CMSG_CLOEXEC)
+        };
+        if let Ok(n) = usize::try_from(n) {
+            break n;
+        }
+        let e = io::Error::last_os_error();
+        if e.kind() != io::ErrorKind::Interrupted {
+            return Err(e);
+        }
+    };
+    let truncated = msg.msg_flags & libc::MSG_CTRUNC != 0;
+    let mut fds = Vec::new();
+    // SAFETY: the kernel wrote `msg_controllen` bytes of control data into
+    // `control`, no more than it holds; CMSG_FIRSTHDR is null unless a
+    // whole header is among them, and `cmsg_len` is clamped to what was
+    // written before the data it describes is read. Every int read is a
+    // descriptor the kernel installed in this process for us to own.
+    unsafe {
+        let hdr = libc::CMSG_FIRSTHDR(&raw const msg);
+        if !hdr.is_null()
+            && (*hdr).cmsg_level == libc::SOL_SOCKET
+            && (*hdr).cmsg_type == libc::SCM_RIGHTS
+        {
+            let header = libc::CMSG_LEN(0) as usize;
+            let written = (msg.msg_controllen as usize).min(CONTROL_SPACE);
+            let total = ((*hdr).cmsg_len as usize).min(written);
+            let count = total.saturating_sub(header) / size_of::<libc::c_int>();
+            let data = libc::CMSG_DATA(hdr).cast::<libc::c_int>();
+            for i in 0..count {
+                fds.push(OwnedFd::from_raw_fd(std::ptr::read_unaligned(
+                    data.add(i),
+                )));
+            }
+        }
+    }
+    Ok(FirstRead {
+        len,
+        fds,
+        truncated,
+    })
+}
+
 /// How long the supervisor waits for the stage's report before refusing.
 /// `WILLIE_SESS_HARNESS_WAIT_MS` shortens it for the tests; default two
 /// seconds, far inside the daemon's ten-second readiness budget. An
@@ -317,10 +492,14 @@ pub fn report_wait() -> Duration {
 
 /// What reading the stage's report resolved to.
 #[cfg(target_os = "linux")]
+#[derive(Debug)]
 pub enum ReportOutcome {
     Applied {
         mechanisms: Vec<String>,
         unavailable: Vec<String>,
+        /// The syscall filter's notification listener, when the stage
+        /// sent one alongside the line.
+        listener: Option<std::os::fd::OwnedFd>,
     },
     Refused {
         code: String,
@@ -333,41 +512,93 @@ pub enum ReportOutcome {
 }
 
 /// Read one newline-framed report from the supervisor's socket end, with a
-/// deadline. EOF with no line is `HelperGone`; the deadline is `TimedOut`;
-/// an unparseable line is a refusal.
+/// deadline, together with any descriptor the stage sent alongside it. EOF
+/// with no line is `HelperGone`; the deadline is `TimedOut`; an
+/// unparseable line is a refusal, and so is ancillary data that is not
+/// exactly what one listener looks like — a descriptor that cannot be
+/// trusted is closed, never kept.
 #[cfg(target_os = "linux")]
 #[must_use]
 pub fn read_report(
     sock: &mut std::os::unix::net::UnixStream,
     within: Duration,
 ) -> ReportOutcome {
-    use std::io::Read;
+    use std::{io::Read, os::fd::AsRawFd};
 
     use willie_linux::sandbox::inner::Report;
     let _ = sock.set_read_timeout(Some(within));
-    let mut buf = Vec::new();
-    let mut byte = [0u8; 1];
-    loop {
-        match sock.read(&mut byte) {
-            Ok(0) => return ReportOutcome::HelperGone,
-            Ok(_) if byte[0] == b'\n' => break,
-            Ok(_) => buf.push(byte[0]),
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
-            {
-                return ReportOutcome::TimedOut;
+    // The first read is the one that carries the descriptor, so it is a
+    // recvmsg with room for one, into a buffer most reports fit whole.
+    let mut buf = [0u8; 512];
+    let FirstRead {
+        len,
+        mut fds,
+        truncated,
+    } = match recvmsg_with_fd(sock.as_raw_fd(), &mut buf) {
+        Ok(first) if first.len == 0 => return ReportOutcome::HelperGone,
+        Ok(first) => first,
+        Err(e)
+            if e.kind() == io::ErrorKind::WouldBlock
+                || e.kind() == io::ErrorKind::TimedOut =>
+        {
+            return ReportOutcome::TimedOut;
+        }
+        Err(_) => return ReportOutcome::HelperGone,
+    };
+    if truncated {
+        return ReportOutcome::Refused {
+            code: "sandbox_apply_failed".into(),
+            message: "the sandbox report carried a truncated control \
+                      message"
+                .into(),
+        };
+    }
+    if fds.len() > 1 {
+        return ReportOutcome::Refused {
+            code: "sandbox_apply_failed".into(),
+            message: format!(
+                "the sandbox report carried {} descriptors, where at most \
+                 one belongs",
+                fds.len()
+            ),
+        };
+    }
+    let listener = fds.pop();
+    // The line runs to its newline. Whatever the first read returned past
+    // it is nothing the stage sends — the report is its last word — and
+    // whatever is still to come carries no ancillary data, so the rest is
+    // plain reads.
+    let head = buf.get(..len).unwrap_or_default();
+    let mut line = head
+        .split(|&b| b == b'\n')
+        .next()
+        .unwrap_or_default()
+        .to_vec();
+    if !head.contains(&b'\n') {
+        let mut byte = [0u8; 1];
+        loop {
+            match sock.read(&mut byte) {
+                Ok(0) => return ReportOutcome::HelperGone,
+                Ok(_) if byte[0] == b'\n' => break,
+                Ok(_) => line.push(byte[0]),
+                Err(e)
+                    if e.kind() == io::ErrorKind::WouldBlock
+                        || e.kind() == io::ErrorKind::TimedOut =>
+                {
+                    return ReportOutcome::TimedOut;
+                }
+                Err(_) => return ReportOutcome::HelperGone,
             }
-            Err(_) => return ReportOutcome::HelperGone,
         }
     }
-    match serde_json::from_slice::<Report>(&buf) {
+    match serde_json::from_slice::<Report>(&line) {
         Ok(Report::Applied {
             mechanisms,
             unavailable,
         }) => ReportOutcome::Applied {
             mechanisms,
             unavailable,
+            listener,
         },
         Ok(Report::Refused { code, message }) => {
             ReportOutcome::Refused { code, message }
@@ -992,5 +1223,268 @@ mod tests {
         assert!(!children_include("42 x", 42));
         assert_eq!(parse_child_pids("41 42"), Some(vec![41, 42]));
         assert_eq!(parse_child_pids("41 x"), None);
+    }
+
+    /// A pipe as two owned ends, so a test that fails midway closes both.
+    #[cfg(target_os = "linux")]
+    fn pipe() -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        let mut ends = [0 as libc::c_int; 2];
+        // SAFETY: pipe writes two open descriptors into the array.
+        assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+        // SAFETY: both ends are open, ours, and each is owned exactly once.
+        unsafe {
+            (OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1]))
+        }
+    }
+
+    /// Send `line` (framed) with every one of `fds` in a single
+    /// `SCM_RIGHTS` message: the sender the production side never is,
+    /// so the receiver's fail-closed branches can be reached.
+    #[cfg(target_os = "linux")]
+    fn send_with_descriptors(
+        sock: &std::os::unix::net::UnixStream,
+        line: &[u8],
+        fds: &[libc::c_int],
+    ) {
+        use std::os::fd::AsRawFd;
+        let mut framed = line.to_vec();
+        framed.push(b'\n');
+        let payload = size_of_val(fds);
+        // SAFETY: pure size computations.
+        let space = unsafe { libc::CMSG_SPACE(payload as u32) } as usize;
+        // u64 cells: a control buffer is aligned to a long.
+        let mut control = vec![0u64; space.div_ceil(size_of::<u64>())];
+        let mut iov = libc::iovec {
+            iov_base: framed.as_mut_ptr().cast(),
+            iov_len: framed.len(),
+        };
+        // SAFETY: all-zero is a valid empty msghdr; the pointers set below
+        // outlive the call.
+        let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control.as_mut_ptr().cast();
+        msg.msg_controllen = space as _;
+        // SAFETY: `control` has CMSG_SPACE(payload) bytes, so the first
+        // header and `fds.len()` ints of data lie inside it.
+        unsafe {
+            let hdr = libc::CMSG_FIRSTHDR(&msg);
+            assert!(!hdr.is_null());
+            (*hdr).cmsg_level = libc::SOL_SOCKET;
+            (*hdr).cmsg_type = libc::SCM_RIGHTS;
+            (*hdr).cmsg_len = libc::CMSG_LEN(payload as u32) as _;
+            std::ptr::copy_nonoverlapping(
+                fds.as_ptr(),
+                libc::CMSG_DATA(hdr).cast::<libc::c_int>(),
+                fds.len(),
+            );
+        }
+        // SAFETY: msg is fully initialised.
+        let sent = unsafe { libc::sendmsg(sock.as_raw_fd(), &msg, 0) };
+        assert_eq!(usize::try_from(sent).ok(), Some(framed.len()));
+    }
+
+    /// The report channel can carry a descriptor: one end of a pipe sent
+    /// as `SCM_RIGHTS` with a report line arrives on the other socket
+    /// together with the line, and is the live pipe end — a byte written
+    /// into the pipe comes out of the received descriptor.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_report_channel_round_trips_a_descriptor() {
+        use std::{
+            fs::File,
+            io::{Read, Write},
+            os::fd::AsRawFd,
+        };
+
+        let (mut a, mut b) = report_socket().unwrap();
+        let (read_end, write_end) = pipe();
+
+        send_report_with_fd(
+            &mut a,
+            br#"{"result":"applied","mechanisms":["x"]}"#,
+            Some(read_end.as_raw_fd()),
+        )
+        .unwrap();
+        // The sender's copy goes away: the received one must stand alone.
+        drop(read_end);
+
+        let outcome = read_report(&mut b, Duration::from_secs(2));
+        let ReportOutcome::Applied {
+            mechanisms,
+            listener,
+            ..
+        } = outcome
+        else {
+            panic!("{outcome:?}");
+        };
+        assert_eq!(mechanisms, vec!["x".to_owned()]);
+        let listener = listener.expect("a descriptor with the report");
+        File::from(write_end).write_all(b"z").unwrap();
+        let mut got = [0u8; 1];
+        File::from(listener).read_exact(&mut got).unwrap();
+        assert_eq!(got[0], b'z');
+    }
+
+    /// The socket is a stream, so the descriptor arrives with the first
+    /// bytes, not with the newline: a line longer than the first read
+    /// still comes through whole, and the descriptor with it.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_report_longer_than_the_first_read_arrives_whole_with_its_descriptor() {
+        use std::os::fd::AsRawFd;
+
+        let (mut a, mut b) = report_socket().unwrap();
+        let (read_end, _write_end) = pipe();
+        let mechanisms: Vec<String> =
+            (0..200).map(|i| format!("mechanism-{i:04}")).collect();
+        let line = serde_json::to_vec(
+            &willie_linux::sandbox::inner::Report::Applied {
+                mechanisms: mechanisms.clone(),
+                unavailable: vec![],
+            },
+        )
+        .unwrap();
+        assert!(line.len() > 2048, "{}", line.len());
+
+        send_report_with_fd(&mut a, &line, Some(read_end.as_raw_fd())).unwrap();
+
+        let outcome = read_report(&mut b, Duration::from_secs(2));
+        let ReportOutcome::Applied {
+            mechanisms: got,
+            listener,
+            ..
+        } = outcome
+        else {
+            panic!("{outcome:?}");
+        };
+        assert_eq!(got, mechanisms);
+        assert!(listener.is_some());
+    }
+
+    /// Without a descriptor the channel is what it was: the line alone,
+    /// and no listener.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_report_without_a_descriptor_has_no_listener() {
+        let (mut a, mut b) = report_socket().unwrap();
+
+        send_report_with_fd(
+            &mut a,
+            br#"{"result":"applied","mechanisms":["x"],"unavailable":["y"]}"#,
+            None,
+        )
+        .unwrap();
+
+        let outcome = read_report(&mut b, Duration::from_secs(2));
+        let ReportOutcome::Applied {
+            mechanisms,
+            unavailable,
+            listener,
+        } = outcome
+        else {
+            panic!("{outcome:?}");
+        };
+        assert_eq!(mechanisms, vec!["x".to_owned()]);
+        assert_eq!(unavailable, vec!["y".to_owned()]);
+        assert!(listener.is_none());
+    }
+
+    /// A refusal carries no descriptor; one attached anyway is closed,
+    /// not kept, and the refusal is what the stage said.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_refused_line_is_a_refusal_whatever_rides_with_it() {
+        use std::os::fd::AsRawFd;
+
+        let (mut a, mut b) = report_socket().unwrap();
+        let (read_end, _write_end) = pipe();
+
+        send_report_with_fd(
+            &mut a,
+            br#"{"result":"refused","code":"c","message":"m"}"#,
+            Some(read_end.as_raw_fd()),
+        )
+        .unwrap();
+
+        let outcome = read_report(&mut b, Duration::from_secs(2));
+        let ReportOutcome::Refused { code, message } = outcome else {
+            panic!("{outcome:?}");
+        };
+        assert_eq!(code, "c");
+        assert_eq!(message, "m");
+    }
+
+    /// `CMSG_SPACE` rounds one int up to a long, so a buffer sized for one
+    /// descriptor has room for two, and the kernel fills it without
+    /// flagging truncation. The count is checked, not assumed: two
+    /// descriptors are refused, fail-closed, and both are closed.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn two_descriptors_on_the_report_are_refused() {
+        use std::os::fd::AsRawFd;
+
+        let (a, mut b) = report_socket().unwrap();
+        let (r1, _w1) = pipe();
+        let (r2, _w2) = pipe();
+
+        send_with_descriptors(
+            &a,
+            br#"{"result":"applied","mechanisms":["x"]}"#,
+            &[r1.as_raw_fd(), r2.as_raw_fd()],
+        );
+
+        let outcome = read_report(&mut b, Duration::from_secs(2));
+        let ReportOutcome::Refused { code, message } = outcome else {
+            panic!("{outcome:?}");
+        };
+        assert_eq!(code, "sandbox_apply_failed");
+        assert!(message.contains("2 descriptors"), "{message}");
+    }
+
+    /// More descriptors than the buffer holds come back flagged
+    /// `MSG_CTRUNC`: the kernel closed what did not fit, and what did fit
+    /// cannot be trusted to be the listener. Refused, fail-closed.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_truncated_control_message_is_refused() {
+        use std::os::fd::AsRawFd;
+
+        let (a, mut b) = report_socket().unwrap();
+        let (r1, _w1) = pipe();
+        let (r2, _w2) = pipe();
+        let (r3, _w3) = pipe();
+
+        send_with_descriptors(
+            &a,
+            br#"{"result":"applied","mechanisms":["x"]}"#,
+            &[r1.as_raw_fd(), r2.as_raw_fd(), r3.as_raw_fd()],
+        );
+
+        let outcome = read_report(&mut b, Duration::from_secs(2));
+        let ReportOutcome::Refused { code, message } = outcome else {
+            panic!("{outcome:?}");
+        };
+        assert_eq!(code, "sandbox_apply_failed");
+        assert!(message.contains("truncated"), "{message}");
+    }
+
+    /// The deadline still holds with the new read: a peer that never
+    /// writes is `TimedOut`, and one that closes is `HelperGone`.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_deadline_and_the_peer_s_exit_are_still_told_apart() {
+        let (a, mut b) = report_socket().unwrap();
+
+        assert!(matches!(
+            read_report(&mut b, Duration::from_millis(50)),
+            ReportOutcome::TimedOut
+        ));
+        drop(a);
+        assert!(matches!(
+            read_report(&mut b, Duration::from_millis(50)),
+            ReportOutcome::HelperGone
+        ));
     }
 }
