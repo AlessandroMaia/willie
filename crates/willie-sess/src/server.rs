@@ -260,8 +260,12 @@ pub fn start(shared: &Arc<Shared>, listener: UnixListener) -> io::Result<()> {
 /// Pump PTY output to the ring and every terminal until the session's
 /// output ends. The output is filtered before it reaches the ring, so the
 /// sequences that act on the host or echo attacker text are absent from
-/// what any client sees, a late terminal's replay included. This task
-/// discards the names of what was dropped; recording them is Task 2's.
+/// what any client sees, a late terminal's replay included. Each dropped
+/// sequence is recorded as a `sandbox_denied` event of class `terminal`,
+/// named by what was dropped, coalesced by the same tally as the syscall
+/// denials and flushed before the exit. The names are recorded before the
+/// broadcast, which is what takes the `screen` lock: `record_denial` takes
+/// the tally then `clients`, and `screen` is never held across it.
 pub fn serve(shared: &Shared) {
     let mut buf = [0u8; 16 * 1024];
     let mut filter = VtFilter::new();
@@ -274,6 +278,9 @@ pub fn serve(shared: &Shared) {
                 out.clear();
                 dropped.clear();
                 filter.feed(&buf[..n], &mut out, &mut dropped);
+                for &name in &dropped {
+                    record_denial(shared, "terminal", name);
+                }
                 if !out.is_empty() {
                     broadcast(shared, &out);
                 }
