@@ -1,4 +1,4 @@
-import type { Session } from "@/lib/proto";
+import type { Denied, SandboxState, Session } from "@/lib/proto";
 
 /**
  * A non-terminal session — the UI's "live vs history" split. This is the
@@ -40,4 +40,60 @@ export function recentTerminal(sessions: Session[], limit: number): Session[] {
     .filter((s) => !isLive(s))
     .sort((a, b) => at(b).localeCompare(at(a)))
     .slice(0, limit);
+}
+
+export type Posture = "full" | "reduced" | "unknown";
+
+const EMPTY_SANDBOX: SandboxState = {
+  applied: [],
+  unavailable: [],
+  degraded: [],
+  denied: [],
+};
+
+/**
+ * A session's sandbox report as a fully-populated value. A session
+ * recorded before part 2 carries no `sandbox` field on the wire; it
+ * normalises to the all-empty state rather than `undefined`, so every
+ * caller reads arrays, never a crash.
+ */
+export function sandboxOf(session: Session): SandboxState {
+  const sb = session.sandbox;
+
+  if (!sb) return EMPTY_SANDBOX;
+
+  return {
+    applied: sb.applied ?? [],
+    unavailable: sb.unavailable ?? [],
+    degraded: sb.degraded ?? [],
+    denied: sb.denied ?? [],
+  };
+}
+
+/**
+ * The boundary a session ran under, at a glance. `full`: everything
+ * reported applied and nothing missing or degraded. `reduced`: a
+ * mechanism the kernel could not offer, or one that degraded. `unknown`:
+ * nothing reported yet — a session still `creating`, or one recorded
+ * before part 2.
+ */
+export function sandboxPosture(session: Session): Posture {
+  const sb = sandboxOf(session);
+
+  if (sb.applied.length === 0) return "unknown";
+
+  if (sb.unavailable.length > 0 || sb.degraded.length > 0) return "reduced";
+
+  return "full";
+}
+
+/** The session's denials, highest count first, with the total across all. */
+export function denials(session: Session): { items: Denied[]; total: number } {
+  const items = [...sandboxOf(session).denied].sort(
+    (a, b) => b.count - a.count,
+  );
+
+  const total = items.reduce((sum, d) => sum + d.count, 0);
+
+  return { items, total };
 }
