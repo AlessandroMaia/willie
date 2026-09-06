@@ -21,6 +21,7 @@ mod server;
 mod signals;
 mod spec;
 mod tally;
+mod vt_filter;
 
 use std::process::ExitCode;
 
@@ -504,6 +505,8 @@ fn main() -> ExitCode {
     );
     // `tally` is pure as well, driven only by the Linux server thread.
     let _ = (tally::Tally::new, tally::Tally::record, tally::Tally::flush);
+    // `vt_filter` is pure and portable, driven only by the Linux `serve`.
+    let _ = (vt_filter::VtFilter::new, vt_filter::VtFilter::feed);
     eprintln!(
         "{} runs only inside the Willie Linux distribution",
         version_line()
