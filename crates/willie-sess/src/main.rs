@@ -57,7 +57,7 @@ fn spawn_failure(error: &pty::SpawnError) -> (&'static str, String) {
 /// The detached grandchild: set the session up and answer the launcher.
 #[cfg(target_os = "linux")]
 fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
-    use std::{path::Path, sync::Arc};
+    use std::{os::fd::AsRawFd, path::Path, sync::Arc};
 
     use willie_core::session::SessionEventKind;
 
@@ -109,18 +109,38 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
     // Fail closed before a PTY exists: an unknown harness, a spec with no
     // home, a missing helper, a missing binary or workspace, a cache
     // directory that cannot be made — each refuses with its own code.
-    let prepared = match sandbox::prepare(&spec, &sandbox::helper_path()) {
-        Ok(prepared) => prepared,
+    let inner_exe = sandbox::inner_exe_path();
+    let prepared =
+        match sandbox::prepare(&spec, &sandbox::helper_path(), &inner_exe) {
+            Ok(prepared) => prepared,
+            Err(e) => {
+                let text = e.to_string();
+                events.append(SessionEventKind::Failed {
+                    code: e.code().into(),
+                    message: text.clone(),
+                });
+                let _ = reply.fail(e.code(), &text);
+                return ExitCode::from(EXIT_FAILURE);
+            }
+        };
+    // The report socket: the stage's end is inherited by the helper (and
+    // through it by the in-namespace stage) and named in the vector; the
+    // supervisor keeps its own end to read the one-line report.
+    let (mut ours, theirs) = match sandbox::report_socket() {
+        Ok(pair) => pair,
         Err(e) => {
-            let text = e.to_string();
+            let text = format!("cannot make the report socket: {e}");
             events.append(SessionEventKind::Failed {
-                code: e.code().into(),
+                code: "supervisor_spawn_failed".into(),
                 message: text.clone(),
             });
-            let _ = reply.fail(e.code(), &text);
+            let _ = reply.fail("supervisor_spawn_failed", &text);
             return ExitCode::from(EXIT_FAILURE);
         }
     };
+    let child_fd = theirs.as_raw_fd();
+    let helper = sandbox::helper_path();
+    let argv = sandbox::helper_argv(&prepared, &helper, child_fd);
     let (master, slave) = match pty::open() {
         Ok(pair) => pair,
         Err(e) => {
@@ -134,13 +154,16 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
         }
     };
     // argv[0] is now the helper: an exec failure here is the helper's,
-    // never the harness's, which `prepare` already checked.
+    // never the harness's, which `prepare` already checked. The stage's
+    // end of the report socket is kept open across the exec so bwrap
+    // inherits it and passes it to the inner stage at the same number.
     let child = match pty::spawn(
         &master,
         slave,
-        &prepared.argv,
+        &argv,
         &spec.workspace,
         &spec.env,
+        Some(child_fd),
     ) {
         Ok(pid) => pid,
         Err(e) => {
@@ -153,6 +176,19 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
             return ExitCode::from(EXIT_FAILURE);
         }
     };
+    // The helper inherited `theirs`; drop the supervisor's copy so the
+    // socket sees EOF when the stage or the helper closes it.
+    drop(theirs);
+    // Hand the stage its request — the harness argv it execs and the
+    // limits it sets — the frame it blocks reading before it reports. The
+    // bytes wait in the socket buffer until it reads them. A write that
+    // fails means the stage is already unreachable: a helper that died
+    // before reading closes the socket, and `SIGPIPE` is ignored, so the
+    // write returns a broken pipe rather than killing the supervisor.
+    // That is not handled here — `read_report` resolves it, as `HelperGone`
+    // when the peer is gone (draining the helper's own words) or as
+    // `TimedOut` if the stage is somehow alive but never reads.
+    let _ = sandbox::write_request(&mut ours, &prepared.request);
     let pid = u32::try_from(child).unwrap_or(0);
     // Block the shutdown signals now: the fork has happened, so nothing
     // downstream of it inherits the block, and no supervisor thread
@@ -162,63 +198,76 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
     // exec, so blocking any earlier would hand the block to the helper
     // and through it to the harness, and the ladder's `SIGTERM` would
     // sit pending against the harness instead of being delivered.
-    // Everything from here to the waiter — the wait for the harness
-    // above all — is time in which a signal to the supervisor would
-    // otherwise kill it outright, with no `failed` recorded and no
-    // client told why; blocked, it merely stays pending.
     signals::block_shutdown_signals();
-    // The helper builds the namespace before it forks the harness, so
-    // wait for the harness to exist before saying the session started
-    // and before answering ready: both promised a running harness before
-    // the helper stood between them, and a stop that arrives inside that
-    // window must reach the harness, not the group.
-    let harness =
-        match sandbox::wait_for_harness(child, sandbox::harness_wait()) {
-            sandbox::HarnessWait::Running(pid) => Some(pid),
-            sandbox::HarnessWait::GaveUp => None,
-            // The helper refused while building the namespace. Everything
-            // visible before it ran is already a coded refusal, so this is
-            // the one class left, and its only channel is the terminal
-            // nobody is attached to yet: drain it, or the session becomes a
-            // start and an exit with no cause anywhere.
-            // Nothing is gone for certain here: a harness that ran and
-            // exited inside one poll leaves the same trace. Only the
-            // helper's own words tell the two apart, so a session whose
-            // harness merely finished first is left to the ordinary
-            // path, with the pid the ladder would have used unknown —
-            // which costs nothing, since it has already exited.
-            sandbox::HarnessWait::HelperGone => {
-                let said = pty::drain(&master, sandbox::HELPER_DRAIN);
-                if !sandbox::is_helper_refusal(&said) {
-                    // Nothing is certain here: a harness that ran and
-                    // exited inside one poll leaves the same trace as a
-                    // helper that never forked one. Only the helper's
-                    // own words tell them apart, so a session whose
-                    // harness merely finished first takes the ordinary
-                    // path, with the pid the ladder would have used
-                    // unknown — which costs nothing, since it is gone.
-                    None
-                } else {
-                    let exit = pty::wait(child).unwrap_or(pty::Exit {
-                        code: None,
-                        signal: None,
-                    });
-                    let text =
-                        sandbox::apply_failure(&said, exit.code, exit.signal);
+    // Read the stage's report with the ceiling. Four outcomes; three of
+    // them refuse the session and end it, one starts it.
+    let (mechanisms, unavailable) =
+        match sandbox::read_report(&mut ours, sandbox::report_wait()) {
+            sandbox::ReportOutcome::Applied {
+                mechanisms,
+                unavailable,
+            } => {
+                if let Some(missing) =
+                    willie_linux::sandbox::inner::required_missing(&mechanisms)
+                {
+                    let text = format!("the sandbox did not apply {missing}");
                     events.append(SessionEventKind::Failed {
-                        code: "sandbox_apply_failed".into(),
+                        code: "sandbox_backend_missing".into(),
                         message: text.clone(),
                     });
-                    let _ = reply.fail("sandbox_apply_failed", &text);
+                    // SAFETY: signalling our own child's process group.
+                    unsafe { libc::kill(-child, libc::SIGKILL) };
+                    let _ = reply.fail("sandbox_backend_missing", &text);
                     return ExitCode::from(EXIT_FAILURE);
                 }
+                (mechanisms, unavailable)
+            }
+            sandbox::ReportOutcome::Refused { code, message } => {
+                events.append(SessionEventKind::Failed {
+                    code: code.clone(),
+                    message: message.clone(),
+                });
+                // SAFETY: signalling our own child's process group.
+                unsafe { libc::kill(-child, libc::SIGKILL) };
+                let _ = reply.fail(&code, &message);
+                return ExitCode::from(EXIT_FAILURE);
+            }
+            sandbox::ReportOutcome::HelperGone => {
+                // The helper died before the stage reported; its own words
+                // are on the terminal nobody is attached to. Drain and
+                // carry them — part 1's path.
+                let said = pty::drain(&master, sandbox::HELPER_DRAIN);
+                let exit = pty::wait(child).unwrap_or(pty::Exit {
+                    code: None,
+                    signal: None,
+                });
+                let text =
+                    sandbox::apply_failure(&said, exit.code, exit.signal);
+                events.append(SessionEventKind::Failed {
+                    code: "sandbox_apply_failed".into(),
+                    message: text.clone(),
+                });
+                let _ = reply.fail("sandbox_apply_failed", &text);
+                return ExitCode::from(EXIT_FAILURE);
+            }
+            sandbox::ReportOutcome::TimedOut => {
+                let text = "the sandbox reported nothing within the deadline"
+                    .to_owned();
+                events.append(SessionEventKind::Failed {
+                    code: "sandbox_apply_failed".into(),
+                    message: text.clone(),
+                });
+                // SAFETY: signalling our own child's process group.
+                unsafe { libc::kill(-child, libc::SIGKILL) };
+                let _ = reply.fail("sandbox_apply_failed", &text);
+                return ExitCode::from(EXIT_FAILURE);
             }
         };
-    // Only now is anything applied: a helper that refused built no
-    // namespace, and an event saying otherwise would be the record
-    // claiming what did not happen.
+    // The stage reported success, so the harness is running behind it.
+    let harness = sandbox::harness_pid(child);
     events.append(SessionEventKind::SandboxApplied {
-        mechanisms: prepared.mechanisms,
+        mechanisms,
+        unavailable,
     });
     // The pid a session records is the helper's monitor, the supervisor's
     // own child (decision 0016); the harness pid is the ladder's business.
@@ -285,6 +334,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         cli::Command::Run { spec } => run(&spec),
+        cli::Command::Inner { fd } => sandbox::inner::run_inner(fd),
         cli::Command::Usage(reason) => {
             eprintln!("willie-sess: {reason}");
             eprintln!("{}", cli::USAGE);
@@ -311,12 +361,12 @@ fn main() -> ExitCode {
         sandbox::parse_children,
         sandbox::parse_child_pids,
         sandbox::children_include,
-        sandbox::parse_state,
-        sandbox::MECHANISMS,
+        sandbox::helper_argv,
         sandbox::helper_path,
         sandbox::apply_failure,
         sandbox::HELPER_DRAIN,
-        sandbox::is_helper_refusal,
+        sandbox::inner::not_in_namespace,
+        sandbox::inner::clamp,
     );
     // `screen` is pure and compiled on every target, yet only the Linux
     // socket code drives it; name its items so the host build checks them.

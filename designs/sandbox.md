@@ -352,7 +352,8 @@ One task, one commit:
 4. the argument vector and the mounts, as data; then the launch through
    them — *both landed*
 5. the syscall filter, denying only
-6. the limits, and the required-subset decision with its report
+6. the limits, and the required-subset decision with its report —
+   *landed (part 2 phase 1)*
 7. path-based restriction, applied after the re-exec
 8. the notification loop and the denial event
 9. the terminal filter

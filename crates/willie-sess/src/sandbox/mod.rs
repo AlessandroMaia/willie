@@ -3,26 +3,25 @@
 //! ladder map back to the harness. The plan itself is data in
 //! `willie_linux::sandbox`; this is the I/O around it.
 
-use std::{fmt, fs, io, path::Path};
+pub mod inner;
+
 #[cfg(target_os = "linux")]
-use std::{
-    thread,
-    time::{Duration, Instant},
-};
+use std::time::Duration;
+use std::{fmt, fs, io, path::Path};
 
 use willie_core::session::SessionSpec;
+// The re-exec stage lives in this crate's own `inner` submodule, so the
+// request/report types cross-linked from `willie_linux` are pulled in by
+// name rather than under a clashing `inner` alias.
+use willie_linux::sandbox::inner::{Request, Rlimits};
 use willie_linux::sandbox::{self as plan, bwrap};
 
-/// What this version applies, named in the `sandbox_applied` event. The
-/// syscall filter, the limits and path-based restriction join the list
-/// when they land, and a session that ran with less says so forever.
-pub const MECHANISMS: [&str; 2] = ["namespaces", "mounts"];
-
-/// Everything the supervisor needs to spawn the confined session.
+/// Everything the supervisor needs to spawn the confined session, bar the
+/// report descriptor it creates at spawn time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Prepared {
-    pub argv: Vec<String>,
-    pub mechanisms: Vec<String>,
+    pub plan: plan::Plan,
+    pub request: Request,
 }
 
 #[derive(Debug)]
@@ -146,13 +145,14 @@ fn rebind_source(ops: &mut [plan::Op], destination: &str, resolved: &str) {
 pub fn prepare(
     spec: &SessionSpec,
     helper: &Path,
+    inner_exe: &str,
 ) -> Result<Prepared, PrepareError> {
     let harness = willie_harness::registry()
         .into_iter()
         .find(|h| h.id() == spec.harness)
         .ok_or_else(|| PrepareError::HarnessUnknown(spec.harness.clone()))?;
-    let mut plan =
-        plan::plan(spec, harness.as_ref()).map_err(PrepareError::Plan)?;
+    let mut plan = plan::plan(spec, harness.as_ref(), inner_exe)
+        .map_err(PrepareError::Plan)?;
     if !helper.is_file() {
         return Err(PrepareError::BackendMissing(
             helper.to_string_lossy().into_owned(),
@@ -228,23 +228,161 @@ pub fn prepare(
             return Err(PrepareError::BindSource { path: src.clone() });
         }
     }
-    // The binary that was verified above is the binary that runs: the
-    // vector names where the helper lives, and a test points the
-    // supervisor at another one.
-    let mut argv = bwrap::argv(&plan);
+    // The vector is rendered in `session_main`, where the report
+    // descriptor exists; here the plan and the request the stage will read
+    // are all that is settled. The request carries the harness argv the
+    // stage execs and the default limits it sets. The helper verified
+    // above becomes the vector's `argv[0]` there.
+    Ok(Prepared {
+        request: Request {
+            argv: plan.argv.clone(),
+            rlimits: Rlimits::DEFAULT,
+        },
+        plan,
+    })
+}
+
+/// Render the helper's argument vector for this prepared session, running
+/// the inner stage on `inner_fd`. `helper` is the namespace helper the
+/// supervisor verified; the vector's `argv[0]` is it.
+#[must_use]
+pub fn helper_argv(
+    prepared: &Prepared,
+    helper: &Path,
+    inner_fd: i32,
+) -> Vec<String> {
+    let mut argv = bwrap::argv(&prepared.plan, inner_fd);
     if let Some(first) = argv.first_mut() {
         *first = helper.to_string_lossy().into_owned();
     }
-    Ok(Prepared {
-        argv,
-        mechanisms: MECHANISMS.iter().map(|m| (*m).to_owned()).collect(),
-    })
+    argv
+}
+
+/// Where the re-executed supervisor lives: this binary's own resolved
+/// path, so a test drives the staged one and production the installed
+/// one. `WILLIE_SESS_INNER_EXE` overrides it, test-only.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn inner_exe_path() -> String {
+    if let Some(p) = std::env::var_os("WILLIE_SESS_INNER_EXE") {
+        return p.to_string_lossy().into_owned();
+    }
+    fs::read_link("/proc/self/exe")
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| willie_linux::paths::SUPERVISOR_BIN.to_owned())
+}
+
+/// A socketpair for the report: (supervisor end, stage end).
+#[cfg(target_os = "linux")]
+pub fn report_socket() -> io::Result<(
+    std::os::unix::net::UnixStream,
+    std::os::unix::net::UnixStream,
+)> {
+    std::os::unix::net::UnixStream::pair()
+}
+
+/// Hand the stage its request over the supervisor's socket end: one
+/// newline-framed JSON line, the frame the stage blocks reading before it
+/// reports. Written after the spawn, so the bytes wait in the socket
+/// buffer until the re-executed supervisor reads them.
+#[cfg(target_os = "linux")]
+pub fn write_request(
+    sock: &mut std::os::unix::net::UnixStream,
+    request: &Request,
+) -> io::Result<()> {
+    use std::io::Write;
+    let mut line = serde_json::to_vec(request).map_err(io::Error::other)?;
+    line.push(b'\n');
+    sock.write_all(&line)?;
+    sock.flush()
+}
+
+/// How long the supervisor waits for the stage's report before refusing.
+/// `WILLIE_SESS_HARNESS_WAIT_MS` shortens it for the tests; default two
+/// seconds, far inside the daemon's ten-second readiness budget. An
+/// overriding value is floored to one millisecond: `set_read_timeout`
+/// rejects `Duration::ZERO` with `InvalidInput` and leaves the socket
+/// blocking, so a `0` override still means "time out almost at once" —
+/// its intent — rather than block until the daemon's own budget runs out.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn report_wait() -> Duration {
+    std::env::var("WILLIE_SESS_HARNESS_WAIT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .map_or(Duration::from_secs(2), |v| {
+            Duration::from_millis(v).max(Duration::from_millis(1))
+        })
+}
+
+/// What reading the stage's report resolved to.
+#[cfg(target_os = "linux")]
+pub enum ReportOutcome {
+    Applied {
+        mechanisms: Vec<String>,
+        unavailable: Vec<String>,
+    },
+    Refused {
+        code: String,
+        message: String,
+    },
+    /// EOF before any report: the helper died building the namespace.
+    HelperGone,
+    /// The ceiling passed with nothing read.
+    TimedOut,
+}
+
+/// Read one newline-framed report from the supervisor's socket end, with a
+/// deadline. EOF with no line is `HelperGone`; the deadline is `TimedOut`;
+/// an unparseable line is a refusal.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn read_report(
+    sock: &mut std::os::unix::net::UnixStream,
+    within: Duration,
+) -> ReportOutcome {
+    use std::io::Read;
+
+    use willie_linux::sandbox::inner::Report;
+    let _ = sock.set_read_timeout(Some(within));
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        match sock.read(&mut byte) {
+            Ok(0) => return ReportOutcome::HelperGone,
+            Ok(_) if byte[0] == b'\n' => break,
+            Ok(_) => buf.push(byte[0]),
+            Err(e)
+                if e.kind() == io::ErrorKind::WouldBlock
+                    || e.kind() == io::ErrorKind::TimedOut =>
+            {
+                return ReportOutcome::TimedOut;
+            }
+            Err(_) => return ReportOutcome::HelperGone,
+        }
+    }
+    match serde_json::from_slice::<Report>(&buf) {
+        Ok(Report::Applied {
+            mechanisms,
+            unavailable,
+        }) => ReportOutcome::Applied {
+            mechanisms,
+            unavailable,
+        },
+        Ok(Report::Refused { code, message }) => {
+            ReportOutcome::Refused { code, message }
+        }
+        Err(e) => ReportOutcome::Refused {
+            code: "sandbox_apply_failed".into(),
+            message: format!("unreadable sandbox report: {e}"),
+        },
+    }
 }
 
 /// Where the namespace helper lives. `WILLIE_SESS_HELPER_BIN` points
 /// the supervisor at another one so a test can drive the refusal path
 /// without a kernel that refuses; test-only, like the stop grace and
-/// the harness wait.
+/// the report wait.
 #[must_use]
 pub fn helper_path() -> std::path::PathBuf {
     std::env::var_os("WILLIE_SESS_HELPER_BIN")
@@ -265,19 +403,6 @@ pub fn helper_exit(
         (Some(c), None) if (129..=192).contains(&c) => (None, Some(c - 128)),
         other => other,
     }
-}
-
-/// The state character in a `/proc/<pid>/stat` line: the field after
-/// the command, which is parenthesised and may itself hold spaces and
-/// parentheses, so it is read after the last `)`.
-#[must_use]
-pub fn parse_state(stat: &str) -> Option<char> {
-    stat.rsplit_once(')')?
-        .1
-        .split_whitespace()
-        .next()?
-        .chars()
-        .next()
 }
 
 /// Every pid a `/proc/<pid>/task/<pid>/children` file names, or none if
@@ -344,52 +469,6 @@ pub fn harness_still_behind(
         .is_ok_and(|text| children_include(&text, harness))
 }
 
-/// How long the supervisor waits for the helper to build the namespace
-/// and fork the harness before answering ready. Measured at about eight
-/// milliseconds; the ceiling is generous because the daemon allows ten
-/// seconds for the readiness line, and a helper that dies during setup
-/// is noticed long before it expires.
-#[cfg(target_os = "linux")]
-pub const HARNESS_WAIT: Duration = Duration::from_secs(2);
-
-#[cfg(target_os = "linux")]
-const HARNESS_POLL: Duration = Duration::from_millis(2);
-
-/// The ceiling on that wait. `WILLIE_SESS_HARNESS_WAIT_MS` shortens it
-/// for the tests, the way `WILLIE_SESS_STOP_GRACE_MS` shortens the stop
-/// ladder; the default is `HARNESS_WAIT`.
-#[cfg(target_os = "linux")]
-#[must_use]
-pub fn harness_wait() -> Duration {
-    std::env::var("WILLIE_SESS_HARNESS_WAIT_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .map_or(HARNESS_WAIT, Duration::from_millis)
-}
-
-/// The harness process, waited for. The helper is executed some
-/// milliseconds before it unshares and forks, so right after the spawn
-/// there is nothing behind the monitor yet, and a stop arriving in that
-/// window would find no harness and signal the group — which ends the
-/// session instead of asking it to. Waiting here closes the window:
-/// afterwards the readiness line and the `started` event both mean the
-/// harness is running, as they did before the helper stood between them.
-///
-/// How the wait for the harness ended. The two ways it can end without
-/// a harness are not the same session: one is a helper that refused
-/// while building the namespace, which is a failure with a cause worth
-/// recording, and the other is a helper still working past the ceiling,
-/// which starts the session with the promise given up.
-#[cfg(target_os = "linux")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HarnessWait {
-    Running(libc::pid_t),
-    /// The helper's monitor is gone and no harness ever appeared.
-    HelperGone,
-    /// The ceiling passed with the helper still alive.
-    GaveUp,
-}
-
 /// At most this much of what the helper said reaches the record. The
 /// log is append-only and read by people; one runaway helper must not
 /// fill a screen of it.
@@ -422,31 +501,6 @@ fn helper_words(raw: &[u8]) -> Option<String> {
     Some(joined)
 }
 
-/// The prefix the helper puts on every message it dies with.
-const HELPER_PREFIX: &str = "bwrap: ";
-
-/// Whether what came back from the terminal is the helper's own refusal
-/// rather than the harness's output.
-///
-/// Nothing the helper offers says "the namespace was built". It forks
-/// the sandboxed child *before* it mounts anything, so a child having
-/// existed proves nothing, and a harness that runs and exits inside one
-/// poll of the wait leaves exactly the same trace as a helper that never
-/// forked one: no grandchild, and a monitor already gone.
-///
-/// What does tell them apart is that the helper prefixes what it says
-/// when it gives up. A harness whose very first line of output were that
-/// prefix would be mislabelled; the cost is one wrong word in one event,
-/// and the session is recorded either way.
-#[must_use]
-pub fn is_helper_refusal(raw: &[u8]) -> bool {
-    String::from_utf8_lossy(raw)
-        .lines()
-        .map(|line| line.trim_end_matches('\r').trim_start())
-        .find(|line| !line.is_empty())
-        .is_some_and(|line| line.starts_with(HELPER_PREFIX))
-}
-
 /// The message for a helper that refused after it was executed.
 ///
 /// Everything the supervisor can see before the helper runs is already
@@ -477,47 +531,6 @@ pub fn apply_failure(
              started, and said nothing"
             .to_owned(),
     }
-}
-
-/// Waits for the harness the helper forks, so that "ready" and
-/// "started" both mean a running harness, as they did before the helper
-/// stood between the supervisor and it.
-#[cfg(target_os = "linux")]
-#[must_use]
-pub fn wait_for_harness(monitor: libc::pid_t, within: Duration) -> HarnessWait {
-    let until = Instant::now() + within;
-    loop {
-        // The deadline is tested first, so a ceiling of zero always
-        // gives up however fast the helper is: a test that asks for no
-        // wait at all must get the branch it asked for, not a race.
-        if Instant::now() >= until {
-            // The session starts anyway, so say that the promise the
-            // wait exists to keep has just been given up: the ladder
-            // will have to find the harness itself, and may not.
-            eprintln!(
-                "willie-sess: no harness appeared behind the helper \
-                 within {within:?}; starting anyway"
-            );
-            return HarnessWait::GaveUp;
-        }
-        if let Some(pid) = harness_pid(monitor) {
-            return HarnessWait::Running(pid);
-        }
-        if !can_still_fork(monitor) {
-            return HarnessWait::HelperGone;
-        }
-        thread::sleep(HARNESS_POLL);
-    }
-}
-
-/// Whether the helper's monitor is still a process that could fork the
-/// harness: its entry is readable and it is not a zombie.
-#[cfg(target_os = "linux")]
-fn can_still_fork(pid: libc::pid_t) -> bool {
-    fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|stat| parse_state(&stat))
-        .is_some_and(|state| state != 'Z')
 }
 
 #[cfg(target_os = "linux")]
@@ -557,6 +570,15 @@ mod tests {
         }
     }
 
+    /// A touched file standing in for the re-executed supervisor. Its
+    /// read-only bind is non-tolerant, so `prepare` checks it exists like
+    /// any other source; the tests point it at a real file.
+    fn inner_bin(root: &Path) -> PathBuf {
+        let p = root.join("willie-sess");
+        touch(&p);
+        p
+    }
+
     /// A spec whose paths all live under `root`, with the per-project
     /// caches on so `prepare` has directories to create.
     fn spec_under(root: &Path, binary: &str, workspace: &str) -> SessionSpec {
@@ -581,20 +603,27 @@ mod tests {
     }
 
     #[test]
-    fn prepare_creates_the_per_project_caches_and_renders_the_vector() {
+    fn prepare_creates_the_per_project_caches_and_carries_the_request() {
         let root = scratch("ok");
         let helper = root.join("bwrap");
         touch(&helper);
         let bin = root.join("claude");
         touch(&bin);
+        let inner = inner_bin(&root);
         let ws = root.join("ws");
         fs::create_dir_all(&ws).unwrap();
         let spec =
             spec_under(&root, &bin.to_string_lossy(), &ws.to_string_lossy());
 
-        let prepared = prepare(&spec, &helper).expect("prepared");
+        let prepared = prepare(&spec, &helper, &inner.to_string_lossy())
+            .expect("prepared");
 
-        assert_eq!(prepared.mechanisms, vec!["namespaces", "mounts"]);
+        // The stage execs the harness argv and sets the default limits.
+        assert_eq!(
+            prepared.request.argv.last().unwrap(),
+            &bin.to_string_lossy()
+        );
+        assert_eq!(prepared.request.rlimits, Rlimits::DEFAULT);
         let caches = root
             .join(".willie")
             .join("caches")
@@ -602,7 +631,6 @@ mod tests {
         for name in ["npm", "nuget", "cache"] {
             assert!(caches.join(name).is_dir(), "{name}");
         }
-        assert_eq!(prepared.argv.last().unwrap(), &bin.to_string_lossy());
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -615,7 +643,8 @@ mod tests {
         let spec =
             spec_under(&root, &bin.to_string_lossy(), &root.to_string_lossy());
 
-        let err = prepare(&spec, &root.join("absent")).unwrap_err();
+        let err = prepare(&spec, &root.join("absent"), &bin.to_string_lossy())
+            .unwrap_err();
 
         assert_eq!(err.code(), "sandbox_backend_missing");
         assert!(!root.join(".willie").exists());
@@ -630,7 +659,8 @@ mod tests {
         let spec =
             spec_under(&root, "/nonexistent/claude", &root.to_string_lossy());
 
-        let err = prepare(&spec, &helper).unwrap_err();
+        let err = prepare(&spec, &helper, &inner_bin(&root).to_string_lossy())
+            .unwrap_err();
 
         assert_eq!(err.code(), "harness_exec_failed");
         assert!(
@@ -652,7 +682,8 @@ mod tests {
         let spec =
             spec_under(&root, &bin.to_string_lossy(), &gone.to_string_lossy());
 
-        let err = prepare(&spec, &helper).unwrap_err();
+        let err = prepare(&spec, &helper, &inner_bin(&root).to_string_lossy())
+            .unwrap_err();
 
         assert_eq!(err.code(), "harness_exec_failed");
         assert!(
@@ -686,7 +717,8 @@ mod tests {
             mode: PathMode::Ro,
         }];
 
-        let err = prepare(&spec, &helper).unwrap_err();
+        let err = prepare(&spec, &helper, &inner_bin(&root).to_string_lossy())
+            .unwrap_err();
 
         assert_eq!(err.code(), "sandbox_profile_invalid");
         assert!(err.to_string().contains("/etc"), "{err}");
@@ -719,10 +751,12 @@ mod tests {
             mode: PathMode::Ro,
         }];
 
-        let prepared = prepare(&spec, &helper).expect("prepared");
+        let prepared =
+            prepare(&spec, &helper, &inner_bin(&root).to_string_lossy())
+                .expect("prepared");
 
-        let bind = prepared
-            .argv
+        let argv = helper_argv(&prepared, &helper, 4);
+        let bind = argv
             .windows(3)
             .find(|w| w[0] == "--ro-bind" && w[2] == configured)
             .expect("the extra path's bind");
@@ -750,7 +784,8 @@ mod tests {
             mode: PathMode::Ro,
         }];
 
-        let err = prepare(&spec, &helper).unwrap_err();
+        let err = prepare(&spec, &helper, &inner_bin(&root).to_string_lossy())
+            .unwrap_err();
 
         assert_eq!(err.code(), "sandbox_profile_invalid");
         assert!(err.to_string().contains("cannot be resolved"), "{err}");
@@ -765,7 +800,8 @@ mod tests {
         let mut spec = spec_under(&root, "/x", &root.to_string_lossy());
         spec.harness = "not-a-harness".into();
 
-        let err = prepare(&spec, &helper).unwrap_err();
+        let err = prepare(&spec, &helper, &inner_bin(&root).to_string_lossy())
+            .unwrap_err();
 
         assert_eq!(err.code(), "spec_invalid");
         assert!(err.to_string().contains("not-a-harness"));
@@ -780,7 +816,12 @@ mod tests {
         let mut spec = spec_under(&root, "/x", &root.to_string_lossy());
         spec.env.remove("HOME");
 
-        assert_eq!(prepare(&spec, &helper).unwrap_err().code(), "spec_invalid");
+        assert_eq!(
+            prepare(&spec, &helper, &inner_bin(&root).to_string_lossy())
+                .unwrap_err()
+                .code(),
+            "spec_invalid"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -816,7 +857,8 @@ mod tests {
             spec_under(&root, &bin.to_string_lossy(), &root.to_string_lossy());
         spec.capabilities.git_identity = true;
 
-        let err = prepare(&spec, &helper).unwrap_err();
+        let err = prepare(&spec, &helper, &inner_bin(&root).to_string_lossy())
+            .unwrap_err();
 
         assert_eq!(err.code(), "sandbox_apply_failed");
         assert!(err.to_string().contains(".gitconfig"), "{err}");
@@ -837,56 +879,11 @@ mod tests {
             spec_under(&root, &bin.to_string_lossy(), &root.to_string_lossy());
         spec.capabilities.tools_ro = true;
 
-        assert!(prepare(&spec, &helper).is_ok());
+        assert!(
+            prepare(&spec, &helper, &inner_bin(&root).to_string_lossy())
+                .is_ok()
+        );
         let _ = fs::remove_dir_all(&root);
-    }
-
-    /// The command in `/proc/<pid>/stat` is parenthesised and may hold
-    /// spaces and parentheses of its own, so the state is the first
-    /// field after the last `)`.
-    #[test]
-    fn the_state_is_read_after_the_command_however_it_is_named() {
-        assert_eq!(parse_state("42 (bwrap) S 1 0 0"), Some('S'));
-        assert_eq!(parse_state("42 (odd )name) Z 1 0"), Some('Z'));
-        assert_eq!(parse_state("42 (bwrap)"), None);
-        assert_eq!(parse_state("nonsense"), None);
-    }
-
-    /// The ceiling exists so a helper that never forks cannot hold a
-    /// session open for ever. This process is alive and has nothing
-    /// behind it shaped like a helper, so the wait can only end by its
-    /// deadline — the one branch that gives up the promise it exists to
-    /// keep, and the one that still starts the session.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn a_harness_that_never_appears_ends_the_wait_at_the_ceiling() {
-        let me = libc::pid_t::try_from(std::process::id()).unwrap();
-        let started = Instant::now();
-
-        let waited = wait_for_harness(me, Duration::from_millis(50));
-
-        assert_eq!(waited, HarnessWait::GaveUp);
-        assert!(started.elapsed() >= Duration::from_millis(50));
-        assert!(started.elapsed() < Duration::from_secs(1));
-    }
-
-    /// The helper prefixes what it says when it gives up, and that is
-    /// the only thing separating its refusal from a harness that ran
-    /// and exited before the wait could see it. Both leave a monitor
-    /// already gone and no grandchild.
-    #[test]
-    fn only_the_helper_s_own_prefix_marks_a_refusal() {
-        assert!(is_helper_refusal(
-            b"bwrap: Can't mount on symlink destination /x\r\n"
-        ));
-        assert!(is_helper_refusal(b"\r\n  bwrap: No permitted\r\n"));
-
-        assert!(!is_helper_refusal(b""));
-        assert!(!is_helper_refusal(b"\r\n\r\n"));
-        assert!(!is_helper_refusal(b"hello from the harness\r\n"));
-        // The prefix only counts as the first thing said: a harness
-        // that quotes the helper later has not refused anything.
-        assert!(!is_helper_refusal(b"building\r\nbwrap: quoted\r\n"));
     }
 
     /// The helper's own complaint goes to the terminal, which is the
@@ -961,9 +958,12 @@ mod tests {
         let spec =
             spec_under(&root, &bin.to_string_lossy(), &root.to_string_lossy());
 
-        let prepared = prepare(&spec, &helper).expect("prepared");
+        let prepared =
+            prepare(&spec, &helper, &inner_bin(&root).to_string_lossy())
+                .expect("prepared");
 
-        assert_eq!(prepared.argv[0], helper.to_string_lossy());
+        let argv = helper_argv(&prepared, &helper, 4);
+        assert_eq!(argv[0], helper.to_string_lossy());
         let _ = fs::remove_dir_all(&root);
     }
 

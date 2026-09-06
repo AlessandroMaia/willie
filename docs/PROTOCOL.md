@@ -111,9 +111,13 @@ log_tail }`; `project_id` is absent for a job that belongs to no project
 | `session.list` | `{}` | `SessionList { sessions: [Session] }` |
 
 A `Session` is `{ id, project_id, harness, workspace, state, created_at,
-started_at?, finished_at?, pid?, clients, resumed_from? }`; `state` is
-`creating`, `running`, `stopping`, `exited { code?, signal? }` or `failed
-{ code, message, remediation }`. Creating a session is synchronous up to
+started_at?, finished_at?, pid?, clients, resumed_from?, sandbox }`;
+`state` is `creating`, `running`, `stopping`, `exited { code?, signal? }`
+or `failed { code, message, remediation }`. `sandbox` is `{ applied:
+[string], unavailable: [string] }` — the mechanisms the session's
+sandbox applied and the required-optional ones the kernel did not
+offer; empty on a session from a pre-part-2 log. Creating a session is
+synchronous up to
 the supervisor's readiness: the reply already carries a `running` session
 or the coded failure. There is no `attach_command` in the reply — the
 engine composes `wsl.exe … willie attach <id>` itself. An unknown
@@ -276,8 +280,8 @@ a profile the UI edits.
 | `supervisor_spawn_failed` | `willie-sess` could not be executed, or its launcher's readiness line could not be parsed | run `willie doctor`; reinstall the distribution if the supervisor binary is missing |
 | `supervisor_timeout` | no readiness reply from the supervisor within ten seconds | open the session again; run `willie doctor` if it repeats |
 | `harness_exec_failed` | the harness binary is not an executable file, or the workspace is not a directory — checked by the supervisor before the helper is spawned (binary gone, workspace deleted by hand), and again at the spawn itself when the child cannot enter the working directory, which is the same condition a moment later and not the helper failing to start | reinstall Claude Code, or remove the project and add it again |
-| `sandbox_backend_missing` | the supervisor found no namespace helper at `/usr/bin/bwrap`; nothing was created and no PTY exists. Not for a helper that exists and fails to start — that is `sandbox_apply_failed` | rebuild and reinstall the distribution (`just distro-build`, `just distro-install`) |
-| `sandbox_apply_failed` | the helper could not be executed; a per-project cache directory could not be created; or a path the plan binds without tolerance is not on this machine — the harness's state directory, the git configuration — checked by the supervisor before the helper is spawned, because inside it the same failure is a message on the session's terminal and a bare exit 1. A bind the plan marks as tolerant may be absent. Not for a missing helper (`sandbox_backend_missing`), nor for a missing harness or workspace (`harness_exec_failed`) | the message names the path; the helper writes its own complaint to the session's terminal, so attach to see it, then run `willie doctor` |
+| `sandbox_backend_missing` | the supervisor found no namespace helper at `/usr/bin/bwrap`; nothing was created and no PTY exists; or the stage's report omits a required mechanism. Not for a helper that exists and fails to start — that is `sandbox_apply_failed` | rebuild and reinstall the distribution (`just distro-build`, `just distro-install`) |
+| `sandbox_apply_failed` | the helper could not be executed; a per-project cache directory could not be created; or a path the plan binds without tolerance is not on this machine — the harness's state directory, the git configuration — checked by the supervisor before the helper is spawned, because inside it the same failure is a message on the session's terminal and a bare exit 1; the in-namespace stage found it was not inside a namespace, could not set a resource limit, or reported nothing within the deadline. A bind the plan marks as tolerant may be absent. Not for a missing helper (`sandbox_backend_missing`), nor for a missing harness or workspace (`harness_exec_failed`) | the message names the path; the helper writes its own complaint to the session's terminal, so attach to see it, then run `willie doctor` |
 | `session_not_found` | reserved for an unknown session id; not produced today (see above) | refresh the Sessions screen |
 | `session_not_running` | `session.stop` on a session with no live control connection | nothing to stop; open a new session |
 | `sessions_running` | `project.remove` while the project has a `running` or `stopping` session | stop the project's sessions first |

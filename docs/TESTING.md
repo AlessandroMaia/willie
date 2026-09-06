@@ -45,9 +45,9 @@ its checklist has been walked and the results recorded in it.
   points detection at a chosen binary, `WILLIE_HARNESS_INSTALLER`
   replaces the install command, `WILLIE_SESS_STOP_GRACE_MS` shortens the
   stop ladder, `WILLIE_SESS_HARNESS_WAIT_MS` shortens the wait for the
-  harness to appear behind the namespace helper (zero reaches the branch
-  that gives that wait up), `WILLIE_SESS_BIN` points the daemon at a
-  freshly built supervisor instead of the installed one, and
+  in-namespace stage to report (a short value refuses a stage that never
+  reports), `WILLIE_SESS_BIN` points the daemon at a freshly built
+  supervisor instead of the installed one, and
   `WILLIE_SESS_HELPER_BIN` points the supervisor at another namespace
   helper, so the refusal a real one gives while building the namespace
   has a test, and

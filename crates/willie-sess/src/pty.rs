@@ -228,6 +228,7 @@ pub fn spawn(
     argv: &[String],
     cwd: &str,
     env: &std::collections::BTreeMap<String, String>,
+    keep_fd: Option<i32>,
 ) -> Result<libc::pid_t, SpawnError> {
     let Some(program) = argv.first() else {
         return Err(SpawnError::Setup(io::Error::other("no program to run")));
@@ -280,6 +281,18 @@ pub fn spawn(
                     libc::close(slave.as_raw_fd());
                 }
                 libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+                if let Some(fd) = keep_fd {
+                    // Clear FD_CLOEXEC so bwrap inherits the report socket
+                    // and passes it to the inner stage at the same number.
+                    let flags = libc::fcntl(fd, libc::F_GETFD);
+                    if flags >= 0 {
+                        libc::fcntl(
+                            fd,
+                            libc::F_SETFD,
+                            flags & !libc::FD_CLOEXEC,
+                        );
+                    }
+                }
                 if libc::chdir(dir.as_ptr()) != 0 {
                     report_and_exit(&err_write, b'c');
                 }
