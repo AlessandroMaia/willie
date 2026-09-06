@@ -38,8 +38,8 @@ const denied = (cls: Denied["class"], name: string, count: number): Denied => ({
   class: cls,
   name,
   count,
-  first_at: "2026-09-06T00:00:00Z",
-  last_at: "2026-09-06T00:05:00Z",
+  first_at: "1757116800",
+  last_at: "1757117100",
 });
 
 describe("session helpers", () => {

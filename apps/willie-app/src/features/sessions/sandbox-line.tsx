@@ -81,7 +81,7 @@ export function SandboxLine({ session }: SandboxLineProps) {
       )}
 
       {open && total > 0 && (
-        <ul className="flex w-full flex-col gap-0.5 text-muted-foreground text-xs">
+        <ul className="flex max-h-32 w-full flex-col gap-0.5 overflow-y-auto text-muted-foreground text-xs">
           {items.map((d) => (
             <li key={`${d.class}-${d.name}`}>
               {d.name} · {d.class} · ×{d.count} · {relativeTime(d.last_at)}

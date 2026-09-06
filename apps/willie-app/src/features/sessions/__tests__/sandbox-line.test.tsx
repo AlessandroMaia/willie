@@ -55,6 +55,10 @@ describe("SandboxLine", () => {
   });
 
   it("shows a denials badge that expands the list on click", () => {
+    const first = String(Math.floor(Date.now() / 1000) - 300);
+
+    const recent = String(Math.floor(Date.now() / 1000) - 120);
+
     render(
       <SandboxLine
         session={session(
@@ -65,15 +69,15 @@ describe("SandboxLine", () => {
                 class: "syscall",
                 name: "unshare",
                 count: 3,
-                first_at: "2026-09-06T00:00:00Z",
-                last_at: "2026-09-06T00:05:00Z",
+                first_at: first,
+                last_at: recent,
               },
               {
                 class: "terminal",
                 name: "clipboard",
                 count: 1,
-                first_at: "2026-09-06T00:00:00Z",
-                last_at: "2026-09-06T00:05:00Z",
+                first_at: first,
+                last_at: recent,
               },
             ],
           }),
@@ -86,7 +90,11 @@ describe("SandboxLine", () => {
 
     fireEvent.click(badge);
 
-    expect(screen.getByText(/unshare/)).toBeTruthy();
+    const row = screen.getByText(/unshare/);
+    expect(row.textContent).toContain("×3");
+    expect(row.textContent).toMatch(/min ago|just now/);
+    expect(row.textContent).not.toContain("unknown");
+
     expect(screen.getByText(/clipboard/)).toBeTruthy();
   });
 
