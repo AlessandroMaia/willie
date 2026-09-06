@@ -690,7 +690,7 @@ fn the_applied_mechanisms_are_recorded_before_the_start() {
         .iter()
         .position(|e| {
             matches!(&e.kind, SessionEventKind::SandboxApplied { mechanisms, .. }
-            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned(), "seccomp".to_owned()])
+            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned(), "landlock".to_owned(), "seccomp".to_owned()])
         })
         .expect("a sandbox_applied event");
     let started = events
@@ -800,10 +800,12 @@ fn the_stage_reports_the_required_mechanisms_and_sets_the_limits() {
     assert!(wait_until(Duration::from_secs(10), || {
         exited(&read_events(&spec)).is_some()
     }));
+    // In the order the stage applies them: Landlock right before the
+    // filter, so its own syscalls run before the filter is in force.
     assert!(
         read_events(&spec).iter().any(|e| matches!(&e.kind,
             SessionEventKind::SandboxApplied { mechanisms, .. }
-            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned(), "seccomp".to_owned()])),
+            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned(), "landlock".to_owned(), "seccomp".to_owned()])),
         "{:?}",
         read_events(&spec)
     );
@@ -955,6 +957,68 @@ fn a_clean_session_records_no_degraded_sandbox() {
             SessionEventKind::SandboxDegraded { .. }
         )),
         "a normal end is not degraded: {events:?}"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Landlock is depth on top of the mounts: a writable mount the plan
+/// never asked for — forced here by a fake helper that binds a host
+/// directory read-write at `/leak` before bubblewrap's own options — is
+/// readable but not writable, because the write rules come from the plan
+/// and `/leak` is not among them. A cross-directory rename inside the
+/// workspace still works: `REFER` is handled, which is why ABI 1 is not
+/// applied at all.
+#[test]
+fn landlock_denies_a_write_the_mounts_would_have_allowed() {
+    let root = scratch("landlock");
+    let ws = root.join("ws");
+    fs::create_dir_all(&ws).unwrap();
+    let leak = root.join("leak-src");
+    fs::create_dir_all(&leak).unwrap();
+    fs::write(leak.join("f"), b"hello").unwrap();
+    let helper = root.join("leaky-bwrap");
+    fs::write(
+        &helper,
+        format!(
+            "#!/bin/sh\nexec /usr/bin/bwrap --bind '{}' /leak \"$@\"\n",
+            leak.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+    let bin = fake_harness(
+        &root,
+        "{ cat /leak/f >/dev/null 2>&1 && echo read_ok || echo READ_FAIL; \
+           echo x > /leak/g 2>/dev/null && echo WRITE_OK || echo write_denied; \
+           mkdir sub && touch a && mv a sub/b && echo mv_ok || echo MV_FAIL; } \
+         > \"$PWD/out.txt\" 2>&1",
+    );
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &ws);
+
+    let (code, line) = launch_with_env(
+        &spec,
+        &[("WILLIE_SESS_HELPER_BIN", &helper.to_string_lossy())],
+    );
+
+    assert_eq!(code, 0, "{line}");
+    assert!(wait_until(Duration::from_secs(10), || exited(
+        &read_events(&spec)
+    )
+    .is_some()));
+    let out = fs::read_to_string(ws.join("out.txt")).unwrap();
+    assert!(out.contains("read_ok"), "{out}"); // reads everywhere
+    assert!(out.contains("write_denied"), "{out}"); // the mount allowed, Landlock refused
+    assert!(out.contains("mv_ok"), "{out}"); // REFER inside the workspace
+    assert!(
+        !leak.join("g").exists(),
+        "nothing landed in the leaked directory"
+    );
+    assert!(
+        read_events(&spec).iter().any(|e| matches!(&e.kind,
+            SessionEventKind::SandboxApplied { mechanisms, .. }
+            if mechanisms.contains(&"landlock".to_owned()))),
+        "landlock in the applied list: {:?}",
+        read_events(&spec)
     );
     let _ = fs::remove_dir_all(&root);
 }

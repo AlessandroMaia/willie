@@ -1,8 +1,8 @@
 //! The in-namespace stage: reached by re-executing `willie-sess --inner`
 //! as bwrap's command. It proves the namespace is real, sets the resource
-//! limits from inside it (NPROC is counted per user namespace), reports
-//! over the inherited socket what applied, then execs the harness. Later
-//! phases add the syscall filter and Landlock here, before the report.
+//! limits from inside it (NPROC is counted per user namespace), applies
+//! Landlock, installs the syscall filter, reports over the inherited
+//! socket what applied, then execs the harness.
 
 /// Why this process is not inside a fresh session namespace, if it is
 /// not. `uid_map` is `/proc/self/uid_map`, `status` is
@@ -68,10 +68,12 @@ mod imp {
     use willie_linux::sandbox::inner::{Report, Request};
 
     use super::{clamp, not_in_namespace};
+    use crate::sandbox::landlock::{self, Outcome};
 
     /// The stage. Reads the request from `fd`, verifies the namespace,
-    /// applies the limits, reports over the same socket, marks the socket
-    /// close-on-exec, and execs the harness. A failure before the report
+    /// applies the limits, Landlock and the syscall filter in that order,
+    /// reports over the same socket, marks the socket close-on-exec, and
+    /// execs the harness. A failure before the report
     /// is a `Refused` line the supervisor reads, and a non-zero exit. A
     /// failure at or after the exec is past the report — the supervisor
     /// already read `Applied` and replied ready — so a `Refused` there
@@ -106,6 +108,33 @@ mod imp {
             );
         }
 
+        let mut mechanisms = vec![
+            "namespaces".to_owned(),
+            "mounts".to_owned(),
+            "rlimits".to_owned(),
+        ];
+        let mut unavailable = Vec::new();
+
+        // Landlock before the filter, so its own syscalls run before the
+        // filter is in force. Optional: a kernel without a usable ABI is
+        // reported, not refused. A kernel that offered one and then
+        // refused to apply is a refusal, never a silent downgrade.
+        match landlock::apply(&request.landlock) {
+            Ok(Outcome::Applied { .. }) => {
+                mechanisms.push("landlock".to_owned());
+            }
+            Ok(Outcome::Unavailable) => {
+                unavailable.push("landlock".to_owned());
+            }
+            Err(e) => {
+                return refuse(
+                    &mut sock,
+                    "sandbox_apply_failed",
+                    &e.to_string(),
+                );
+            }
+        }
+
         // The syscall filter, with a user-notification listener. This
         // works unprivileged only because bwrap already set NO_NEW_PRIVS
         // for this namespace; the stage runs inside it, so the bit holds.
@@ -126,12 +155,8 @@ mod imp {
             }
         };
 
-        let mechanisms = vec![
-            "namespaces".to_owned(),
-            "mounts".to_owned(),
-            "rlimits".to_owned(),
-            "seccomp".to_owned(),
-        ];
+        mechanisms.push("seccomp".to_owned());
+
         // The report carries the listener alongside it: SCM_RIGHTS
         // duplicates the descriptor into the supervisor's process with its
         // own reference, so the supervisor's copy survives the stage
@@ -139,7 +164,7 @@ mod imp {
         if let Err(msg) = write_applied(
             &mut sock,
             mechanisms,
-            vec![],
+            unavailable,
             Some(listener.as_raw_fd()),
         ) {
             eprintln!("willie-sess --inner: cannot report: {msg}");

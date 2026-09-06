@@ -46,7 +46,7 @@ impl Rlimits {
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum Report {
     /// The mechanisms that took effect, and the required-optional ones
-    /// (phase 3's Landlock) this kernel does not offer.
+    /// (Landlock) this kernel does not offer.
     Applied {
         mechanisms: Vec<String>,
         #[serde(default)]

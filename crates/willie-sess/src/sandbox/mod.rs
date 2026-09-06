@@ -5,6 +5,8 @@
 
 pub mod inner;
 #[cfg(target_os = "linux")]
+pub mod landlock;
+#[cfg(target_os = "linux")]
 pub mod seccomp;
 
 #[cfg(target_os = "linux")]
@@ -12,11 +14,13 @@ use std::time::Duration;
 use std::{fmt, fs, io, path::Path};
 
 use willie_core::session::SessionSpec;
-// The re-exec stage lives in this crate's own `inner` submodule, so the
-// request/report types cross-linked from `willie_linux` are pulled in by
-// name rather than under a clashing `inner` alias.
+// The re-exec stage and its Landlock applier live in this crate's own
+// `inner` and `landlock` submodules, so the request/report types and the
+// rule derivation cross-linked from `willie_linux` are pulled in by name
+// rather than under a clashing module alias.
 use willie_linux::sandbox::inner::{Request, Rlimits};
-use willie_linux::sandbox::{self as plan, bwrap, landlock};
+use willie_linux::sandbox::landlock::rules as landlock_rules;
+use willie_linux::sandbox::{self as plan, bwrap};
 
 /// Everything the supervisor needs to spawn the confined session, bar the
 /// report descriptor it creates at spawn time.
@@ -241,7 +245,7 @@ pub fn prepare(
         request: Request {
             argv: plan.argv.clone(),
             rlimits: Rlimits::DEFAULT,
-            landlock: landlock::rules(&plan),
+            landlock: landlock_rules(&plan),
         },
         plan,
     })
@@ -869,7 +873,7 @@ mod tests {
             "{write:?}"
         );
         assert!(write.iter().any(|p| p == "/tmp"), "{write:?}");
-        assert_eq!(prepared.request.landlock, landlock::rules(&prepared.plan));
+        assert_eq!(prepared.request.landlock, landlock_rules(&prepared.plan));
         let caches = root
             .join(".willie")
             .join("caches")
