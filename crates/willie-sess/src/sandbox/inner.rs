@@ -58,7 +58,10 @@ mod imp {
     use std::{
         ffi::CString,
         io::{Read, Write},
-        os::{fd::FromRawFd, unix::net::UnixStream},
+        os::{
+            fd::{AsRawFd, FromRawFd},
+            unix::net::UnixStream,
+        },
         process::ExitCode,
     };
 
@@ -103,21 +106,73 @@ mod imp {
             );
         }
 
-        let report = Report::Applied {
-            mechanisms: vec![
-                "namespaces".to_owned(),
-                "mounts".to_owned(),
-                "rlimits".to_owned(),
-            ],
-            unavailable: vec![],
+        // The syscall filter, with a user-notification listener. This
+        // works unprivileged only because bwrap already set NO_NEW_PRIVS
+        // for this namespace; the stage runs inside it, so the bit holds.
+        let listener = match crate::sandbox::seccomp::install() {
+            Ok(listener) => listener,
+            Err(e) => {
+                let (code, what) = match e.raw_os_error() {
+                    Some(libc::EINVAL) | Some(libc::ENOSYS) => (
+                        "sandbox_backend_missing",
+                        "this kernel has no seccomp user notification",
+                    ),
+                    _ => (
+                        "sandbox_apply_failed",
+                        "cannot install the syscall filter",
+                    ),
+                };
+                return refuse(&mut sock, code, &format!("{what}: {e}"));
+            }
         };
-        if let Err(msg) = write_report(&mut sock, &report) {
+
+        let mechanisms = vec![
+            "namespaces".to_owned(),
+            "mounts".to_owned(),
+            "rlimits".to_owned(),
+            "seccomp".to_owned(),
+        ];
+        // The report carries the listener alongside it: SCM_RIGHTS
+        // duplicates the descriptor into the supervisor's process with its
+        // own reference, so the supervisor's copy survives the stage
+        // closing its own.
+        if let Err(msg) = write_applied(
+            &mut sock,
+            mechanisms,
+            vec![],
+            Some(listener.as_raw_fd()),
+        ) {
             eprintln!("willie-sess --inner: cannot report: {msg}");
             return ExitCode::FAILURE;
         }
+        // Close the stage's own copy now the supervisor holds one: the
+        // harness must never inherit the listener. A process holding its
+        // own listener could approve its own syscalls with
+        // SECCOMP_USER_NOTIF_FLAG_CONTINUE. Dropping closes it here and
+        // now, rather than leaving it open until exec as CLOEXEC would.
+        drop(listener);
 
         set_cloexec(fd);
         exec_harness(&request.argv)
+    }
+
+    /// The `Applied` report, with the filter's listener riding alongside
+    /// as `SCM_RIGHTS` when there is one, so the supervisor reads the
+    /// descriptor and the words that describe it together. `None` is the
+    /// plain line.
+    fn write_applied(
+        sock: &mut UnixStream,
+        mechanisms: Vec<String>,
+        unavailable: Vec<String>,
+        listener: Option<i32>,
+    ) -> Result<(), String> {
+        let report = Report::Applied {
+            mechanisms,
+            unavailable,
+        };
+        let line = serde_json::to_vec(&report).map_err(|e| e.to_string())?;
+        crate::sandbox::send_report_with_fd(sock, &line, listener)
+            .map_err(|e| e.to_string())
     }
 
     fn read_request(sock: &mut UnixStream) -> Result<Request, String> {

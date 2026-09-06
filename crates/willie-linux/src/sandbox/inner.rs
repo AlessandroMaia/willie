@@ -50,9 +50,11 @@ pub enum Report {
     Refused { code: String, message: String },
 }
 
-/// A mechanism this build always requires. Absent from a report, the
-/// session refuses. Phase 2 adds `"seccomp"`.
-pub const REQUIRED: &[&str] = &["namespaces", "mounts", "rlimits"];
+/// A mechanism this build always requires: the namespace, its mounts, the
+/// resource limits and the syscall filter. Absent from a report, the
+/// session refuses — a kernel without seccomp user notification cannot
+/// run a confined session at all.
+pub const REQUIRED: &[&str] = &["namespaces", "mounts", "rlimits", "seccomp"];
 
 /// The first required mechanism the report does not name, or `None` when
 /// every one is present.
@@ -134,10 +136,17 @@ mod tests {
             "namespaces".to_owned(),
             "mounts".to_owned(),
             "rlimits".to_owned(),
+            "seccomp".to_owned(),
         ];
         assert_eq!(required_missing(&full), None);
         let short = ["namespaces".to_owned(), "rlimits".to_owned()];
         assert_eq!(required_missing(&short), Some("mounts"));
+        let no_filter = [
+            "namespaces".to_owned(),
+            "mounts".to_owned(),
+            "rlimits".to_owned(),
+        ];
+        assert_eq!(required_missing(&no_filter), Some("seccomp"));
         assert_eq!(required_missing(&[]), Some("namespaces"));
     }
 }

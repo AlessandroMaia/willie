@@ -188,13 +188,15 @@ process exists.
 ```
 willie-linux/src/sandbox/mod.rs      the plan: policy to mounts, as data
 willie-linux/src/sandbox/bwrap.rs    the argument vector, as data
+willie-linux/src/sandbox/seccomp.rs  the filter program, as data
 willie-sess/src/sandbox/mod.rs       the required subset, and the report of what applied
-willie-sess/src/sandbox/seccomp.rs   the filter program, and the notification loop
+willie-sess/src/sandbox/seccomp.rs   installing the filter, and the notification loop
+willie-sess/src/tally.rs             the coalesced denial counts
 willie-sess/src/sandbox/landlock.rs  applied after re-exec, immediately before exec
 willie-sess/src/sandbox/rlimits.rs   process, descriptor and core limits
 ```
 
-The two data files sit in the shared Linux crate rather than in the
+The data files sit in the shared Linux crate rather than in the
 supervisor because `sandbox explain` prints the same vector from the
 daemon, and the daemon cannot depend on the supervisor binary. The
 supervisor applies a plan; the daemon shows one.
@@ -232,12 +234,13 @@ The supervisor emits one `sandbox_applied` event naming what it managed
 to apply, into the log it already keeps, so a session that ran with
 less says so forever.
 
-### The denial log — `willie-sess/src/sandbox/seccomp.rs`
+### The denial log — `willie-sess/src/sandbox/seccomp.rs`, `willie-sess/src/tally.rs`
 
 Every syscall the filter refuses is not merely denied, it is
 **observed**. Each reaches the supervisor through a notification
-descriptor, which appends a `sandbox_denied` event naming the syscall
-and answers with a refusal. One class, not two: a filter where some
+descriptor, which answers with a refusal and appends a `sandbox_denied`
+event naming the syscall — the first at once, repeats folded into a
+count (`designs/sandbox-seccomp.md`). One class, not two: a filter where some
 refusals are logged and others are silent is a distinction to maintain
 with nothing to show for it.
 
@@ -351,11 +354,11 @@ One task, one commit:
 3. the daemon's resolution into the spec, with its refusals
 4. the argument vector and the mounts, as data; then the launch through
    them — *both landed*
-5. the syscall filter, denying only
+5. the syscall filter, denying only — *landed (part 2 phase 2)*
 6. the limits, and the required-subset decision with its report —
    *landed (part 2 phase 1)*
 7. path-based restriction, applied after the re-exec
-8. the notification loop and the denial event
+8. the notification loop and the denial event — *landed (part 2 phase 2)*
 9. the terminal filter
 10. `sandbox explain`
 11. the capability editor, and the session's applied and denied state

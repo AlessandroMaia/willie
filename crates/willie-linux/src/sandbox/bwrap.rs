@@ -69,6 +69,16 @@ pub fn argv(plan: &Plan, inner_fd: i32) -> Vec<String> {
             "--unshare-pid",
             "--unshare-ipc",
             "--unshare-uts",
+            // Nested user namespaces are shut from both sides, and both
+            // sides are load-bearing. The syscall filter refuses `unshare`
+            // and `setns`, but `clone`/`clone3` are left alone on purpose
+            // — denying them would break threads — so a
+            // `clone(CLONE_NEWUSER)` would slip past the filter.
+            // `--disable-userns` sets the sandbox's `max_user_namespaces`
+            // to 0, so even an allowed `clone` cannot make one. Neither
+            // closes the path alone; together they close it from the
+            // syscall and the clone-flag directions at once.
+            "--disable-userns",
             "--die-with-parent",
         ],
     );
@@ -210,7 +220,7 @@ mod tests {
     fn arity(option: &str) -> Option<usize> {
         Some(match option {
             "--unshare-user" | "--unshare-pid" | "--unshare-ipc"
-            | "--unshare-uts" | "--die-with-parent" => 0,
+            | "--unshare-uts" | "--disable-userns" | "--die-with-parent" => 0,
             "--clearenv" => 0,
             "--proc" | "--dev" | "--tmpfs" | "--chdir" | "--perms" => 1,
             "--ro-bind" | "--ro-bind-try" | "--bind" | "--bind-try"
@@ -248,6 +258,10 @@ mod tests {
             "--unshare-pid",
             "--unshare-ipc",
             "--unshare-uts",
+            // `--disable-userns` closes nested user namespaces from the
+            // clone-flag side, where the syscall filter cannot: it leaves
+            // `clone`/`clone3` alone so threads keep working.
+            "--disable-userns",
             "--die-with-parent",
         ] {
             assert!(v.contains(&flag.to_owned()), "{flag}");

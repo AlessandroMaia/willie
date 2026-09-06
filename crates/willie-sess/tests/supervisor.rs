@@ -690,7 +690,7 @@ fn the_applied_mechanisms_are_recorded_before_the_start() {
         .iter()
         .position(|e| {
             matches!(&e.kind, SessionEventKind::SandboxApplied { mechanisms, .. }
-            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned()])
+            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned(), "seccomp".to_owned()])
         })
         .expect("a sandbox_applied event");
     let started = events
@@ -774,11 +774,11 @@ fn a_stage_that_never_reports_refuses_the_session() {
     let _ = fs::remove_dir_all(&root);
 }
 
-/// The measured report, end to end: the stage names all three required
+/// The measured report, end to end: the stage names all the required
 /// mechanisms and the supervisor records them, and the limits it set are
 /// visible to the harness it exec'd.
 #[test]
-fn the_stage_reports_the_three_mechanisms_and_sets_the_limits() {
+fn the_stage_reports_the_required_mechanisms_and_sets_the_limits() {
     let root = scratch("report");
     let ws = root.join("ws");
     fs::create_dir_all(&ws).unwrap();
@@ -803,7 +803,7 @@ fn the_stage_reports_the_three_mechanisms_and_sets_the_limits() {
     assert!(
         read_events(&spec).iter().any(|e| matches!(&e.kind,
             SessionEventKind::SandboxApplied { mechanisms, .. }
-            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned()])),
+            if mechanisms == &["namespaces".to_owned(), "mounts".to_owned(), "rlimits".to_owned(), "seccomp".to_owned()])),
         "{:?}",
         read_events(&spec)
     );
@@ -818,6 +818,144 @@ fn the_stage_reports_the_three_mechanisms_and_sets_the_limits() {
     assert_eq!(lines[0].trim(), "0", "core: {limits}");
     assert_eq!(lines[1].trim(), "65536", "nofile: {limits}");
     assert_eq!(lines[2].trim(), "4096 4096", "nproc soft/hard: {limits}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The filter denies the dangerous classes: from inside a session,
+/// unshare fails, a filter of the session's own is refused before the
+/// kernel reads its arguments (`EPERM`, where an unfiltered call with a
+/// null program would be `EFAULT`), a packet socket asked for by the
+/// obsolete type is refused, an ordinary interface query works, and
+/// /proc/self/status shows the filter active. Each refusal is named in
+/// the log.
+#[test]
+fn the_syscall_filter_denies_and_stays_out_of_the_way() {
+    let root = scratch("seccomp");
+    let ws = root.join("ws");
+    fs::create_dir_all(&ws).unwrap();
+    let bin = fake_harness(
+        &root,
+        "{ unshare -U true 2>&1 && echo NESTED_OK || echo nested_denied; \
+           perl -e '$r = syscall(317, 1, 0, 0); \
+             print $r < 0 ? \"seccomp_denied errno=\".($!+0).\"\\n\" : \"SECCOMP_OK\\n\"'; \
+           perl -e 'socket(S, 2, 10, 0) ? print \"PACKET_OK\\n\" \
+             : print \"packet_denied errno=\".($!+0).\"\\n\"'; \
+           ip -o link show >/dev/null 2>&1 && echo ip_ok || echo IP_FAIL; \
+           grep -E '^Seccomp:' /proc/self/status; } > \"$PWD/out.txt\" 2>&1",
+    );
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &ws);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    assert!(wait_until(Duration::from_secs(10), || exited(
+        &read_events(&spec)
+    )
+    .is_some()));
+    let out = fs::read_to_string(ws.join("out.txt")).unwrap();
+    assert!(out.contains("nested_denied"), "{out}"); // --disable-userns + the filter
+    assert!(out.contains("seccomp_denied errno=1\n"), "{out}"); // EPERM: the filter, not EFAULT
+    assert!(out.contains("packet_denied errno=1\n"), "{out}"); // AF_INET + SOCK_PACKET
+    assert!(out.contains("ip_ok"), "{out}"); // netlink route passes
+    assert!(out.contains("Seccomp:\t2"), "{out}"); // filter mode active
+    let events = read_events(&spec);
+    assert!(
+        events.iter().any(|e| matches!(&e.kind,
+        SessionEventKind::SandboxApplied { mechanisms, .. }
+        if mechanisms.contains(&"seccomp".to_owned()))),
+        "seccomp in the applied list"
+    );
+    for denied in ["unshare", "seccomp", "socket"] {
+        assert!(
+            events.iter().any(|e| matches!(&e.kind,
+            SessionEventKind::SandboxDenied { class, name, .. }
+            if class == "syscall" && name == denied)),
+            "{denied} named in the log: {events:?}"
+        );
+    }
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Every call the filter refuses reaches the log by name, and repeats of
+/// one call are coalesced: the first at once, the rest as a running count
+/// once per window and a last one before the exit — never one line per
+/// attempt. The counts still pending when the harness ends must land
+/// before `exited`, or every reader of the log drops them.
+#[test]
+fn a_denied_syscall_is_logged_and_repeats_are_coalesced() {
+    let root = scratch("denylog");
+    let ws = root.join("ws");
+    fs::create_dir_all(&ws).unwrap();
+    let bin = fake_harness(
+        &root,
+        "i=0; while [ $i -lt 50 ]; do unshare -U true 2>/dev/null; \
+         i=$((i+1)); done; echo done > \"$PWD/out.txt\"",
+    );
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &ws);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    assert!(wait_until(Duration::from_secs(10), || exited(
+        &read_events(&spec)
+    )
+    .is_some()));
+    let events = read_events(&spec);
+    let denials: Vec<u64> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            SessionEventKind::SandboxDenied { class, name, count }
+                if class == "syscall" && name == "unshare" =>
+            {
+                Some(*count)
+            }
+            _ => None,
+        })
+        .collect();
+    eprintln!("unshare denials as recorded: {denials:?}");
+    assert!(
+        !denials.is_empty(),
+        "at least one unshare denial: {events:?}"
+    );
+    assert!(
+        denials.iter().sum::<u64>() >= 50,
+        "every attempt counted: {denials:?}"
+    );
+    assert!(
+        denials.len() <= 4,
+        "coalesced, not one per attempt: {denials:?}"
+    );
+    let last_denied = events
+        .iter()
+        .rposition(|e| matches!(e.kind, SessionEventKind::SandboxDenied { .. }))
+        .unwrap();
+    let exit = events
+        .iter()
+        .position(|e| matches!(e.kind, SessionEventKind::Exited { .. }))
+        .unwrap();
+    assert!(last_denied < exit, "flushed before the exit: {events:?}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The filter's server ends with the session, because no process is left
+/// under the filter — an orderly end. Only a server that dies under a
+/// live session degrades it, so a clean session must never say so.
+#[test]
+fn a_clean_session_records_no_degraded_sandbox() {
+    let root = scratch("nodegrade");
+    let bin = fake_harness(&root, "echo hello; exit 0");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    assert!(wait_until(Duration::from_secs(10), || exited(
+        &read_events(&spec)
+    )
+    .is_some()));
+    let events = read_events(&spec);
+    assert_eq!(exited(&events), Some((Some(0), None)));
+    assert!(
+        !events.iter().any(|e| matches!(
+            e.kind,
+            SessionEventKind::SandboxDegraded { .. }
+        )),
+        "a normal end is not degraded: {events:?}"
+    );
     let _ = fs::remove_dir_all(&root);
 }
 
