@@ -77,7 +77,8 @@ pub struct Session {
 
 /// What the sandbox reported for one session. Empty until the
 /// `sandbox_applied` event is folded; a session from a pre-part-2 log
-/// leaves it default. Phase 2 adds `denied` and `degraded`.
+/// leaves it default, and a log written before denials were recorded
+/// leaves `denied` and `degraded` empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SandboxState {
     /// The mechanisms measured to apply.
@@ -86,6 +87,29 @@ pub struct SandboxState {
     /// The required-optional mechanisms this kernel does not offer.
     #[serde(default)]
     pub unavailable: Vec<String>,
+    /// What the sandbox refused, one row per (class, name); repeats
+    /// accumulate into the row's count.
+    #[serde(default)]
+    pub denied: Vec<Denied>,
+    /// The mechanisms that fell back to their closed direction while the
+    /// session ran, each named once.
+    #[serde(default)]
+    pub degraded: Vec<String>,
+}
+
+/// One thing the sandbox refused, merged over the session by
+/// (`class`, `name`): `count` accumulates, `first_at` stays at the first
+/// refusal and `last_at` advances to the latest.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Denied {
+    /// What kind of thing was refused: `syscall` now, `terminal` later.
+    pub class: String,
+    /// The refused thing within its class, e.g. the syscall name.
+    pub name: String,
+    pub count: u64,
+    /// Epoch seconds as a string, like the events.
+    pub first_at: String,
+    pub last_at: String,
 }
 
 /// `spec.json`: immutable once written by the daemon. Everything the
@@ -135,6 +159,19 @@ pub enum SessionEventKind {
         #[serde(default)]
         unavailable: Vec<String>,
     },
+    /// The sandbox refused something `count` times since the last such
+    /// event for the same (class, name); the session merges repeats.
+    SandboxDenied {
+        class: String,
+        name: String,
+        count: u64,
+    },
+    /// A mechanism fell back to its closed direction mid-session; the
+    /// message says why, the session remembers only the mechanism.
+    SandboxDegraded {
+        mechanism: String,
+        message: String,
+    },
     Attached {
         client: u64,
     },
@@ -172,6 +209,30 @@ pub fn apply_event(session: &mut Session, event: &SessionEvent) {
         } => {
             session.sandbox.applied = mechanisms.clone();
             session.sandbox.unavailable = unavailable.clone();
+        }
+        SessionEventKind::SandboxDenied { class, name, count } => {
+            if let Some(d) = session
+                .sandbox
+                .denied
+                .iter_mut()
+                .find(|d| d.class == *class && d.name == *name)
+            {
+                d.count += count;
+                d.last_at = event.at.clone();
+            } else {
+                session.sandbox.denied.push(Denied {
+                    class: class.clone(),
+                    name: name.clone(),
+                    count: *count,
+                    first_at: event.at.clone(),
+                    last_at: event.at.clone(),
+                });
+            }
+        }
+        SessionEventKind::SandboxDegraded { mechanism, .. } => {
+            if !session.sandbox.degraded.iter().any(|m| m == mechanism) {
+                session.sandbox.degraded.push(mechanism.clone());
+            }
         }
         SessionEventKind::Started { pid } => {
             session.state = SessionState::Running;
@@ -553,6 +614,115 @@ mod tests {
                 mechanisms: vec!["namespaces".into(), "mounts".into()],
                 unavailable: vec![],
             }
+        );
+    }
+
+    /// A denial event merges into the record by (class, name): the count
+    /// accumulates and last_at advances, first_at stays. A second syscall
+    /// is a separate row.
+    #[test]
+    fn sandbox_denied_events_merge_by_class_and_name() {
+        let mut s = from_log(&spec(), &[]);
+        apply_event(
+            &mut s,
+            &ev(
+                "5",
+                SessionEventKind::SandboxDenied {
+                    class: "syscall".into(),
+                    name: "unshare".into(),
+                    count: 1,
+                },
+            ),
+        );
+        apply_event(
+            &mut s,
+            &ev(
+                "9",
+                SessionEventKind::SandboxDenied {
+                    class: "syscall".into(),
+                    name: "unshare".into(),
+                    count: 3,
+                },
+            ),
+        );
+        apply_event(
+            &mut s,
+            &ev(
+                "9",
+                SessionEventKind::SandboxDenied {
+                    class: "syscall".into(),
+                    name: "ptrace".into(),
+                    count: 1,
+                },
+            ),
+        );
+        assert_eq!(s.sandbox.denied.len(), 2);
+        let unshare = s
+            .sandbox
+            .denied
+            .iter()
+            .find(|d| d.name == "unshare")
+            .unwrap();
+        assert_eq!(unshare.count, 4);
+        assert_eq!(unshare.first_at, "5");
+        assert_eq!(unshare.last_at, "9");
+    }
+
+    #[test]
+    fn a_sandbox_degraded_event_is_recorded() {
+        let mut s = from_log(&spec(), &[]);
+        apply_event(
+            &mut s,
+            &ev(
+                "2",
+                SessionEventKind::SandboxDegraded {
+                    mechanism: "seccomp".into(),
+                    message: "notify thread died".into(),
+                },
+            ),
+        );
+        assert_eq!(s.sandbox.degraded, ["seccomp"]);
+    }
+
+    /// Neither event touches the lifecycle fields.
+    #[test]
+    fn denial_and_degraded_events_leave_the_lifecycle_alone() {
+        let mut s =
+            from_log(&spec(), &[ev("1", SessionEventKind::Started { pid: 7 })]);
+        let before = s.state.clone();
+        apply_event(
+            &mut s,
+            &ev(
+                "2",
+                SessionEventKind::SandboxDenied {
+                    class: "syscall".into(),
+                    name: "bpf".into(),
+                    count: 1,
+                },
+            ),
+        );
+        apply_event(
+            &mut s,
+            &ev(
+                "3",
+                SessionEventKind::SandboxDegraded {
+                    mechanism: "seccomp".into(),
+                    message: "x".into(),
+                },
+            ),
+        );
+        assert_eq!(s.state, before);
+        assert_eq!(s.pid, Some(7));
+    }
+
+    #[test]
+    fn a_session_without_denied_or_degraded_defaults_them() {
+        let mut v = serde_json::to_value(from_log(&spec(), &[])).unwrap();
+        v["sandbox"].as_object_mut().unwrap().remove("denied");
+        v["sandbox"].as_object_mut().unwrap().remove("degraded");
+        let back: Session = serde_json::from_value(v).unwrap();
+        assert!(
+            back.sandbox.denied.is_empty() && back.sandbox.degraded.is_empty()
         );
     }
 
