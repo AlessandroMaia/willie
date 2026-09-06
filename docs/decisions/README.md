@@ -49,3 +49,4 @@ Things deliberately left open or explicitly rejected for now, and why.
 | 0015 | A session's git identity is resolved and required             |
 | 0016 | sandbox mechanisms on the WSL kernel (S3)                     |
 | 0017 | the supervisor re-executes inside the namespace to apply and report |
+| 0018 | the syscall filter is answered and recorded by the supervisor; nested user namespaces are closed from both sides |

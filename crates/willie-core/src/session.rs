@@ -69,8 +69,8 @@ pub struct Session {
     /// The session this one continues, if it was opened as a resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_from: Option<SessionId>,
-    /// What the sandbox applied for this session; empty until the applied
-    /// event is folded, and on a session from a pre-part-2 log.
+    /// What the sandbox applied and refused for this session; empty until
+    /// its events are folded, and on a session from a pre-part-2 log.
     #[serde(default)]
     pub sandbox: SandboxState,
 }
@@ -106,6 +106,7 @@ pub struct Denied {
     pub class: String,
     /// The refused thing within its class, e.g. the syscall name.
     pub name: String,
+    /// How many times over the session, every repeat counted.
     pub count: u64,
     /// Epoch seconds as a string, like the events.
     pub first_at: String,

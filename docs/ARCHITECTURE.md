@@ -246,7 +246,9 @@ capabilities: CapabilitySet, args, created_at, state }`.
 States: `creating → running → exited(code) | failed(reason)`, with a
 transient `stopping`. Truth: `/var/lib/willie/sessions/<id>/spec.json`
 (immutable after creation) and `events.jsonl` (append-only: `created`,
-`started{pid}`, `attached{client}`, `detached`, `resized{cols,rows}`,
+`sandbox_applied{mechanisms,unavailable}`, `started{pid}`,
+`attached{client}`, `detached`, `resized{cols,rows}`,
+`sandbox_denied{class,name,count}`, `sandbox_degraded{mechanism,message}`,
 `stop_requested{by}`, `exited{code,signal}`, `failed{reason}`). SQLite is
 a rebuildable index (`willie reindex`).
 
@@ -266,10 +268,12 @@ a rebuildable index (`willie reindex`).
    the PTY slave, listens on `/run/willie/sessions/<id>.sock` (0600) and
    records `started`. The supervisor runs the harness by re-executing
    itself as `willie-sess --inner` inside the namespace, which applies
-   the resource limits and reports which mechanisms took effect before
-   the harness's `exec` (decision 0017); the supervisor records that
-   report as `sandbox_applied` and refuses the session if it names less
-   than the required subset. The daemon rides the session socket as a
+   the resource limits, installs the syscall filter and reports which
+   mechanisms took effect before the harness's `exec` (decisions 0017,
+   0018); the supervisor records that report as `sandbox_applied`,
+   refuses the session if it names less than the required subset, and
+   answers the filter's notifications for the session's life. The
+   daemon rides the session socket as a
    control client (decision 0014) — the supervisor never calls the
    daemon and never depends on it.
 4. `willied` replies `{ session }` once the supervisor reports ready;
@@ -357,12 +361,16 @@ never runs it.
 ### 3.3 Sandbox
 
 Applied by `willie-sess`: **bubblewrap** (namespaces and mounts) +
-**seccomp-bpf** (program compiled by the supervisor, passed as an fd) +
-**Landlock** (applied by re-executing `willie-sess --inner` inside the
-namespace right before `exec` of the harness) + **rlimits**.
+**seccomp-bpf** (the program built as data and installed by the
+re-executed `willie-sess --inner` inside the namespace, with a
+user-notification listener the supervisor answers) + **Landlock**
+(applied by the same stage right before `exec` of the harness) +
+**rlimits**.
 
 **Base — always on, not configurable:**
 - `--unshare-user --unshare-pid --unshare-ipc --unshare-uts`,
+  `--disable-userns` (no nested user namespace: the filter refuses
+  `unshare`/`setns`, this closes the `clone` flags — decision 0018),
   `--die-with-parent` (the supervisor); `TIOCSTI` blocked by seccomp
   instead of `--new-session`;
 - `no_new_privs`; system paths (`/usr`, `/lib*`, `/bin`, `/sbin`, selected
@@ -383,10 +391,14 @@ namespace right before `exec` of the harness) + **rlimits**.
   then one `--setenv` per variable), not by whoever spawns it: `PATH`,
   `HOME`, `USER`, `TERM`, `COLORTERM`, `LANG`, `LC_*`, `TZ`, plus the
   `machine.env` variables;
-- seccomp blocks `ptrace`, `process_vm_*`, `bpf`, `io_uring_*`,
-  `perf_event_open`, `userfaultfd`, the mount family, `unshare`/`setns`,
-  module loading, `kexec_*`, `keyctl`/`add_key`, `ioctl(TIOCSTI)`, packet
-  and raw sockets — *second enforcement plan*;
+- seccomp denies `ptrace`, `process_vm_*`, `pidfd_getfd`, `bpf`,
+  `io_uring_*`, `perf_event_open`, `userfaultfd`, the mount family,
+  `unshare`/`setns`, module loading, `kexec_*`, the key management calls,
+  `ioctl(TIOCSTI)`, packet sockets, raw sockets and every netlink
+  protocol but route; the filter is installed by the in-namespace stage
+  with a user-notification listener, and the supervisor answers each
+  intercepted call `EPERM` and records it as `sandbox_denied`, coalesced
+  per syscall (decision 0018);
 - rlimits `NPROC`, `NOFILE`, `CORE=0`, applied by the re-executed
   supervisor inside the session's own user namespace;
 - **network on** (no `--unshare-net`): the harness needs it; Landlock at
@@ -416,8 +428,11 @@ supervisor that applies them and the daemon that explains them share
 one builder and its tests run on any host; the supervisor launches
 every session through them and records `sandbox_applied { mechanisms,
 unavailable }`, measured by the in-namespace stage in the event log
-before `started`. The seccomp summary and the Landlock rules arrive
-with their own commits of the enforcement slice.
+before `started`; what the syscall filter refuses follows as
+`sandbox_denied { class, name, count }`, and a filter no longer served
+as `sandbox_degraded { mechanism, message }`. The filter summary in
+`sandbox explain` and the Landlock rules arrive with their own commits
+of the enforcement slice.
 
 ### 3.4 Configuration layers (increasing authority, monotonic)
 
