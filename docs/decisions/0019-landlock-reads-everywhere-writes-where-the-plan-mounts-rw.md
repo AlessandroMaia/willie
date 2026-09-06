@@ -94,7 +94,19 @@ because the mechanism is optional.
   read-write at `/leak` ahead of the plan's own options runs a session
   in which a file under `/leak` is read and a write there is refused
   with `EACCES`, while a rename across directories inside the workspace
-  succeeds and the report names `landlock`.
+  succeeds and the report names `landlock`. One boundary of this
+  guarantee is worth stating: a `PATH_BENEATH` rule grants write beneath
+  the whole subtree of the directory it names, so a path nested under a
+  directory the plan does grant read-write — anything under the home
+  tmpfs, for one — is writable as far as Landlock is concerned. The
+  read-only mounts that live under the home (`~/.gitconfig`, the managed
+  tool roots) stay read-only there because their bind is `--ro-bind`
+  (a write is `EROFS`), not because Landlock refuses it. This is the
+  design's own division of labour — the mounts do the primary work,
+  Landlock is the depth on top — and it means a hypothetical future
+  read-write mount mistakenly nested under the home would not be caught
+  by Landlock, only by the mount that put it there; the same mistake
+  outside the granted directories is caught by Landlock.
 - Writes under `/proc/self/*` are refused: `/proc` is a fresh mount and
   not in the writable set. Nothing in the harness is known to need
   them; a session that works through the acceptance walk is what
