@@ -44,6 +44,21 @@ applied mechanism and the rename that ABI 1 would have refused.
 | 13 | Projects → **Open session**; `!mkdir sub && touch a && mv a sub/b && echo mv_ok` | `mv_ok` — a rename across directories inside the workspace works: the `REFER` right ABI 1 lacks, and the reason ABI 1 counts as unavailable; `!rm -r sub` afterwards |
 | 14 | Stop the session; `wsl -d willie --user willie -- cat /var/lib/willie/sessions/<id>/events.jsonl` | the `sandbox_applied` line names `["namespaces","mounts","rlimits","landlock","seccomp"]` with an empty `unavailable` list, before `started` — Landlock applied between the limits and the filter |
 
+## Phase 4 — the terminal output filter
+
+The filter drops the escape sequences an agent's output could use to act
+on the host or echo attacker text back as input, and passes everything
+that draws, including the fixed-form queries the harness needs to render.
+The walk forces one acting sequence of each recorded kind and one
+fixed-form query, then reads what the log named.
+
+| # | Step | Expected |
+| - | ---- | -------- |
+| 15 | Projects → **Open session**; `!printf '\e]52;c;SGVsbG8=\a'` | the host clipboard still holds whatever it held before — the OSC 52 clipboard write was dropped, not forwarded to the terminal |
+| 16 | `!printf '\e]2;pwned\a'` | the terminal tab and window title do not change to `pwned` — the OSC 2 title write was dropped |
+| 17 | `!printf '\e[6n'; read -rs -t1 -d R rep; printf '%s\n' "$rep" \| cat -v` | a line like `^[[<row>;<col>` prints — the DSR cursor-position query (`CSI 6n`) still got its reply, proving the fixed-form queries pass |
+| 18 | Stop the session; `wsl -d willie --user willie -- cat /var/lib/willie/sessions/<id>/events.jsonl` | after `started`: a `sandbox_denied` line with `"class":"terminal","name":"clipboard"` for step 15 and one with `"name":"title"` for step 16; no `terminal` line names `window` or `query_echo` (step 17's query passed); every `sandbox_denied` line sits before `exited` |
+
 ## Results
 
 | # | Date | Result | Notes |
