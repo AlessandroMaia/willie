@@ -37,6 +37,7 @@ use crate::{
     pty,
     screen::{AltScreen, Ring},
     tally::Tally,
+    vt_filter::VtFilter,
 };
 
 /// Output kept for a late terminal. Claude Code's screens are large.
@@ -257,13 +258,33 @@ pub fn start(shared: &Arc<Shared>, listener: UnixListener) -> io::Result<()> {
 }
 
 /// Pump PTY output to the ring and every terminal until the session's
-/// output ends.
+/// output ends. The output is filtered before it reaches the ring, so the
+/// sequences that act on the host or echo attacker text are absent from
+/// what any client sees, a late terminal's replay included. Each dropped
+/// sequence is recorded as a `sandbox_denied` event of class `terminal`,
+/// named by what was dropped, coalesced by the same tally as the syscall
+/// denials and flushed before the exit. The names are recorded before the
+/// broadcast, which is what takes the `screen` lock: `record_denial` takes
+/// the tally then `clients`, and `screen` is never held across it.
 pub fn serve(shared: &Shared) {
     let mut buf = [0u8; 16 * 1024];
+    let mut filter = VtFilter::new();
+    let mut out = Vec::new();
+    let mut dropped = Vec::new();
     loop {
         match pty::read(&shared.master, &mut buf) {
             Ok(0) => break,
-            Ok(n) => broadcast(shared, &buf[..n]),
+            Ok(n) => {
+                out.clear();
+                dropped.clear();
+                filter.feed(&buf[..n], &mut out, &mut dropped);
+                for &name in &dropped {
+                    record_denial(shared, "terminal", name);
+                }
+                if !out.is_empty() {
+                    broadcast(shared, &out);
+                }
+            }
             Err(e) => {
                 eprintln!("willie-sess: pty read failed: {e}");
                 break;

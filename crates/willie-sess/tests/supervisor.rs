@@ -332,6 +332,127 @@ fn a_terminal_echoes_input_replays_to_a_late_client_and_is_told_why_it_closed()
     let _ = fs::remove_dir_all(&root);
 }
 
+/// The output filter is in the path before the ring: a harness that emits
+/// an OSC 52 clipboard write and an OSC 2 title set alongside plain text
+/// reaches an attached terminal with the plain text intact and neither
+/// acting sequence — not its introducer, not its payload. (Recording the
+/// drop in the log is Task 2.)
+#[test]
+fn the_output_filter_drops_the_clipboard_and_title_sequences() {
+    let root = scratch("vtfilter");
+    // OSC 52 (clipboard, payload "CLIPBOARD" base64), OSC 2 (title), then
+    // the plain text that must survive. Sleep to keep the session open.
+    let bin = fake_harness(
+        &root,
+        "printf '\\033]52;c;Q0xJUEJPQVJE\\007\\033]2;TITLESET\\007VISIBLE-TEXT\\r\\n'; \
+         sleep 30",
+    );
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    let pid: u32 = line.strip_prefix("ok ").unwrap().parse().unwrap();
+    let sock = socket_of(&root);
+    assert!(wait_until(Duration::from_secs(5), || sock.exists()));
+
+    let mut term = TestClient::connect(&sock, Role::Terminal, 24, 80);
+    let seen =
+        term.output_until(|s| s.windows(12).any(|w| w == b"VISIBLE-TEXT"));
+
+    let has = |needle: &[u8]| seen.windows(needle.len()).any(|w| w == needle);
+    assert!(
+        has(b"VISIBLE-TEXT"),
+        "the drawing text is delivered: {seen:?}"
+    );
+    assert!(!has(b"\x1b]52"), "the OSC 52 introducer is gone: {seen:?}");
+    assert!(
+        !has(b"Q0xJUEJPQVJE"),
+        "the clipboard payload is gone: {seen:?}"
+    );
+    assert!(!has(b"\x1b]2;"), "the OSC 2 introducer is gone: {seen:?}");
+    assert!(!has(b"TITLESET"), "the title payload is gone: {seen:?}");
+
+    kill(pid, libc::SIGKILL);
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Every sequence the terminal filter drops is recorded the way a denied
+/// syscall is: a `sandbox_denied` event with class `terminal` and the name
+/// of what was dropped. A tight loop of clipboard writes coalesces to a
+/// counted handful rather than one line per write, and — like the syscall
+/// denials — every terminal denial lands before `exited`, since a reader of
+/// the log stops folding at the exit and would drop a later count.
+#[test]
+fn the_dropped_terminal_sequences_are_recorded_and_coalesced() {
+    let root = scratch("vtlog");
+    // One OSC 2 title, then a tight loop of fifty OSC 52 clipboard writes,
+    // all dropped by the filter; then a clean exit so the tally flushes
+    // what is still folded before `exited` is recorded.
+    let bin = fake_harness(
+        &root,
+        "printf '\\033]2;TITLESET\\007'; \
+         i=0; while [ $i -lt 50 ]; do printf '\\033]52;c;Q0xJUEJPQVJE\\007'; \
+         i=$((i+1)); done; echo done",
+    );
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    assert!(wait_until(Duration::from_secs(10), || {
+        exited(&read_events(&spec)).is_some()
+    }));
+    let events = read_events(&spec);
+
+    let counts = |wanted: &str| -> Vec<u64> {
+        events
+            .iter()
+            .filter_map(|e| match &e.kind {
+                SessionEventKind::SandboxDenied { class, name, count }
+                    if class == "terminal" && name == wanted =>
+                {
+                    Some(*count)
+                }
+                _ => None,
+            })
+            .collect()
+    };
+
+    let title = counts("title");
+    assert!(!title.is_empty(), "the title drop is recorded: {events:?}");
+    assert!(
+        title.iter().sum::<u64>() >= 1,
+        "at least one title: {title:?}"
+    );
+
+    let clipboard = counts("clipboard");
+    assert!(
+        !clipboard.is_empty(),
+        "the clipboard drops are recorded: {events:?}"
+    );
+    assert_eq!(
+        clipboard.iter().sum::<u64>(),
+        50,
+        "every clipboard write counted: {clipboard:?}"
+    );
+    assert!(
+        clipboard.len() <= 4,
+        "coalesced, not one line per write: {clipboard:?}"
+    );
+
+    let last_denied = events
+        .iter()
+        .rposition(|e| {
+            matches!(&e.kind,
+                SessionEventKind::SandboxDenied { class, .. }
+                if class == "terminal")
+        })
+        .expect("a terminal denial");
+    let exit = events
+        .iter()
+        .position(|e| matches!(e.kind, SessionEventKind::Exited { .. }))
+        .expect("an exit");
+    assert!(last_denied < exit, "flushed before the exit: {events:?}");
+    let _ = fs::remove_dir_all(&root);
+}
+
 #[test]
 fn a_client_whose_first_frame_is_not_hello_is_closed_with_protocol() {
     let root = scratch("protocol");

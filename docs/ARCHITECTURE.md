@@ -266,7 +266,15 @@ a rebuildable index (`willie reindex`).
    **detached** (setsid; stdio to `sessions/<id>/supervisor.log`).
 3. `willie-sess` opens the PTY, builds the sandbox, runs the harness on
    the PTY slave, listens on `/run/willie/sessions/<id>.sock` (0600) and
-   records `started`. The supervisor runs the harness by re-executing
+   records `started`. The harness's output crosses one filter on its way
+   out: a VT/ANSI byte parser between the PTY and the attach fan-out,
+   before the ring buffer, drops the escape sequences that would act on
+   whoever is attached — writing the host clipboard, changing Willie's
+   tab or window title, or echoing attacker-controlled text back into the
+   input — and records each as `sandbox_denied { class: "terminal" }`
+   (decision 0020); everything that draws passes byte-for-byte, and
+   because the filter is before the ring a late attach replays already
+   filtered bytes. The supervisor runs the harness by re-executing
    itself as `willie-sess --inner` inside the namespace, which applies
    the resource limits, applies Landlock, installs the syscall filter
    and reports which mechanisms took effect before the harness's `exec`

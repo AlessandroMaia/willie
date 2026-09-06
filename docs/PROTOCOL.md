@@ -121,7 +121,10 @@ not offer (e.g. `landlock` on a kernel with no Landlock ABI or only
 ABI 1); what it refused, one row per (`class`, `name`), folded from
 the session's `sandbox_denied { class, name, count }` events (`count`
 accumulates, `first_at` stays at the first refusal, `last_at` advances
-to the latest; `class` is `syscall` and `name` the syscall's name); and
+to the latest; `class` is `syscall` or `terminal` — for `syscall` the
+`name` is the syscall's, for `terminal` it is one of `clipboard`,
+`title`, `window` or `query_echo`, the output escape sequence the
+terminal filter dropped (decision 0020)); and
 the mechanisms that fell back to their closed direction while the
 session ran, each named once, folded from its `sandbox_degraded
 { mechanism, message }` events. Every field is empty on a session from
