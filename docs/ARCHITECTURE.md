@@ -392,9 +392,11 @@ user-notification listener the supervisor answers) + **Landlock**
   `HOME`, `USER`, `TERM`, `COLORTERM`, `LANG`, `LC_*`, `TZ`, plus the
   `machine.env` variables;
 - seccomp denies `ptrace`, `process_vm_*`, `pidfd_getfd`, `bpf`,
-  `io_uring_*`, `perf_event_open`, `userfaultfd`, the mount family,
-  `unshare`/`setns`, module loading, `kexec_*`, the key management calls,
-  `ioctl(TIOCSTI)`, packet sockets, raw sockets and every netlink
+  `io_uring_*`, `perf_event_open`, `userfaultfd`, `seccomp` itself (a
+  nested filter's listener would pre-empt the supervisor's), the mount
+  family, `unshare`/`setns`, module loading, `kexec_*`, the key
+  management calls, `ioctl(TIOCSTI)`, packet sockets (by family or by
+  the obsolete `SOCK_PACKET` type), raw sockets and every netlink
   protocol but route; the filter is installed by the in-namespace stage
   with a user-notification listener, and the supervisor answers each
   intercepted call `EPERM` and records it as `sandbox_denied`, coalesced

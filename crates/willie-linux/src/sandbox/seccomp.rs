@@ -70,6 +70,9 @@ const TIOCSTI: u32 = 0x5412;
 const AF_NETLINK: u32 = 16;
 const AF_PACKET: u32 = 17;
 const SOCK_RAW: u32 = 3;
+/// The obsolete packet socket type: the kernel turns an `AF_INET` socket
+/// of this type into an `AF_PACKET` one, so it is judged by type too.
+const SOCK_PACKET: u32 = 10;
 /// The socket type proper is the low byte; the non-blocking and
 /// close-on-exec flags sit above it.
 const SOCK_TYPE_MASK: u32 = 0xFF;
@@ -91,6 +94,7 @@ pub const SYS_io_uring_enter: u32 = 426;
 pub const SYS_io_uring_register: u32 = 427;
 pub const SYS_perf_event_open: u32 = 298;
 pub const SYS_userfaultfd: u32 = 323;
+pub const SYS_seccomp: u32 = 317;
 pub const SYS_mount: u32 = 165;
 pub const SYS_umount2: u32 = 166;
 pub const SYS_pivot_root: u32 = 155;
@@ -127,6 +131,12 @@ const DENIED: &[(u32, &str)] = &[
     (SYS_io_uring_register, "io_uring_register"),
     (SYS_perf_event_open, "perf_event_open"),
     (SYS_userfaultfd, "userfaultfd"),
+    // A filter of its own. The kernel runs filters newest first and, when
+    // two answer user notification, the newest one's listener gets the
+    // call: a nested listener could continue what this filter refuses.
+    // The stage's own install is the first filter in the process, so it
+    // is not in force yet when that call is made.
+    (SYS_seccomp, "seccomp"),
     // The mount table, through the old interface and the new one.
     (SYS_mount, "mount"),
     (SYS_umount2, "umount2"),
@@ -289,7 +299,9 @@ pub fn program() -> Vec<Insn> {
     // is looked at, because listing interfaces opens a raw netlink
     // socket for the route protocol and that must pass; every other
     // netlink protocol is refused. Any other family is refused when
-    // raw, once the flags above the type's low byte are masked off.
+    // raw, once the flags above the type's low byte are masked off, and
+    // when its type is the obsolete packet one, which the kernel turns
+    // into a packet socket whatever the family asked for.
     asm.mark(To::Socket);
     asm.stmt(LD_W_ABS, DATA_ARG0);
     asm.jump(JEQ_K, AF_PACKET, To::Notify, To::Next);
@@ -299,7 +311,8 @@ pub fn program() -> Vec<Insn> {
     asm.mark(To::SocketType);
     asm.stmt(LD_W_ABS, DATA_ARG1);
     asm.stmt(AND_K, SOCK_TYPE_MASK);
-    asm.jump(JEQ_K, SOCK_RAW, To::Notify, To::Allow);
+    asm.jump(JEQ_K, SOCK_RAW, To::Notify, To::Next);
+    asm.jump(JEQ_K, SOCK_PACKET, To::Notify, To::Allow);
 
     // The three verdicts every jump above lands on.
     asm.mark(To::Allow);
@@ -469,6 +482,22 @@ mod tests {
         }
     }
 
+    /// The install the stage makes is the first filter in the process and
+    /// runs before this program is in force; once it is, the same call
+    /// from the harness is refused, so no nested filter can hold a
+    /// listener that pre-empts the supervisor's.
+    #[test]
+    fn installing_a_filter_of_its_own_is_notified() {
+        assert_eq!(
+            action(AUDIT_ARCH_X86_64, SYS_seccomp, [1, 8, 0, 0, 0, 0]),
+            SECCOMP_RET_USER_NOTIF
+        );
+        assert_eq!(
+            action(AUDIT_ARCH_X86_64, SYS_seccomp, NO_ARGS),
+            SECCOMP_RET_USER_NOTIF
+        );
+    }
+
     #[test]
     fn an_ordinary_syscall_is_allowed() {
         for nr in [SYS_read, SYS_write, SYS_execve, SYS_clone3] {
@@ -498,7 +527,8 @@ mod tests {
 
     /// Listing interfaces opens a raw netlink socket for the route
     /// protocol, so that one decision has to come before the raw-socket
-    /// refusal; every other netlink protocol, packet sockets and raw
+    /// refusal; every other netlink protocol, packet sockets by family or
+    /// by the obsolete type the kernel rewrites into that family, and raw
     /// sockets of any other family are refused.
     #[test]
     fn netlink_route_passes_other_netlink_and_packet_and_raw_do_not() {
@@ -521,6 +551,7 @@ mod tests {
         assert_eq!(socket(AF_PACKET, SOCK_RAW, 0), SECCOMP_RET_USER_NOTIF);
         assert_eq!(socket(AF_PACKET, SOCK_DGRAM, 0), SECCOMP_RET_USER_NOTIF);
         assert_eq!(socket(AF_INET, SOCK_RAW, 0), SECCOMP_RET_USER_NOTIF);
+        assert_eq!(socket(AF_INET, SOCK_PACKET, 0), SECCOMP_RET_USER_NOTIF);
         assert_eq!(socket(AF_INET, SOCK_STREAM, 0), SECCOMP_RET_ALLOW);
         assert_eq!(socket(AF_INET, SOCK_DGRAM, 0), SECCOMP_RET_ALLOW);
     }
@@ -535,6 +566,7 @@ mod tests {
         };
 
         assert_eq!(socket(SOCK_RAW | flags), SECCOMP_RET_USER_NOTIF);
+        assert_eq!(socket(SOCK_PACKET | flags), SECCOMP_RET_USER_NOTIF);
         assert_eq!(socket(SOCK_STREAM | flags), SECCOMP_RET_ALLOW);
         assert_eq!(socket(SOCK_DGRAM | SOCK_CLOEXEC), SECCOMP_RET_ALLOW);
     }
@@ -663,6 +695,7 @@ mod tests {
                 "io_uring_register" => libc::SYS_io_uring_register,
                 "perf_event_open" => libc::SYS_perf_event_open,
                 "userfaultfd" => libc::SYS_userfaultfd,
+                "seccomp" => libc::SYS_seccomp,
                 "mount" => libc::SYS_mount,
                 "umount2" => libc::SYS_umount2,
                 "pivot_root" => libc::SYS_pivot_root,
@@ -745,6 +778,12 @@ mod tests {
             assert_eq!(AF_PACKET, int(libc::AF_PACKET));
             assert_eq!(AF_INET, int(libc::AF_INET));
             assert_eq!(SOCK_RAW, int(libc::SOCK_RAW));
+            // libc deprecates the name because the family replaced the
+            // type; the kernel still accepts the type, which is why the
+            // filter judges it, so the number is still pinned to libc's.
+            #[allow(deprecated)]
+            let libc_sock_packet = libc::SOCK_PACKET;
+            assert_eq!(SOCK_PACKET, int(libc_sock_packet));
             assert_eq!(SOCK_NONBLOCK, int(libc::SOCK_NONBLOCK));
             assert_eq!(SOCK_CLOEXEC, int(libc::SOCK_CLOEXEC));
             assert_eq!(

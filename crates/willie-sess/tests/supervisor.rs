@@ -822,8 +822,12 @@ fn the_stage_reports_the_required_mechanisms_and_sets_the_limits() {
 }
 
 /// The filter denies the dangerous classes: from inside a session,
-/// unshare fails, an ordinary interface query works, and
-/// /proc/self/status shows the filter active.
+/// unshare fails, a filter of the session's own is refused before the
+/// kernel reads its arguments (`EPERM`, where an unfiltered call with a
+/// null program would be `EFAULT`), a packet socket asked for by the
+/// obsolete type is refused, an ordinary interface query works, and
+/// /proc/self/status shows the filter active. Each refusal is named in
+/// the log.
 #[test]
 fn the_syscall_filter_denies_and_stays_out_of_the_way() {
     let root = scratch("seccomp");
@@ -832,6 +836,10 @@ fn the_syscall_filter_denies_and_stays_out_of_the_way() {
     let bin = fake_harness(
         &root,
         "{ unshare -U true 2>&1 && echo NESTED_OK || echo nested_denied; \
+           perl -e '$r = syscall(317, 1, 0, 0); \
+             print $r < 0 ? \"seccomp_denied errno=\".($!+0).\"\\n\" : \"SECCOMP_OK\\n\"'; \
+           perl -e 'socket(S, 2, 10, 0) ? print \"PACKET_OK\\n\" \
+             : print \"packet_denied errno=\".($!+0).\"\\n\"'; \
            ip -o link show >/dev/null 2>&1 && echo ip_ok || echo IP_FAIL; \
            grep -E '^Seccomp:' /proc/self/status; } > \"$PWD/out.txt\" 2>&1",
     );
@@ -844,14 +852,25 @@ fn the_syscall_filter_denies_and_stays_out_of_the_way() {
     .is_some()));
     let out = fs::read_to_string(ws.join("out.txt")).unwrap();
     assert!(out.contains("nested_denied"), "{out}"); // --disable-userns + the filter
+    assert!(out.contains("seccomp_denied errno=1\n"), "{out}"); // EPERM: the filter, not EFAULT
+    assert!(out.contains("packet_denied errno=1\n"), "{out}"); // AF_INET + SOCK_PACKET
     assert!(out.contains("ip_ok"), "{out}"); // netlink route passes
     assert!(out.contains("Seccomp:\t2"), "{out}"); // filter mode active
+    let events = read_events(&spec);
     assert!(
-        read_events(&spec).iter().any(|e| matches!(&e.kind,
+        events.iter().any(|e| matches!(&e.kind,
         SessionEventKind::SandboxApplied { mechanisms, .. }
         if mechanisms.contains(&"seccomp".to_owned()))),
         "seccomp in the applied list"
     );
+    for denied in ["unshare", "seccomp", "socket"] {
+        assert!(
+            events.iter().any(|e| matches!(&e.kind,
+            SessionEventKind::SandboxDenied { class, name, .. }
+            if class == "syscall" && name == denied)),
+            "{denied} named in the log: {events:?}"
+        );
+    }
     let _ = fs::remove_dir_all(&root);
 }
 

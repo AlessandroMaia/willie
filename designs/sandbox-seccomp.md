@@ -84,13 +84,17 @@ Linux-only test asserts each against `libc::SYS_*`). The program:
    else `ALLOW`.
 4. `socket`: load the low word of `args[0]` (domain) and `args[1]` (type).
    `AF_PACKET` → deny. `AF_NETLINK` → deny unless `args[2]` (protocol) is
-   `NETLINK_ROUTE`. Any domain with `SOCK_RAW` in the type → deny.
-   Otherwise `ALLOW`.
+   `NETLINK_ROUTE`. Any domain with `SOCK_RAW` or `SOCK_PACKET` in the
+   type → deny (the kernel rewrites `AF_INET` + `SOCK_PACKET` into a
+   packet socket, so the family check alone misses it). Otherwise
+   `ALLOW`.
 5. Everything else → `ALLOW`.
 
 The deny list: `ptrace`, `process_vm_readv`, `process_vm_writev`,
 `pidfd_getfd`, `bpf`, `io_uring_setup`, `io_uring_enter`,
-`io_uring_register`, `perf_event_open`, `userfaultfd`, `mount`, `umount2`,
+`io_uring_register`, `perf_event_open`, `userfaultfd`, `seccomp` (a
+nested filter with a listener would receive the notifications for the
+calls this one marks, and could continue them), `mount`, `umount2`,
 `pivot_root`, `mount_setattr`, `open_tree`, `move_mount`, `fsopen`,
 `fsconfig`, `fsmount`, `fspick`, `unshare`, `setns`, `init_module`,
 `finit_module`, `delete_module`, `kexec_load`, `kexec_file_load`,

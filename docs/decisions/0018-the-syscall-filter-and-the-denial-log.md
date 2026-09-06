@@ -52,20 +52,27 @@ no business making are marked for user notification: another process's
 execution and memory (`ptrace`, `process_vm_readv`, `process_vm_writev`,
 `pidfd_getfd`); programs and rings inside the kernel and its
 instrumentation (`bpf`, `io_uring_setup`, `io_uring_enter`,
-`io_uring_register`, `perf_event_open`, `userfaultfd`); the mount table
-through the old interface and the new one (`mount`, `umount2`,
-`pivot_root`, `mount_setattr`, `open_tree`, `move_mount`, `fsopen`,
-`fsconfig`, `fsmount`, `fspick`); leaving this namespace or making
-another (`unshare`, `setns`); kernel modules and a replacement kernel
-(`init_module`, `finit_module`, `delete_module`, `kexec_load`,
-`kexec_file_load`); the kernel keyring (`add_key`, `request_key`,
-`keyctl`); `ioctl(TIOCSTI)`; and, judged by their arguments, packet
-sockets, raw sockets of any other family, and every netlink protocol but
-one. The one exception is the netlink route protocol, which listing
-interfaces and addresses opens as a raw netlink socket: a session whose
-network is open learns the same addresses by connecting out, so denying
-it breaks ordinary tools and buys nothing. Everything else is allowed;
-in particular `clone` and `clone3` are left untouched.
+`io_uring_register`, `perf_event_open`, `userfaultfd`); a filter of its
+own (`seccomp`): the kernel runs filters newest first and, when two
+answer user notification for one call, the newest filter's listener
+receives it, so a nested listener could continue a call this filter
+refuses and nothing would be recorded — the same `no_new_privs` bit that
+lets the stage install its filter would let the harness install one, and
+the stage's own install is the first filter in the process, made before
+the list is in force; the mount table through the old interface and the
+new one (`mount`, `umount2`, `pivot_root`, `mount_setattr`, `open_tree`,
+`move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`); leaving this
+namespace or making another (`unshare`, `setns`); kernel modules and a
+replacement kernel (`init_module`, `finit_module`, `delete_module`,
+`kexec_load`, `kexec_file_load`); the kernel keyring (`add_key`,
+`request_key`, `keyctl`); `ioctl(TIOCSTI)`; and, judged by their
+arguments, packet sockets, raw sockets of any other family, and every
+netlink protocol but one. The one exception is the netlink route
+protocol, which listing interfaces and addresses opens as a raw netlink
+socket: a session whose network is open learns the same addresses by
+connecting out, so denying it breaks ordinary tools and buys nothing.
+Everything else is allowed; in particular `clone` and `clone3` are left
+untouched.
 
 The filter is installed with a user-notification listener, and the
 listener travels to the supervisor inside the `Applied` report as an
@@ -125,9 +132,12 @@ cannot make one. Neither closes the path alone.
   the totals per syscall (`Session.sandbox.denied`) and the mechanisms
   that fell back (`Session.sandbox.degraded`) for the Sessions screen to
   show.
-- A session cannot trace or read another process, alter the mount table,
-  load a module, open a packet or raw socket, or nest a user namespace.
-  A workflow that did any of these stops, with `EPERM` and a line in the
+- A session cannot trace another process, read the memory of one outside
+  its own pid namespace (inside it, processes of the same user still read
+  each other through `/proc/<pid>/mem`, which is no syscall the filter
+  sees), alter the mount table, load a module, install a syscall filter
+  of its own, open a packet or raw socket, or nest a user namespace. A
+  workflow that did any of these stops, with `EPERM` and a line in the
   log that says so.
 - Seccomp is required: a kernel without user notification refuses every
   session. This kernel has it (0016), so no working session changes.
