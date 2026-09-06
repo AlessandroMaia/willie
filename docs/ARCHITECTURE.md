@@ -268,11 +268,12 @@ a rebuildable index (`willie reindex`).
    the PTY slave, listens on `/run/willie/sessions/<id>.sock` (0600) and
    records `started`. The supervisor runs the harness by re-executing
    itself as `willie-sess --inner` inside the namespace, which applies
-   the resource limits, installs the syscall filter and reports which
-   mechanisms took effect before the harness's `exec` (decisions 0017,
-   0018); the supervisor records that report as `sandbox_applied`,
-   refuses the session if it names less than the required subset, and
-   answers the filter's notifications for the session's life. The
+   the resource limits, applies Landlock, installs the syscall filter
+   and reports which mechanisms took effect before the harness's `exec`
+   (decisions 0017, 0018, 0019); the supervisor records that report as
+   `sandbox_applied`, refuses the session if it names less than the
+   required subset, and answers the filter's notifications for the
+   session's life. The
    daemon rides the session socket as a
    control client (decision 0014) — the supervisor never calls the
    daemon and never depends on it.
@@ -364,7 +365,7 @@ Applied by `willie-sess`: **bubblewrap** (namespaces and mounts) +
 **seccomp-bpf** (the program built as data and installed by the
 re-executed `willie-sess --inner` inside the namespace, with a
 user-notification listener the supervisor answers) + **Landlock**
-(applied by the same stage right before `exec` of the harness) +
+(applied by the same stage, after the limits and before the filter) +
 **rlimits**.
 
 **Base — always on, not configurable:**
@@ -403,6 +404,11 @@ user-notification listener the supervisor answers) + **Landlock**
   per syscall (decision 0018);
 - rlimits `NPROC`, `NOFILE`, `CORE=0`, applied by the re-executed
   supervisor inside the session's own user namespace;
+- **Landlock** (ABI ≥ 2): read and execute under `/`, write only at the
+  plan's read-write mounts plus `/tmp` and `/dev`, so a mount the plan
+  never granted read-write is read-only whatever bound it; ABI 1 or none
+  is reported `unavailable` and the session runs on the mounts
+  (decision 0019);
 - **network on** (no `--unshare-net`): the harness needs it; Landlock at
   this kernel version has no network rules; fine-grained egress is a
   growth item.
@@ -432,9 +438,10 @@ every session through them and records `sandbox_applied { mechanisms,
 unavailable }`, measured by the in-namespace stage in the event log
 before `started`; what the syscall filter refuses follows as
 `sandbox_denied { class, name, count }`, and a filter no longer served
-as `sandbox_degraded { mechanism, message }`. The filter summary in
-`sandbox explain` and the Landlock rules arrive with their own commits
-of the enforcement slice.
+as `sandbox_degraded { mechanism, message }`. The Landlock rules are
+derived from the same plan (decision 0019); the filter summary and the
+path rules in `sandbox explain` are a named follow-up of the
+enforcement slice.
 
 ### 3.4 Configuration layers (increasing authority, monotonic)
 
