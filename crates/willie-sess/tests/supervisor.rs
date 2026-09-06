@@ -822,7 +822,7 @@ fn the_stage_reports_the_required_mechanisms_and_sets_the_limits() {
 }
 
 /// The filter denies the dangerous classes: from inside a session,
-/// unshare and a raw socket fail, an ordinary interface query works, and
+/// unshare fails, an ordinary interface query works, and
 /// /proc/self/status shows the filter active.
 #[test]
 fn the_syscall_filter_denies_and_stays_out_of_the_way() {
@@ -851,6 +851,91 @@ fn the_syscall_filter_denies_and_stays_out_of_the_way() {
         SessionEventKind::SandboxApplied { mechanisms, .. }
         if mechanisms.contains(&"seccomp".to_owned()))),
         "seccomp in the applied list"
+    );
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// Every call the filter refuses reaches the log by name, and repeats of
+/// one call are coalesced: the first at once, the rest as a running count
+/// once per window and a last one before the exit — never one line per
+/// attempt. The counts still pending when the harness ends must land
+/// before `exited`, or every reader of the log drops them.
+#[test]
+fn a_denied_syscall_is_logged_and_repeats_are_coalesced() {
+    let root = scratch("denylog");
+    let ws = root.join("ws");
+    fs::create_dir_all(&ws).unwrap();
+    let bin = fake_harness(
+        &root,
+        "i=0; while [ $i -lt 50 ]; do unshare -U true 2>/dev/null; \
+         i=$((i+1)); done; echo done > \"$PWD/out.txt\"",
+    );
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &ws);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    assert!(wait_until(Duration::from_secs(10), || exited(
+        &read_events(&spec)
+    )
+    .is_some()));
+    let events = read_events(&spec);
+    let denials: Vec<u64> = events
+        .iter()
+        .filter_map(|e| match &e.kind {
+            SessionEventKind::SandboxDenied { class, name, count }
+                if class == "syscall" && name == "unshare" =>
+            {
+                Some(*count)
+            }
+            _ => None,
+        })
+        .collect();
+    eprintln!("unshare denials as recorded: {denials:?}");
+    assert!(
+        !denials.is_empty(),
+        "at least one unshare denial: {events:?}"
+    );
+    assert!(
+        denials.iter().sum::<u64>() >= 50,
+        "every attempt counted: {denials:?}"
+    );
+    assert!(
+        denials.len() <= 4,
+        "coalesced, not one per attempt: {denials:?}"
+    );
+    let last_denied = events
+        .iter()
+        .rposition(|e| matches!(e.kind, SessionEventKind::SandboxDenied { .. }))
+        .unwrap();
+    let exit = events
+        .iter()
+        .position(|e| matches!(e.kind, SessionEventKind::Exited { .. }))
+        .unwrap();
+    assert!(last_denied < exit, "flushed before the exit: {events:?}");
+    let _ = fs::remove_dir_all(&root);
+}
+
+/// The filter's server ends with the session, because no process is left
+/// under the filter — an orderly end. Only a server that dies under a
+/// live session degrades it, so a clean session must never say so.
+#[test]
+fn a_clean_session_records_no_degraded_sandbox() {
+    let root = scratch("nodegrade");
+    let bin = fake_harness(&root, "echo hello; exit 0");
+    let spec = write_spec(&root, &[&bin.to_string_lossy()], &root);
+    let (code, line) = launch(&spec);
+    assert_eq!(code, 0, "{line}");
+    assert!(wait_until(Duration::from_secs(10), || exited(
+        &read_events(&spec)
+    )
+    .is_some()));
+    let events = read_events(&spec);
+    assert_eq!(exited(&events), Some((Some(0), None)));
+    assert!(
+        !events.iter().any(|e| matches!(
+            e.kind,
+            SessionEventKind::SandboxDegraded { .. }
+        )),
+        "a normal end is not degraded: {events:?}"
     );
     let _ = fs::remove_dir_all(&root);
 }

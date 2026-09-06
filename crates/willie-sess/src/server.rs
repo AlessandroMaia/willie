@@ -3,8 +3,9 @@
 //! replay when they arrive late); the daemon's control client gets the
 //! event stream and may ask for status or a stop.
 //!
-//! Locks: `screen` and `clients` are never held together; `phase` is a
-//! flag. A wedged client costs itself its connection, never the PTY pump.
+//! Locks: `screen`, `clients` and `tally` are never held together;
+//! `phase` is a flag. A wedged client costs itself its connection, never
+//! the PTY pump.
 
 use std::{
     fs::{self, Permissions},
@@ -20,7 +21,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc, Mutex, MutexGuard, PoisonError,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
@@ -35,6 +36,7 @@ use crate::{
     events::EventLog,
     pty,
     screen::{AltScreen, Ring},
+    tally::Tally,
 };
 
 /// Output kept for a late terminal. Claude Code's screens are large.
@@ -50,6 +52,8 @@ const SEND_BUFFER_BYTES: libc::c_int = 64 * 1024;
 pub const DRAIN_GRACE: Duration = Duration::from_secs(2);
 /// A client that does not say hello in time is a broken client.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long repeats of one denied call fold into a single event.
+const DENIAL_WINDOW: Duration = Duration::from_secs(5);
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
@@ -105,6 +109,13 @@ pub struct Shared {
     phase: Mutex<Phase>,
     /// Why the session is ending when a stop was asked for.
     stop_cause: Mutex<Option<CloseReason>>,
+    /// What the sandbox refused, coalesced before it reaches the log.
+    tally: Mutex<Tally>,
+    /// Set once the session's output has ended and the exit is being
+    /// collected. The filter's server consults it when its loop ends
+    /// for a reason other than the filter running out of processes: a
+    /// failure during teardown degrades nothing, one before it does.
+    tearing_down: AtomicBool,
 }
 
 impl std::fmt::Debug for Shared {
@@ -144,6 +155,8 @@ impl Shared {
             grace,
             phase: Mutex::new(Phase::Running),
             stop_cause: Mutex::new(None),
+            tally: Mutex::new(Tally::new(DENIAL_WINDOW, Instant::now)),
+            tearing_down: AtomicBool::new(false),
         })
     }
 
@@ -157,6 +170,16 @@ impl Shared {
     #[must_use]
     pub fn phase(&self) -> Phase {
         *lock(&self.phase)
+    }
+
+    /// The session's output has ended; its exit is being collected.
+    pub fn begin_teardown(&self) {
+        self.tearing_down.store(true, Ordering::SeqCst);
+    }
+
+    #[must_use]
+    pub fn tearing_down(&self) -> bool {
+        self.tearing_down.load(Ordering::SeqCst)
     }
 }
 
@@ -249,8 +272,30 @@ pub fn serve(shared: &Shared) {
     }
 }
 
+/// Record one call the sandbox refused. The tally decides whether this
+/// one is reported now or folded into a later count; its lock is
+/// released before the event fans out, which takes the clients' lock.
+pub fn record_denial(shared: &Shared, class: &str, name: &str) {
+    let due = lock(&shared.tally).record(class, name);
+    if let Some((class, name, count)) = due {
+        log_event(
+            shared,
+            SessionEventKind::SandboxDenied { class, name, count },
+        );
+    }
+}
+
 /// Record the end, tell every client, unlink the socket, let them drain.
 pub fn finish(shared: &Shared, exit: pty::Exit) {
+    // The denials still folded go first: every reader of the log stops
+    // folding at the exit, so a count recorded after it would be lost.
+    let pending = lock(&shared.tally).flush();
+    for (class, name, count) in pending {
+        log_event(
+            shared,
+            SessionEventKind::SandboxDenied { class, name, count },
+        );
+    }
     *lock(&shared.phase) = Phase::Exited;
     log_event(
         shared,

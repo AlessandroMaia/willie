@@ -20,6 +20,7 @@ mod server;
 #[cfg(target_os = "linux")]
 mod signals;
 mod spec;
+mod tally;
 
 use std::process::ExitCode;
 
@@ -57,7 +58,12 @@ fn spawn_failure(error: &pty::SpawnError) -> (&'static str, String) {
 /// The detached grandchild: set the session up and answer the launcher.
 #[cfg(target_os = "linux")]
 fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
-    use std::{os::fd::AsRawFd, path::Path, sync::Arc};
+    use std::{
+        os::fd::AsRawFd,
+        path::Path,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
 
     use willie_core::session::SessionEventKind;
 
@@ -283,16 +289,6 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
                 return ExitCode::from(EXIT_FAILURE);
             }
         };
-    // Serve the filter from before the session is announced ready, so a
-    // denial from the very first syscall is answered with EPERM. The
-    // thread owns the listener and runs for the session's life; the
-    // recorder is a no-op this task, and Task 5 makes it record. The
-    // handle is held so the thread stays owned rather than orphaned.
-    let _notifications = filter_listener.map(|listener| {
-        std::thread::spawn(move || {
-            sandbox::seccomp::serve_notifications(listener, |_nr| {});
-        })
-    });
     // The stage reported success, so the harness is running behind it.
     let harness = sandbox::harness_pid(child);
     events.append(SessionEventKind::SandboxApplied {
@@ -311,6 +307,12 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
         events,
         server::stop_grace(),
     );
+    // Serve the filter from before the session is announced ready, so a
+    // denial from the very first syscall is answered with EPERM and
+    // recorded. A harness whose first call is intercepted before the
+    // thread is up only waits for the answer; nothing is lost.
+    let notifications =
+        filter_listener.and_then(|listener| serve_filter(listener, &shared));
     if let Err(e) = server::start(&shared, listener) {
         let _ = reply.fail("supervisor_spawn_failed", &e.to_string());
         return ExitCode::from(EXIT_FAILURE);
@@ -321,13 +323,105 @@ fn session_main(spec_path: &str, mut reply: detach::Reply) -> ExitCode {
     let _ = reply.ok(pid);
     reply.close();
     server::serve(&shared);
+    shared.begin_teardown();
     let raw = pty::wait(child).unwrap_or(pty::Exit {
         code: None,
         signal: None,
     });
+    // The filter's server ends on its own once no process is left under
+    // the filter, which happens before the monitor's exit reaches `wait`;
+    // its last record may still be in flight, so give it a moment to
+    // land before the flush below. Bounded: a server that has not ended
+    // is not something the exit waits on.
+    if let Some(handle) = &notifications {
+        let until = Instant::now() + FILTER_SETTLE;
+        while !handle.is_finished() && Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
     let (code, signal) = sandbox::helper_exit(raw.code, raw.signal);
     server::finish(&shared, pty::Exit { code, signal });
     ExitCode::SUCCESS
+}
+
+/// How long the exit waits for the filter's server to finish its last
+/// record. It has normally ended already; this is a bound, not a delay.
+#[cfg(target_os = "linux")]
+const FILTER_SETTLE: std::time::Duration =
+    std::time::Duration::from_millis(250);
+
+/// Start the thread that answers and records the filter's denials, for
+/// the session's life. The handle is held so the thread stays owned.
+///
+/// The loop ends orderly when no process is left under the filter — the
+/// session ending — and that is never degraded. It ends any other way
+/// only by failing; if that happens while the session is not tearing
+/// down, the server died under a live session, and the session records
+/// that it runs degraded from then on. It does: the listener died with
+/// the thread, so the kernel answers every later intercepted call with
+/// `ENOSYS` — closed, not open. A thread that cannot even start is the
+/// same condition from the first call.
+#[cfg(target_os = "linux")]
+fn serve_filter(
+    listener: std::os::fd::OwnedFd,
+    shared: &std::sync::Arc<server::Shared>,
+) -> Option<std::thread::JoinHandle<()>> {
+    use willie_core::session::SessionEventKind;
+
+    let owned = std::sync::Arc::clone(shared);
+    let spawned = std::thread::Builder::new()
+        .name("seccomp".to_owned())
+        .spawn(move || {
+            let end = sandbox::seccomp::serve_notifications(listener, |nr| {
+                server::record_denial(
+                    &owned,
+                    "syscall",
+                    &sandbox::seccomp::syscall_name(nr),
+                );
+            });
+            match end {
+                Ok(()) => eprintln!(
+                    "willie-sess: no process is left under the syscall \
+                     filter; its server ends"
+                ),
+                Err(e) if owned.tearing_down() => eprintln!(
+                    "willie-sess: the syscall filter's server ended during \
+                     teardown: {e}"
+                ),
+                Err(e) => {
+                    let message = format!(
+                        "the syscall filter is no longer served ({e}); \
+                         intercepted calls now fail with ENOSYS"
+                    );
+                    eprintln!("willie-sess: {message}");
+                    server::log_event(
+                        &owned,
+                        SessionEventKind::SandboxDegraded {
+                            mechanism: "seccomp".to_owned(),
+                            message,
+                        },
+                    );
+                }
+            }
+        });
+    match spawned {
+        Ok(handle) => Some(handle),
+        Err(e) => {
+            let message = format!(
+                "the syscall filter's server did not start ({e}); \
+                 intercepted calls fail with ENOSYS"
+            );
+            eprintln!("willie-sess: {message}");
+            server::log_event(
+                shared,
+                SessionEventKind::SandboxDegraded {
+                    mechanism: "seccomp".to_owned(),
+                    message,
+                },
+            );
+            None
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -408,6 +502,8 @@ fn main() -> ExitCode {
         screen::AltScreen::feed,
         screen::AltScreen::active,
     );
+    // `tally` is pure as well, driven only by the Linux server thread.
+    let _ = (tally::Tally::new, tally::Tally::record, tally::Tally::flush);
     eprintln!(
         "{} runs only inside the Willie Linux distribution",
         version_line()
