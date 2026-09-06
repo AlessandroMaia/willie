@@ -100,6 +100,19 @@ export type SessionState =
   | { state: "stopping" }
   | { state: "exited"; code: number | null; signal: number | null }
   | { state: "failed"; code: string; message: string; remediation: string };
+export interface Denied {
+  class: "syscall" | "terminal";
+  name: string;
+  count: number;
+  first_at: string;
+  last_at: string;
+}
+export interface SandboxState {
+  applied: string[];
+  unavailable: string[];
+  degraded: string[];
+  denied: Denied[];
+}
 export interface Session {
   id: string;
   project_id: string;
@@ -112,6 +125,7 @@ export interface Session {
   pid?: number | null;
   clients: number;
   resumed_from?: string | null;
+  sandbox?: SandboxState;
 }
 export interface Snapshot {
   seq: number;

@@ -18,6 +18,7 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Spinner } from "@/components/ui/spinner";
+import { SandboxLine } from "@/features/sessions/sandbox-line";
 import { SessionStateBadge } from "@/features/sessions/session-state-badge";
 import { SessionTerminal } from "@/features/sessions/session-terminal";
 import {
@@ -74,6 +75,7 @@ function LiveRow({
           started {relativeTime(session.started_at ?? session.created_at)}
         </span>
       </ItemDescription>
+      <SandboxLine session={session} />
       {problem && <ProblemAlert problem={problem} />}
       <ItemActions className="flex flex-wrap gap-2">
         <Button size="sm" variant="outline" disabled={busy} onClick={onAttach}>
@@ -113,6 +115,7 @@ function RecentRow({ session, projectName }: RecentRowProps) {
           finished {relativeTime(session.finished_at ?? session.created_at)}
         </span>
       </ItemDescription>
+      <SandboxLine session={session} />
     </Item>
   );
 }
