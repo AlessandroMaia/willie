@@ -258,12 +258,20 @@ fn run_stdio() -> ExitCode {
     // The run dir is the daemon's own runtime directory (provisioned
     // `0750 willie:willie`); ensure it exists so a hermetic test's private
     // run dir binds the same way the provisioned one does.
+    //
+    // Failing closed here must actually exit: `ops` (which owns the
+    // `Runner`) and `session_ops` each hold an `Outbound` sender clone, so
+    // the writer thread only ends once every clone is dropped. Releasing
+    // them before joining is what keeps a bind failure — the exact second-
+    // daemon case — from hanging on the join instead of returning FAILURE.
     let socket = willie_linux::paths::daemon_socket(&run_dir);
     if let Err(e) = std::fs::create_dir_all(&run_dir) {
         eprintln!(
             "willied: cannot create the run dir {}: {e}",
             run_dir.display()
         );
+        drop(session_ops);
+        drop(ops);
         drop(out);
         let _ = writer_handle.join();
         return ExitCode::FAILURE;
@@ -272,6 +280,8 @@ fn run_stdio() -> ExitCode {
         Ok(listener) => listener,
         Err(e) => {
             eprintln!("willied: cannot bind {}: {e}", socket.display());
+            drop(session_ops);
+            drop(ops);
             drop(out);
             let _ = writer_handle.join();
             return ExitCode::FAILURE;

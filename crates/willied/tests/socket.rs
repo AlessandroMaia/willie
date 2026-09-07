@@ -13,6 +13,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     os::unix::net::UnixStream,
     path::Path,
+    process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -135,4 +136,74 @@ fn the_local_socket_serves_refuses_shutdown_and_is_removed_on_exit() {
     );
 
     drop(daemon);
+}
+
+/// A second daemon started against the same run dir must fail closed —
+/// refuse to steal the live socket and exit FAILURE — not hang. The
+/// daemon holds several `Outbound` sender clones (`ops`, its `Runner`,
+/// `session_ops`), so the failure path has to release all of them before
+/// joining the writer thread; releasing only one deadlocks on the join.
+/// A hang shows up here as the poll timing out rather than a coded exit.
+#[test]
+fn a_second_daemon_on_the_same_run_dir_fails_closed_without_hanging() {
+    let root = common::scratch("willied-double");
+    let state_dir = root.join("state");
+    let workspaces = root.join("ws");
+    let run_dir = root.join("run");
+    let home = root.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+
+    // The first daemon binds the socket and keeps its stdin open.
+    let first =
+        common::Daemon::start_with(&state_dir, &workspaces, &run_dir, &home);
+    let socket = willie_linux::paths::daemon_socket(&run_dir);
+    // Retry-connect proves the socket is bound before the second starts.
+    let _ = connect(&socket);
+
+    // A second daemon against the SAME run dir hits the live socket.
+    let mut second = Command::new(common::willied_bin())
+        .arg("--stdio")
+        .env("WILLIE_STATE_DIR", &state_dir)
+        .env("WILLIE_PROJECTS_DIR", &workspaces)
+        .env("WILLIE_RUN_DIR", &run_dir)
+        .env("WILLIE_HOME", &home)
+        .env("WILLIE_SESS_BIN", common::sess_bin())
+        .env_remove("TERM")
+        .env_remove("TZ")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap();
+
+    // Poll for it to exit; a deadlock on the join is a timeout, not a hang
+    // that blocks the test forever.
+    let until = Instant::now() + Duration::from_secs(10);
+    let status = loop {
+        match second.try_wait().unwrap() {
+            Some(status) => break Some(status),
+            None if Instant::now() >= until => break None,
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    };
+
+    let status = match status {
+        Some(status) => status,
+        None => {
+            let _ = second.kill();
+            let _ = second.wait();
+            drop(first);
+            panic!(
+                "the second daemon hung on the fail-closed path instead of \
+                 exiting"
+            );
+        }
+    };
+    assert!(
+        !status.success(),
+        "the second daemon should fail closed, exited {status:?}"
+    );
+
+    drop(first);
+    let _ = std::fs::remove_dir_all(&root);
 }

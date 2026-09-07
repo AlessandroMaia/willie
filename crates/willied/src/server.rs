@@ -199,6 +199,11 @@ impl Server {
                     origin,
                     reply,
                 } => {
+                    // A blank line carries no request. `reply` (if any)
+                    // drops here, so a socket client that sends one gets its
+                    // connection closed with no response; the CLI never
+                    // sends blank lines, and stdio blanks were skipped
+                    // before too.
                     if text.trim().is_empty() {
                         continue;
                     }
