@@ -11,6 +11,7 @@
 pub mod daemon;
 pub mod hostterm;
 pub mod job;
+pub mod plugin;
 pub mod project;
 pub mod rpc;
 pub mod sandbox;

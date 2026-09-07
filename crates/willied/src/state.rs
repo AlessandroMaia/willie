@@ -49,6 +49,9 @@ impl State {
             projects: self.projects.values().cloned().collect(),
             jobs: self.jobs.values().cloned().collect(),
             sessions: self.sessions.values().cloned().collect(),
+            // The plugin host lands in a later task; until then the
+            // daemon reports no plugins.
+            plugins: Vec::new(),
         }
     }
 
