@@ -480,7 +480,6 @@ fn main() -> ExitCode {
         events::EventLog::append,
         events::epoch_secs,
         EXIT_FAILURE,
-        sandbox::prepare,
         sandbox::PrepareError::code,
         sandbox::helper_exit,
         sandbox::parse_children,
