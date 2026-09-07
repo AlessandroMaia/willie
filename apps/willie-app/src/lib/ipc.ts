@@ -159,9 +159,8 @@ export const plugins = {
 };
 
 /* The profiles plugin's own methods (`profile.*`), reached through the
- * engine's one guarded pass-through (`plugin_call`): willie-engine never
- * grows a typed method per plugin, so every call here names its own
- * `profile.*` method and shapes its own params/result. */
+ * engine's one guarded pass-through (`plugin_call`), each naming its own
+ * `profile.*` method and shaping its own params/result. */
 function pluginCall<R>(method: string, params: unknown): Promise<R> {
   return invoke<R>("plugin_call", { method, params });
 }

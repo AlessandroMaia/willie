@@ -336,12 +336,20 @@ pub fn profile_handle(
 
 /// Looks up `params.project_id` (when present) in `state` and injects the
 /// project's `workspace` and the harness-state settings path as
-/// `_workspace`/`_harness_settings`. `params` with no `project_id` field
-/// is returned untouched.
+/// `_workspace`/`_harness_settings`. Any caller-supplied `_workspace`/
+/// `_harness_settings` are stripped first, unconditionally: only the
+/// daemon ever injects those two fields, so a `project_id`-less call
+/// carries neither and the plugin's required `_workspace` then fails
+/// closed instead of trusting a smuggled path.
 fn resolve_profile_targets(
     state: &Mutex<State>,
     mut params: Value,
 ) -> Result<Value, RpcError> {
+    if let Value::Object(map) = &mut params {
+        map.remove("_workspace");
+        map.remove("_harness_settings");
+    }
+
     let Some(raw_id) = params.get("project_id").and_then(Value::as_str) else {
         return Ok(params);
     };
@@ -429,5 +437,50 @@ mod tests {
 
         assert_eq!(err.code, "sandbox_profile_invalid");
         assert_eq!(err.remediation.as_deref(), Some("fix the file"));
+    }
+
+    /// A `profile.apply`-shaped call carrying a caller-supplied
+    /// `_workspace` but no `project_id` must not reach the plugin with
+    /// that workspace: only the daemon may inject `_workspace`/
+    /// `_harness_settings`, so both are stripped before the (absent)
+    /// `project_id` is even considered.
+    #[test]
+    fn resolve_profile_targets_strips_a_caller_supplied_workspace_without_project_id()
+     {
+        let state = Mutex::new(State::default());
+        let params = serde_json::json!({
+            "name": "x",
+            "_workspace": "/any/existing/dir",
+        });
+
+        let resolved = resolve_profile_targets(&state, params).unwrap();
+
+        assert!(resolved.get("_workspace").is_none());
+        assert!(resolved.get("_harness_settings").is_none());
+    }
+
+    /// The normal path: a valid `project_id` still gets `_workspace`
+    /// injected from the resolved project, so a genuine `profile.apply`
+    /// against a project keeps working after the strip above.
+    #[test]
+    fn resolve_profile_targets_injects_workspace_from_a_valid_project_id() {
+        let project = project_with_a_sandbox_problem();
+        let pid = project.id;
+        let workspace = project.workspace.clone();
+        let state = Mutex::new(State::default());
+        state.lock().unwrap().projects.insert(pid, project);
+
+        let params = serde_json::json!({
+            "name": "x",
+            "project_id": pid.to_string(),
+        });
+
+        let resolved = resolve_profile_targets(&state, params).unwrap();
+
+        assert_eq!(
+            resolved.get("_workspace").and_then(Value::as_str),
+            Some(workspace.as_str())
+        );
+        assert!(resolved.get("_harness_settings").is_some());
     }
 }

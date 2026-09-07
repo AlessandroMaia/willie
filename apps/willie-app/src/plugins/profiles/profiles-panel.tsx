@@ -383,7 +383,7 @@ export function ProfilesPanel() {
     setCreating(true);
     setListProblem(null);
     try {
-      const created = await profiles.create(newName);
+      const created = await profiles.create(newName.trim());
       setList((current) =>
         [...current, created].sort((a, b) => a.name.localeCompare(b.name)),
       );

@@ -46,10 +46,8 @@ use crate::{
 const DISCOVER_MAX_DEPTH: usize = 2;
 
 /// The namespace [`Engine::plugin_call`] alone is allowed to forward.
-/// Mirrors `willied`'s own `PLUGIN_METHOD_PREFIX` (`crates/willied/src/
-/// server.rs`) without sharing it: the two crates never depend on each
-/// other, so each names the one plugin this phase ships on its own
-/// side of the wire.
+/// Mirrors `willied`'s own `PLUGIN_METHOD_PREFIX`: the two crates never
+/// depend on each other, so each names it on its own side of the wire.
 const PLUGIN_METHOD_PREFIX: &str = "profile.";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -422,13 +420,8 @@ impl Engine {
     }
 
     /// The one seam the webview reaches a plugin's own methods through
-    /// (`profile.list`, `profile.apply`, …): one generic pass-through
-    /// rather than a typed engine method per plugin method, which would
-    /// couple the engine — transport — to every plugin's own method
-    /// list. The prefix check is a security boundary, not a convenience:
-    /// without it the webview could invoke `daemon.shutdown`,
-    /// `project.remove`, or any other daemon method through this one
-    /// command.
+    /// (`profile.list`, `profile.apply`, …) — a security boundary: without
+    /// it the webview could invoke `daemon.shutdown`/`project.remove` too.
     pub fn plugin_call(
         &mut self,
         method: String,

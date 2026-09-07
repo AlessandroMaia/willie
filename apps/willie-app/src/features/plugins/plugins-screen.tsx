@@ -18,10 +18,9 @@ import type { PluginStatus } from "@/lib/proto";
 import { ProfilesPanel } from "@/plugins/profiles/profiles-panel";
 import { useSnapshot } from "@/store/use-snapshot";
 
-/** The profiles plugin's real id (singular — `crates/willie-plugins/
- * profiles/src/lib.rs`'s `manifest().id`), never "profiles": the panel
- * mounts strictly on this literal so a fixture or a future plugin named
- * anything close cannot accidentally pull it in. */
+/** The profiles plugin's real id (singular — `manifest().id` in
+ * `crates/willie-plugins/profiles`), never "profiles": the panel mounts
+ * strictly on this literal. */
 const PROFILES_PLUGIN_ID = "profile";
 
 function scopeLabel(status: PluginStatus): string {

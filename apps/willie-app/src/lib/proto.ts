@@ -137,9 +137,9 @@ export interface Session {
   sandbox?: SandboxState;
 }
 /* Mirrors `willie_proto::plugin::{Scope, Enablement, PluginStatus}`.
- * `Enablement` is externally tagged exactly like `ProjectState`/`JobState`
- * above: `{ global: bool }` for a `Global`-scoped plugin, or
- * `{ per_project: [projectId] }` for a `PerProject` one. */
+ * `Enablement` is externally tagged: the variant name is itself the key,
+ * `{ global: bool }` for a `Global`-scoped plugin or `{ per_project:
+ * [projectId] }` for a `PerProject` one. */
 export type Scope = "global" | "per_project";
 export type Enablement = { global: boolean } | { per_project: string[] };
 export interface PluginStatus {
@@ -152,8 +152,7 @@ export interface PluginStatus {
 
 /* Mirrors `willie_plugins::profiles::model::ProfileSummary` and
  * `apply::{Change, ChangeKind}`: plain field names, `ChangeKind` in
- * `snake_case`. Reached only through `lib/ipc.ts`'s `profiles` bridge
- * (`profile.*` via the engine's guarded `plugin_call` pass-through). */
+ * `snake_case`. */
 export interface ProfileSummary {
   name: string;
   fragments_active: string[];
