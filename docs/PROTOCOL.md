@@ -106,9 +106,9 @@ every load, never trusted from disk.
 
 A `Job` is `{ id, kind, project_id?, state, started_at, finished_at?,
 log_tail }`; `project_id` is absent for a job that belongs to no project
-(a tool install). `kind` is `add`, `remove`, `sync_to_windows`,
-`update_from_windows`, `relocate` or `install_harness`; `state` is
-`running`, `done` or `failed { code, message, remediation }`.
+(a tool install or update). `kind` is `add`, `remove`, `sync_to_windows`,
+`update_from_windows`, `relocate`, `install_harness` or `update_harness`;
+`state` is `running`, `done` or `failed { code, message, remediation }`.
 
 ## `session.*`
 | Method | Params | Result |
@@ -176,10 +176,22 @@ tool codes below).
 | Method | Params | Result |
 | --- | --- | --- |
 | `tool.install` | `InstallParams { harness }` | `JobRef { job_id }` — the install runs as a job; watch its `job_changed` events |
+| `tool.list` | `{}` | `ToolList { tools: [ToolStatus] }` |
+| `tool.update` | `UpdateParams { tool }` | `JobRef { job_id }` |
+
+`tool.install` stays: `InstallParams { harness }` → `JobRef`. A
+`ToolStatus` is `{ id, name, installed, version?, recorded_version? }`:
+`version` is live detection (present iff installed), `recorded_version` is
+what the manifest recorded. The catalogue is the harness registry today.
+`tool.update` re-runs the installer for an installed tool and answers the
+same `JobRef` as install; its job kind is `update_harness`.
 
 `harness_already_installed` and `tool_busy` come back synchronously as
 the call's own error, before any job starts; a job that starts and then
-fails always carries `install_failed`.
+fails always carries `install_failed`. `tool.update` on a tool the daemon
+does not detect refuses synchronously with `tool_not_installed`; an
+unknown tool id is `invalid_params` instead (see Session and tool codes
+below).
 
 ## `state.*`
 | Method | Params | Result |
@@ -321,6 +333,7 @@ a profile the UI edits.
 | `sessions_running` | `project.remove` while the project has a `running` or `stopping` session | stop the project's sessions first |
 | `supervisor_lost` | a session's control connection ended and a follow-up probe of its socket got no answer, with no terminal event in its log — set only inside the session's own `Failed` state, never as a call's synchronous error | open a new session |
 | `harness_already_installed` | `tool.install` when detection already finds the harness | nothing to install |
+| `tool_not_installed` | `tool.update` on a tool the daemon does not detect. Not for an unknown tool id — that is `invalid_params` | install it first, then update |
 | `tool_busy` | a tool job is already running | wait for the running install to finish |
 | `install_failed` | the installer exited non-zero, or could not be spawned | read the installer output, check the network, then try again |
 
