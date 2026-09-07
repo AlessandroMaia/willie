@@ -94,8 +94,8 @@ persisting it, the same fail-closed check `session.create` and
 `sandbox_problem` is present only when the record's `[sandbox]` table
 could not be read; the project then loads with the default profile, and
 `session.create`/`sandbox.explain` refuse with `sandbox_profile_invalid`
-until the profile is saved again. It is recomputed on every load, never
-trusted from disk.
+until the profile is replaced through `set_sandbox`. It is recomputed on
+every load, never trusted from disk.
 
 ## `job.*`
 | Method | Params | Result |

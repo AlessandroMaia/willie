@@ -24,7 +24,7 @@ export function FailureChip({
 }: FailureChipProps) {
   return (
     <div
-      className={`flex flex-col gap-1 rounded-lg px-2.5 py-1.5 text-xs ${TONE_SURFACE[tone === "warning" ? "warning" : "error"]}`}
+      className={`flex flex-col gap-1 rounded-lg px-2.5 py-1.5 text-xs ${TONE_SURFACE[tone]}`}
     >
       <code className="font-mono">{code}</code>
       <span>{message}</span>

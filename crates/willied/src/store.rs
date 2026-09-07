@@ -282,6 +282,7 @@ mod tests {
 
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("nonsense = true"), "{text}");
+        assert!(!text.contains("sandbox_problem"), "{text}");
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -61,7 +61,8 @@ lets the stage install its filter would let the harness install one, and
 the stage's own install is the first filter in the process, made before
 the list is in force; the same filter can also be installed without ever
 calling `seccomp(2)`, through `prctl(PR_SET_SECCOMP)`, so that option is
-refused too, judged by its first argument like `ioctl` and `socket` are;
+refused too, judged by its first argument, as `socket` is (`ioctl` is
+judged by its request, the second argument);
 the mount table through the old interface and the
 new one (`mount`, `umount2`, `pivot_root`, `mount_setattr`, `open_tree`,
 `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`); leaving this
