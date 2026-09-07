@@ -59,7 +59,10 @@ receives it, so a nested listener could continue a call this filter
 refuses and nothing would be recorded — the same `no_new_privs` bit that
 lets the stage install its filter would let the harness install one, and
 the stage's own install is the first filter in the process, made before
-the list is in force; the mount table through the old interface and the
+the list is in force; the same filter can also be installed without ever
+calling `seccomp(2)`, through `prctl(PR_SET_SECCOMP)`, so that option is
+refused too, judged by its first argument like `ioctl` and `socket` are;
+the mount table through the old interface and the
 new one (`mount`, `umount2`, `pivot_root`, `mount_setattr`, `open_tree`,
 `move_mount`, `fsopen`, `fsconfig`, `fsmount`, `fspick`); leaving this
 namespace or making another (`unshare`, `setns`); kernel modules and a
@@ -139,6 +142,9 @@ cannot make one. Neither closes the path alone.
   of its own, open a packet or raw socket, or nest a user namespace. A
   workflow that did any of these stops, with `EPERM` and a line in the
   log that says so.
+- `prctl(PR_SET_SECCOMP)` is refused for the same reason as `seccomp`
+  itself: a session cannot shadow this filter with one of its own,
+  whichever call installs it. Every other `prctl` option still passes.
 - Seccomp is required: a kernel without user notification refuses every
   session. This kernel has it (0016), so no working session changes.
 - The filter is a fixed list in the base, not configurable; a call that

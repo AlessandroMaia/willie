@@ -67,6 +67,9 @@ const SECCOMP_RET_ALLOW: u32 = 0x7FFF_0000;
 
 /// Terminal input injection: the one `ioctl` request refused.
 const TIOCSTI: u32 = 0x5412;
+/// prctl's PR_SET_SECCOMP: the one prctl option refused, so a session
+/// cannot install a filter that could shadow this one.
+const PR_SET_SECCOMP: u32 = 22;
 const AF_NETLINK: u32 = 16;
 const AF_PACKET: u32 = 17;
 const SOCK_RAW: u32 = 3;
@@ -83,6 +86,7 @@ const NETLINK_ROUTE: u32 = 0;
 // their arguments:
 pub const SYS_ioctl: u32 = 16;
 pub const SYS_socket: u32 = 41;
+pub const SYS_prctl: u32 = 157;
 // These are refused outright; `DENIED` groups and names them.
 pub const SYS_ptrace: u32 = 101;
 pub const SYS_process_vm_readv: u32 = 310;
@@ -170,6 +174,7 @@ pub fn name(nr: u32) -> Option<&'static str> {
     match nr {
         SYS_ioctl => Some("ioctl"),
         SYS_socket => Some("socket"),
+        SYS_prctl => Some("prctl"),
         _ => DENIED.iter().find(|(n, _)| *n == nr).map(|(_, name)| *name),
     }
 }
@@ -200,6 +205,7 @@ enum To {
     Socket,
     /// The socket block's type check, past the netlink protocol check.
     SocketType,
+    Prctl,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -283,9 +289,10 @@ pub fn program() -> Vec<Insn> {
         asm.jump(JEQ_K, *nr, To::Notify, To::Next);
     }
 
-    // The two calls judged by their arguments, then the default.
+    // The calls judged by their arguments, then the default.
     asm.jump(JEQ_K, SYS_ioctl, To::Ioctl, To::Next);
     asm.jump(JEQ_K, SYS_socket, To::Socket, To::Next);
+    asm.jump(JEQ_K, SYS_prctl, To::Prctl, To::Next);
     asm.stmt(RET_K, SECCOMP_RET_ALLOW);
 
     // ioctl: the request is the second argument; only terminal input
@@ -314,6 +321,12 @@ pub fn program() -> Vec<Insn> {
     asm.jump(JEQ_K, SOCK_RAW, To::Notify, To::Next);
     asm.jump(JEQ_K, SOCK_PACKET, To::Notify, To::Allow);
 
+    // prctl: the option is the first argument; only installing a seccomp
+    // filter is refused, so a nested filter cannot shadow this one.
+    asm.mark(To::Prctl);
+    asm.stmt(LD_W_ABS, DATA_ARG0);
+    asm.jump(JEQ_K, PR_SET_SECCOMP, To::Notify, To::Allow);
+
     // The three verdicts every jump above lands on.
     asm.mark(To::Allow);
     asm.stmt(RET_K, SECCOMP_RET_ALLOW);
@@ -341,6 +354,8 @@ mod tests {
     const SYS_clone3: u32 = 435;
     const AUDIT_ARCH_I386: u32 = 0x4000_0003;
     const TIOCGWINSZ: u32 = 0x5413;
+    const PR_SET_SECCOMP: u32 = 22;
+    const PR_SET_NAME: u32 = 15;
     const AF_INET: u32 = 2;
     const SOCK_STREAM: u32 = 1;
     const SOCK_DGRAM: u32 = 2;
@@ -422,6 +437,10 @@ mod tests {
 
     fn ioctl_args(request: u32) -> [u64; 6] {
         [0, u64::from(request), 0, 0, 0, 0]
+    }
+
+    fn prctl_args(option: u32) -> [u64; 6] {
+        [u64::from(option), 0, 0, 0, 0, 0]
     }
 
     /// The interpreter reads the data the way the kernel lays it out, or
@@ -521,6 +540,25 @@ mod tests {
         );
         assert_eq!(
             action(AUDIT_ARCH_X86_64, SYS_ioctl, NO_ARGS),
+            SECCOMP_RET_ALLOW
+        );
+    }
+
+    /// The harness sets its process name, death signal and no-new-privs
+    /// through prctl; only PR_SET_SECCOMP is refused, because a filter
+    /// installed that way could shadow this one and mute a denial line.
+    #[test]
+    fn prctl_set_seccomp_is_notified_other_prctls_pass() {
+        assert_eq!(
+            action(AUDIT_ARCH_X86_64, SYS_prctl, prctl_args(PR_SET_SECCOMP)),
+            SECCOMP_RET_USER_NOTIF
+        );
+        assert_eq!(
+            action(AUDIT_ARCH_X86_64, SYS_prctl, prctl_args(PR_SET_NAME)),
+            SECCOMP_RET_ALLOW
+        );
+        assert_eq!(
+            action(AUDIT_ARCH_X86_64, SYS_prctl, NO_ARGS),
             SECCOMP_RET_ALLOW
         );
     }
@@ -664,6 +702,7 @@ mod tests {
         assert_eq!(name(SYS_unshare), Some("unshare"));
         assert_eq!(name(SYS_ioctl), Some("ioctl"));
         assert_eq!(name(SYS_socket), Some("socket"));
+        assert_eq!(name(SYS_prctl), Some("prctl"));
         assert_eq!(name(SYS_read), None);
         assert_eq!(name(999_999), None);
     }
@@ -727,6 +766,7 @@ mod tests {
             }
             assert_eq!(i64::from(SYS_ioctl), libc::SYS_ioctl);
             assert_eq!(i64::from(SYS_socket), libc::SYS_socket);
+            assert_eq!(i64::from(SYS_prctl), libc::SYS_prctl);
             assert_eq!(i64::from(SYS_read), libc::SYS_read);
             assert_eq!(i64::from(SYS_write), libc::SYS_write);
             assert_eq!(i64::from(SYS_execve), libc::SYS_execve);
@@ -786,6 +826,7 @@ mod tests {
             assert_eq!(SOCK_PACKET, int(libc_sock_packet));
             assert_eq!(SOCK_NONBLOCK, int(libc::SOCK_NONBLOCK));
             assert_eq!(SOCK_CLOEXEC, int(libc::SOCK_CLOEXEC));
+            assert_eq!(PR_SET_SECCOMP, int(libc::PR_SET_SECCOMP));
             assert_eq!(
                 u64::from(TIOCSTI),
                 u64::try_from(libc::TIOCSTI).unwrap()
