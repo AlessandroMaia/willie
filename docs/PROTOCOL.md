@@ -193,15 +193,131 @@ does not detect refuses synchronously with `tool_not_installed`; an
 unknown tool id is `invalid_params` instead (see Session and tool codes
 below).
 
+## `plugin.*`
+
+Plugins are compiled into the daemon, run outside every session sandbox,
+and each degrades only itself. The host keeps a registry, persists which
+plugins are enabled (and, for a per-project plugin, in which projects) in
+`/var/lib/willie/plugins/enabled.toml`, and routes calls to them.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `plugin.list` | `{}` | `[PluginStatus]` |
+| `plugin.enable` | `EnableParams { id, project_id? }` | `PluginStatus` |
+| `plugin.disable` | `EnableParams { id, project_id? }` | `PluginStatus` |
+
+A `PluginStatus` is `{ id, name, scope, enabled, degraded }`; `scope` is
+`global` or `per_project`; `enabled` is `{ global: <bool> }` for a global
+plugin or `{ per_project: [ProjectId] }` for a per-project one; `degraded`
+is `true` once a call into the plugin has panicked or returned an internal
+fault (`plugin_internal`) — a genuine malfunction. An ordinary coded refusal
+(a legitimate "no", e.g. `profile_exists`) does not degrade it.
+`EnableParams.project_id` picks the scope: absent enables (or disables) the
+plugin globally, present enables (or disables) it for that project. A scope
+the plugin's manifest forbids — a global one for a per-project plugin, or
+the reverse — is refused with `plugin_scope_mismatch`. A missing or
+unreadable `enabled.toml` reads as "nothing enabled" and the daemon still
+runs.
+
+A plugin's own methods carry no dispatch arm of their own: a method under a
+plugin's namespace (today `profile.*`, the configuration-profiles plugin)
+is routed to the host, which splits `<id>.<method>`, finds the plugin and
+calls it. The plugin id doubles as its method namespace, so the profiles
+plugin — methods `profile.*` — is identified as `profile`. An unknown id is
+`plugin_not_found`; a call to a disabled plugin is `plugin_disabled`; a
+plugin that panics is caught at the host boundary, marked `degraded`, and
+answered with `plugin_panicked` — the daemon lives.
+
+The `plugin_changed` `state.event` kind and a plugin's own `plugin.emitted`
+notification are reserved in the protocol but **not yet emitted**: an
+enable/disable returns the new `PluginStatus` synchronously and a client
+sees the change on its next `state.snapshot` (whose `plugins` field the host
+fills). Forwarding live plugin changes and emissions is a follow-up.
+
+## `profile.*`
+
+The configuration-profiles plugin (id `profile`, scope `per_project`).
+Routed through `plugin.*` above: disabled or an unknown method answers
+with the plugin codes there, not the ones below. A profile is
+`<store_dir>/<name>/`, a git repository the plugin manages with its own
+`git` (never the daemon's); every write is its own commit.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `profile.list` | `{}` | `[ProfileSummary { name, fragments_active }]` |
+| `profile.create` | `{ name }` | `ProfileSummary` |
+| `profile.read_fragment` | `{ name, fragment }` | `{ content }` |
+| `profile.write_fragment` | `{ name, fragment, content }` | `{ content }` |
+| `profile.check` | `{ name, project_id }` | `{ changes: [Change] }` |
+| `profile.apply` | `{ name, project_id }` | `{ changes: [Change], backup_path }` |
+| `profile.set_remote` | `{ name, url }` | `{}` |
+| `profile.push` | `{ name }` | `{}` |
+| `profile.pull` | `{ name }` | `{}` |
+
+`fragment` is one of `settings`, `instructions`, `mcp` (booleans in
+`profile.toml`'s `[fragments]` table), or `rules/<file>` / `hooks/<file>`
+(a specific file, active once its name is in that family's list — the
+list is the on/off switch, there is no separate flag). `profile.create`
+scaffolds `profile.toml`, an empty `settings.json` and `CLAUDE.md`, `git
+init`s the directory and commits the scaffold. `profile.write_fragment`
+writes the fragment file, marks it active in `profile.toml`, and commits
+both in one commit; `profile.read_fragment` on a fragment never written
+returns `{ content: "" }` rather than refusing. Turning a fragment back
+off is done by editing `profile.toml` directly (the supported path,
+per the design) — there is no Phase-1 method for it.
+
+`profile.check`/`profile.apply` (Phase 2, the format-preserving merge
+into a project) never resolve `project_id` themselves: before either
+reaches the plugin, the daemon's `profile.*` route looks the project up
+and injects the resolved ext4 `workspace` path and the harness-state
+settings path into the request as `_workspace`/`_harness_settings` — a
+caller only ever sends `name`/`project_id`, and an unknown `project_id`
+is refused `project_not_found` at this resolution step, before the
+plugin runs at all (so it is never masked by `plugin_disabled`, even if
+the plugin also happens to be disabled). `profile.check` plans every
+active fragment's change — a JSON merge into `.claude/settings.json`
+(`settings`, `mcp`), a Markdown merge into `CLAUDE.md` between the
+`willie` markers (`instructions`), or a file copy into `.claude/rules/`
+/ `.claude/hooks/` — against the project's current files, without
+writing. `profile.apply` performs the same plan, first backing up every
+file it will change into `<workspace>/.willie-bak/<nanosecond
+timestamp>/` at its relative path (a `Change` that only creates a file
+has nothing to back up), then writes; `backup_path` names the backup
+directory even when nothing needed copying. A `settings` fragment
+marked `settings_scope = "global"` in `profile.toml`'s `[fragments]`
+table (default: `"project"`) plans and applies a *second* change,
+merged independently into the harness state's own `settings.json` (an
+absolute path in `Change.path`, distinguishing it from the project's
+workspace-relative ones) — every other project's sessions read that
+file, so a profile opts into touching it explicitly rather than by
+surprise.
+
+`profile.set_remote`/`push`/`pull` (Phase 3, the minimal sync) carry a
+profile between the user's two machines through a private git remote the
+user configures, over the same plugin-owned `git` — no credential
+handling beyond what the distribution's own `git` already has (an SSH
+remote uses the session's keys story, out of scope here). `set_remote`
+adds `origin` pointing at `url`, or repoints it with `set-url` if one is
+already configured; it is safe to call again to point an existing
+profile at a new remote. `push` runs `git push -u origin HEAD`,
+publishing the profile's current history and recording the upstream so
+a later `pull` needs no branch name. `pull` runs `git pull --ff-only`;
+a divergent history — this machine and the remote each have commits the
+other lacks, so no fast-forward exists — is refused as
+`profile_sync_conflict` naming the profile, rather than left to git to
+attempt a merge that could conflict inside the profile's own tracked
+files.
+
 ## `state.*`
 | Method | Params | Result |
 | --- | --- | --- |
-| `state.snapshot` | `{}` | `Snapshot { seq, projects: [Project], jobs: [Job], sessions: [Session] }` |
+| `state.snapshot` | `{}` | `Snapshot { seq, projects: [Project], jobs: [Job], sessions: [Session], plugins: [PluginStatus] }` |
 
 `state.event` is a notification (daemon → client), never a request. Its
 params are `Event { seq, kind }` where `kind` is `project_changed
 { project }`, `project_removed { id }`, `job_changed { job }` or
-`session_changed { session }`. `seq` is a
+`session_changed { session }`. (`plugin_changed { plugin }` is reserved but
+not yet emitted — see `plugin.*` above.) `seq` is a
 monotonic counter shared by the snapshot and every event: a client that
 holds a snapshot at `seq = N` applies every event with `seq > N` in order.
 A single writer owns stdout, so events never interleave and their `seq`
@@ -280,7 +396,7 @@ to the same add/relocate flow as the codes around it.
 | `source_detached_head` | `project.add`'s fast validation reads the source's current branch and finds `HEAD` itself, no branch checked out | the source is on a branch that later turns out to differ from the workspace's — that is `windows_branch_mismatch`, only seen at sync time | check out a branch in the Windows checkout, then add again |
 | `project_exists` | `project.add`'s source matches an already-registered project's source, compared case-insensitively with a trailing separator ignored | the *workspace directory* for the derived slug already exists but no project references it — that is `workspace_exists` | this checkout is already registered; use its existing row instead of adding it again |
 | `workspace_exists` | `project.add` derives a slug for the workspace and a directory of that name already exists under `/home/willie/projects/` | the same checkout is already a registered project — that is `project_exists`, checked first | delete the kept workspace directory the message names (`rm -rf` inside the distribution), moving it aside first if it still holds work you want, then add the checkout again |
-| `project_not_found` | any `project.*` method (`remove`, `sync_to_windows`, `update_from_windows`, `relocate`, `rename`, `set_sandbox`), or `session.create`/`sandbox.explain`, names an id no longer in the daemon's state | the id is valid but a job is already running for it — that is `project_busy` | check the project id and try again; a stale UI should re-snapshot first |
+| `project_not_found` | any `project.*` method (`remove`, `sync_to_windows`, `update_from_windows`, `relocate`, `rename`, `set_sandbox`), `session.create`/`sandbox.explain`, or a `profile.check`/`profile.apply` whose `project_id` the daemon's `profile.*` route cannot resolve (before the profiles plugin ever runs), names an id no longer in the daemon's state | the id is valid but a job is already running for it — that is `project_busy` | check the project id and try again; a stale UI should re-snapshot first |
 | `project_busy` | a `project.*` operation that starts a job is called while that project already has one job running — one job per project at a time | the daemon's 3-job pool is full but this project is idle — that job is queued, not refused; `project_busy` is per project | wait for the current job to finish, or cancel it with `job.cancel` |
 | `sessions_running` | `project.remove` is called while the project has at least one session in `running` or `stopping` | no session of the project is live — the remove job is submitted as usual | stop the project's sessions first |
 | `source_missing` | `sync_to_windows` or `update_from_windows` runs and the project's Windows source is gone — the directory no longer exists, or it exists but its `.git` does not (the same `source_present` check the project row uses) | the source exists but is dirty or on the wrong branch — that is `windows_tree_dirty`/`windows_branch_mismatch`, only checked once the source is confirmed present | relocate the project to a checkout that still exists |
@@ -336,6 +452,40 @@ a profile the UI edits.
 | `tool_not_installed` | `tool.update` on a tool the daemon does not detect. Not for an unknown tool id — that is `invalid_params` | install it first, then update |
 | `tool_busy` | a tool job is already running | wait for the running install to finish |
 | `install_failed` | the installer exited non-zero, or could not be spawned | read the installer output, check the network, then try again |
+
+## Plugin codes
+
+These come back as the `error` of a `plugin.*` call, or of a plugin-routed
+`profile.*` call. A plugin's own coded failures (e.g. `profile_exists`
+below) travel through unchanged, carrying the plugin's own code and
+remediation.
+
+| Code | When | When not | Remediation |
+| --- | --- | --- | --- |
+| `plugin_not_found` | `plugin.enable`/`disable`, or a `profile.*` call, names a plugin id no plugin in the registry answers to | the id is known but disabled — that is `plugin_disabled` | check `plugin.list` for the available plugin ids |
+| `plugin_disabled` | a `profile.*` (plugin-routed) call while the plugin is not enabled — a global plugin whose flag is off, or a per-project plugin enabled in no project | the plugin is enabled — the call reaches it and returns the plugin's own result or coded error | enable it with `plugin.enable` before calling its methods |
+| `plugin_scope_mismatch` | `plugin.enable`/`disable` in a scope the manifest forbids: a global scope (no `project_id`) for a per-project plugin, or a per-project scope (a `project_id`) for a global plugin | the scope matches the manifest — the enable/disable proceeds | enable it in the scope its manifest declares (a `project_id` for a per-project plugin, none for a global one) |
+| `plugin_panicked` | a plugin's `on_enable`/`on_disable`/`handle` panicked; the panic is caught at the host boundary and the plugin is marked `degraded`, the daemon lives | the plugin returned an ordinary coded refusal — that carries the plugin's own code and does not degrade it; only a panic or an internal fault (`plugin_internal`) does | check the daemon log; the plugin stays degraded until a later call succeeds or it is re-enabled |
+| `plugin_internal` | a plugin returned `PluginError::Internal` — a genuine fault (not a `Coded` refusal it can name); the plugin is marked `degraded` | the plugin returned a coded refusal (e.g. `profile_exists`) — a legitimate "no" that carries its own code and leaves the plugin healthy | retry; if it repeats, check the daemon log — the plugin stays degraded until a later call succeeds or it is re-enabled |
+| `plugin_bad_request` | an enabled plugin's own `handle` refuses the call before doing any work: a method it does not recognise inside its own namespace, or params that fail to deserialise into what the method expects (missing or wrong-shaped fields — e.g. `profile.check` called with no `_workspace`). Does **not** mark the plugin `degraded` — a malformed request is the caller's mistake, not the plugin's fault | the id or method is unknown to the host itself — that is `plugin_not_found` — or the plugin is not enabled — that is `plugin_disabled`, both checked before the plugin ever runs; params that parse but describe a nonsensical request are the plugin's own coded refusal (e.g. `profile_name_invalid`) or `plugin_internal`, not this code | check the request's method name and parameters against the plugin's contract, then retry |
+
+## Profile codes
+
+The configuration-profiles plugin's own coded refusals (see `profile.*`
+above); none of them mark the plugin `degraded` — each is a legitimate
+"no" the caller can act on, not a fault.
+
+| Code | When | Remediation |
+| --- | --- | --- |
+| `profile_exists` | `profile.create` names a profile that already has a directory under `store_dir` | pick a different name, or edit the existing profile |
+| `profile_not_found` | `profile.read_fragment`/`write_fragment`/`set_remote`/`push`/`pull` names a **valid-shaped** profile name with no `profile.toml` under it | check `profile.list` for the available profile names |
+| `profile_fragment_unknown` | `profile.read_fragment`/`write_fragment`'s `fragment` is not `settings`, `instructions`, `mcp`, or a `rules/<file>`/`hooks/<file>` naming a single, safe file name | use one of `settings`, `instructions`, `mcp`, `rules/<file>`, `hooks/<file>` |
+| `profile_name_invalid` | any of the methods' `name` is empty, contains a path separator, is `.`/`..`, or opens with a Windows drive-letter pattern (`C:foo`, `a:bar`) — checked before any path is built from it, and re-checked after joining it onto `store_dir` in case the join itself produced something outside it (belt and suspenders, since this crate has no `cfg(target_os = "linux")` of its own and so also builds and runs under Windows path semantics) | use a name with no path separators, not `.` or `..`, and not shaped like a drive letter |
+| `profile_target_missing` | `profile.check`/`profile.apply` against a project whose ext4 `workspace` directory does not exist on disk — checked first, before any fragment is read | re-add the project (its ext4 clone is gone) before checking or applying a profile |
+| `profile_fragment_invalid` | an active `settings`/`mcp` fragment, or the project's own existing `.claude/settings.json` (or the harness state's), is not valid JSON — from the pure merge in `apply.rs`, surfaced before any write | fix the fragment's or the target's content so it parses as JSON, then check or apply again |
+| `profile_markers_malformed` | the project's existing `CLAUDE.md` has a `<!-- willie:begin -->` marker with no matching `<!-- willie:end -->` after it — refused rather than appending a second block that would never converge on a later apply | fix or remove the stray `<!-- willie:begin -->` marker in `CLAUDE.md`, then apply again |
+| `profile_fragment_missing` | an internal wiring fault: an active fragment for which `check`/`apply` did not supply target content to the pure planner — not expected to occur, since every active fragment's target is always read before planning | check the daemon log; this is a bug in Willie, not something to fix in the profile |
+| `profile_sync_conflict` | `profile.pull`'s `git pull --ff-only` hit a non-fast-forward or conflict: this machine and the remote have each moved on independently, so no fast-forward exists and nothing was changed | resolve it in a terminal inside the distribution, then pull again |
 
 ## Engine problem codes
 

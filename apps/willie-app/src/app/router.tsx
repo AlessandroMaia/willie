@@ -9,6 +9,7 @@ import {
 } from "@tanstack/react-router";
 import { Shell } from "@/app/shell/shell";
 import { DashboardScreen } from "@/features/health/dashboard-screen";
+import { PluginsScreen } from "@/features/plugins/plugins-screen";
 import { ProjectsScreen } from "@/features/projects/projects-screen";
 import { SessionsScreen } from "@/features/sessions/sessions-screen";
 import { ToolsScreen } from "@/features/tools/tools-screen";
@@ -56,12 +57,19 @@ const toolsRoute = createRoute({
   component: ToolsScreen,
 });
 
+const pluginsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/plugins",
+  component: PluginsScreen,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   dashboardRoute,
   projectsRoute,
   sessionsRoute,
   toolsRoute,
+  pluginsRoute,
 ]);
 
 /** Hash history by default: it survives a dev-server reload and needs

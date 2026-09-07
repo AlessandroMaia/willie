@@ -33,7 +33,9 @@ export default defineConfig(async () => ({
         extends: true,
         test: {
           name: "ui",
-          include: ["src/{app,components,features,store}/**/*.test.{ts,tsx}"],
+          include: [
+            "src/{app,components,features,plugins,store}/**/*.test.{ts,tsx}",
+          ],
           environment: "jsdom",
           globals: true,
           setupFiles: ["./src/test-setup.ts"],

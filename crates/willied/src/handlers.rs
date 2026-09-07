@@ -9,7 +9,7 @@ use std::{
 };
 
 use serde_json::Value;
-use willie_core::id::JobId;
+use willie_core::id::{JobId, ProjectId};
 use willie_harness::Harness;
 use willie_proto::{
     PROTOCOL_VERSION,
@@ -24,7 +24,9 @@ use willie_proto::{
     tool::{InstallParams, UpdateParams},
 };
 
-use crate::{projects::Ops, sessions::SessionOps, state::State};
+use crate::{
+    plugins::PluginHost, projects::Ops, sessions::SessionOps, state::State,
+};
 
 fn internal(e: impl std::fmt::Display) -> RpcError {
     RpcError::new("internal_error", e.to_string())
@@ -53,6 +55,13 @@ fn capability_error(e: willie_core::sandbox::CapabilityError) -> RpcError {
 /// not take a reader's snapshot down with it.
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The same poison-recovering lock for the plugin host: a plugin's panic is
+/// already caught at the host's own boundary, so the mutex is never
+/// poisoned by one, but recover anyway rather than risk a panic here.
+fn lock_host(host: &Mutex<PluginHost>) -> MutexGuard<'_, PluginHost> {
+    host.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Extracts the `id` of a `{ "id": <JobId> }` params object. Avoids a
@@ -259,14 +268,121 @@ pub fn sandbox_explain(
     .map_err(internal)
 }
 
+/// The host's registry of plugins, each merged with its enablement and
+/// degraded flag.
+pub fn plugin_list(host: &Mutex<PluginHost>) -> Result<Value, RpcError> {
+    let plugins = lock_host(host).list();
+    serde_json::to_value(plugins).map_err(internal)
+}
+
+/// Enables a plugin. `EnableParams.project_id` picks the scope: absent is a
+/// global enable, present a per-project one; a scope the plugin's manifest
+/// forbids is refused with `plugin_scope_mismatch`.
+pub fn plugin_enable(
+    host: &Mutex<PluginHost>,
+    p: Value,
+) -> Result<Value, RpcError> {
+    let params: willie_proto::plugin::EnableParams =
+        serde_json::from_value(p).map_err(invalid_params)?;
+    let status = lock_host(host).enable(params).map_err(op_error)?;
+    serde_json::to_value(status).map_err(internal)
+}
+
+/// Disables a plugin in the scope its `EnableParams` implies.
+pub fn plugin_disable(
+    host: &Mutex<PluginHost>,
+    p: Value,
+) -> Result<Value, RpcError> {
+    let params: willie_proto::plugin::EnableParams =
+        serde_json::from_value(p).map_err(invalid_params)?;
+    let status = lock_host(host).disable(params).map_err(op_error)?;
+    serde_json::to_value(status).map_err(internal)
+}
+
+/// Routes an `<id>.<method>` call (e.g. `profile.list`) to its plugin. The
+/// host resolves the leading id, refuses an unknown one with
+/// `plugin_not_found` and a disabled one with `plugin_disabled`, and turns
+/// a plugin panic into `plugin_panicked` rather than a daemon crash.
+pub fn plugin_handle(
+    host: &Mutex<PluginHost>,
+    method: &str,
+    p: Value,
+) -> Result<Value, RpcError> {
+    lock_host(host).handle(method, p).map_err(op_error)
+}
+
+/// The daemon-fills-targets seam (designs/plugins-and-profiles.md, "the
+/// project is looked up through the daemon"): every `profile.*` call is
+/// routed through here rather than straight to `plugin_handle`. A
+/// `project_id` in the params is resolved to the project's ext4
+/// `workspace` and the harness-state settings path *before* the plugin
+/// ever runs, injected as `_workspace`/`_harness_settings` — the profiles
+/// plugin reads those two fields and never reaches into daemon state
+/// itself. Params carrying no `project_id` (`profile.list`,
+/// `profile.create`, `profile.read_fragment`, `profile.write_fragment`)
+/// pass through unchanged: not every `profile.*` method targets a
+/// project. An unknown `project_id` answers `project_not_found` here,
+/// before `plugin_handle` is reached at all, so it is never masked by a
+/// `plugin_disabled` the plugin host would otherwise answer first.
+pub fn profile_handle(
+    state: &Mutex<State>,
+    host: &Mutex<PluginHost>,
+    method: &str,
+    p: Value,
+) -> Result<Value, RpcError> {
+    let p = resolve_profile_targets(state, p)?;
+    plugin_handle(host, method, p)
+}
+
+/// Looks up `params.project_id` (when present) in `state` and injects the
+/// project's `workspace` and the harness-state settings path as
+/// `_workspace`/`_harness_settings`. Any caller-supplied `_workspace`/
+/// `_harness_settings` are stripped first, unconditionally: only the
+/// daemon ever injects those two fields, so a `project_id`-less call
+/// carries neither and the plugin's required `_workspace` then fails
+/// closed instead of trusting a smuggled path.
+fn resolve_profile_targets(
+    state: &Mutex<State>,
+    mut params: Value,
+) -> Result<Value, RpcError> {
+    if let Value::Object(map) = &mut params {
+        map.remove("_workspace");
+        map.remove("_harness_settings");
+    }
+
+    let Some(raw_id) = params.get("project_id").and_then(Value::as_str) else {
+        return Ok(params);
+    };
+    let project_id: ProjectId = raw_id.parse().map_err(invalid_params)?;
+    let project = lock(state)
+        .projects
+        .get(&project_id)
+        .cloned()
+        .ok_or_else(|| op_error(crate::projects::not_found_err(project_id)))?;
+
+    let harness_settings = crate::harness::home()
+        .join(".willie/agent-state/claude/dot-claude/settings.json");
+    if let Value::Object(map) = &mut params {
+        map.insert("_workspace".to_owned(), Value::String(project.workspace));
+        map.insert(
+            "_harness_settings".to_owned(),
+            Value::String(harness_settings.to_string_lossy().into_owned()),
+        );
+    }
+    Ok(params)
+}
+
 /// Recomputes each project's `source_present` from the filesystem, then
-/// answers with the fresh snapshot.
+/// answers with the fresh snapshot, its `plugins` field filled from the
+/// host's live `list()`.
 pub fn state_snapshot(
     ops: &Ops,
     state: &Mutex<State>,
+    host: &Mutex<PluginHost>,
 ) -> Result<Value, RpcError> {
     ops.refresh_source_present();
-    let snapshot: Snapshot = lock(state).snapshot();
+    let mut snapshot: Snapshot = lock(state).snapshot();
+    snapshot.plugins = lock_host(host).list();
     serde_json::to_value(snapshot).map_err(internal)
 }
 
@@ -321,5 +437,50 @@ mod tests {
 
         assert_eq!(err.code, "sandbox_profile_invalid");
         assert_eq!(err.remediation.as_deref(), Some("fix the file"));
+    }
+
+    /// A `profile.apply`-shaped call carrying a caller-supplied
+    /// `_workspace` but no `project_id` must not reach the plugin with
+    /// that workspace: only the daemon may inject `_workspace`/
+    /// `_harness_settings`, so both are stripped before the (absent)
+    /// `project_id` is even considered.
+    #[test]
+    fn resolve_profile_targets_strips_a_caller_supplied_workspace_without_project_id()
+     {
+        let state = Mutex::new(State::default());
+        let params = serde_json::json!({
+            "name": "x",
+            "_workspace": "/any/existing/dir",
+        });
+
+        let resolved = resolve_profile_targets(&state, params).unwrap();
+
+        assert!(resolved.get("_workspace").is_none());
+        assert!(resolved.get("_harness_settings").is_none());
+    }
+
+    /// The normal path: a valid `project_id` still gets `_workspace`
+    /// injected from the resolved project, so a genuine `profile.apply`
+    /// against a project keeps working after the strip above.
+    #[test]
+    fn resolve_profile_targets_injects_workspace_from_a_valid_project_id() {
+        let project = project_with_a_sandbox_problem();
+        let pid = project.id;
+        let workspace = project.workspace.clone();
+        let state = Mutex::new(State::default());
+        state.lock().unwrap().projects.insert(pid, project);
+
+        let params = serde_json::json!({
+            "name": "x",
+            "project_id": pid.to_string(),
+        });
+
+        let resolved = resolve_profile_targets(&state, params).unwrap();
+
+        assert_eq!(
+            resolved.get("_workspace").and_then(Value::as_str),
+            Some(workspace.as_str())
+        );
+        assert!(resolved.get("_harness_settings").is_some());
     }
 }

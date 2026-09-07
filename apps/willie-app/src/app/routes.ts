@@ -8,7 +8,12 @@ import {
   WrenchIcon,
 } from "lucide-react";
 
-export type ScreenPath = "/dashboard" | "/projects" | "/sessions" | "/tools";
+export type ScreenPath =
+  | "/dashboard"
+  | "/projects"
+  | "/sessions"
+  | "/tools"
+  | "/plugins";
 
 interface AvailableEntry {
   id: string;
@@ -67,7 +72,14 @@ export const ROUTES: readonly NavEntry[] = [
     path: "/tools",
     shortcut: "Mod+4",
   },
-  { id: "plugins", label: "Plugins", icon: BlocksIcon, available: false },
+  {
+    id: "plugins",
+    label: "Plugins",
+    icon: BlocksIcon,
+    available: true,
+    path: "/plugins",
+    shortcut: "Mod+5",
+  },
   { id: "settings", label: "Settings", icon: SettingsIcon, available: false },
 ];
 

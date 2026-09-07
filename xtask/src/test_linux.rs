@@ -16,13 +16,26 @@
 //! is why the copy works; only executing is not. The tests that launch
 //! a workspace binary of their own find it in the same staging
 //! directory, named by `WILLIE_TEST_BIN_DIR`.
+//!
+//! `willie-plugin-profiles` carries no `cfg(target_os = "linux")` code —
+//! its `cargo test --workspace` pass on the host already exercises every
+//! line, `git` included, because Windows happens to have its own `git` on
+//! `PATH`. It is included here anyway: its profiles are real git
+//! repositories the daemon manages for real inside the distribution, and
+//! this is what proves the same code against the distribution's own
+//! `git`, not a Windows stand-in.
 
 use std::{env, path::Path, process::Command};
 
 use crate::{TaskResult, linux};
 
-const CRATES: &[&str] =
-    &["willied", "willie-linux", "willie-cli", "willie-sess"];
+const CRATES: &[&str] = &[
+    "willied",
+    "willie-linux",
+    "willie-cli",
+    "willie-sess",
+    "willie-plugin-profiles",
+];
 
 /// Where the binaries are copied to inside the distribution. On the
 /// distribution's own filesystem, and emptied on every run so a stale

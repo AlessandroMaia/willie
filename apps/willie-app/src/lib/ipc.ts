@@ -4,7 +4,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   Candidate,
   CapabilityInfo,
+  Change,
   Event,
+  PluginStatus,
+  ProfileSummary,
   Project,
   SandboxProfile,
   Session,
@@ -139,6 +142,60 @@ export const tools = {
   install: (harness: string) => invoke("tool_install", { harness }),
   update: (tool: string) => invoke("tool_update", { tool }),
   list: () => invoke<ToolList>("tool_list"),
+};
+
+/* A plugin's own state (enabled/disabled, degraded) is also carried on
+ * every `Snapshot` (`snapshot.plugins`), but that copy only ever
+ * refreshes on a full resnapshot or a `PluginChanged` event — and the
+ * daemon does not emit that event yet. `enable`/`disable` return the
+ * plugin's fresh status directly, so the Plugins screen refetches with
+ * `list()` after either rather than trusting the snapshot to catch up. */
+export const plugins = {
+  list: () => invoke<PluginStatus[]>("plugin_list"),
+  enable: (id: string, projectId?: string) =>
+    invoke<PluginStatus>("plugin_enable", { id, projectId }),
+  disable: (id: string, projectId?: string) =>
+    invoke<PluginStatus>("plugin_disable", { id, projectId }),
+};
+
+/* The profiles plugin's own methods (`profile.*`), reached through the
+ * engine's one guarded pass-through (`plugin_call`), each naming its own
+ * `profile.*` method and shaping its own params/result. */
+function pluginCall<R>(method: string, params: unknown): Promise<R> {
+  return invoke<R>("plugin_call", { method, params });
+}
+
+export const profiles = {
+  list: () => pluginCall<ProfileSummary[]>("profile.list", {}),
+  create: (name: string) =>
+    pluginCall<ProfileSummary>("profile.create", { name }),
+  readFragment: (name: string, fragment: string) =>
+    pluginCall<{ content: string }>("profile.read_fragment", {
+      name,
+      fragment,
+    }),
+  writeFragment: (name: string, fragment: string, content: string) =>
+    pluginCall<{ content: string }>("profile.write_fragment", {
+      name,
+      fragment,
+      content,
+    }),
+  check: (name: string, projectId: string) =>
+    pluginCall<{ changes: Change[] }>("profile.check", {
+      name,
+      project_id: projectId,
+    }),
+  apply: (name: string, projectId: string) =>
+    pluginCall<{ changes: Change[]; backup_path: string }>("profile.apply", {
+      name,
+      project_id: projectId,
+    }),
+  setRemote: (name: string, url: string) =>
+    pluginCall<Record<string, never>>("profile.set_remote", { name, url }),
+  push: (name: string) =>
+    pluginCall<Record<string, never>>("profile.push", { name }),
+  pull: (name: string) =>
+    pluginCall<Record<string, never>>("profile.pull", { name }),
 };
 
 /* Static domain data (`willie_core::sandbox::Capability`), not a

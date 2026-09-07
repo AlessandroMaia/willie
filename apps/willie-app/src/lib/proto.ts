@@ -136,11 +136,42 @@ export interface Session {
   resumed_from?: string | null;
   sandbox?: SandboxState;
 }
+/* Mirrors `willie_proto::plugin::{Scope, Enablement, PluginStatus}`.
+ * `Enablement` is externally tagged: the variant name is itself the key,
+ * `{ global: bool }` for a `Global`-scoped plugin or `{ per_project:
+ * [projectId] }` for a `PerProject` one. */
+export type Scope = "global" | "per_project";
+export type Enablement = { global: boolean } | { per_project: string[] };
+export interface PluginStatus {
+  id: string;
+  name: string;
+  scope: Scope;
+  enabled: Enablement;
+  degraded: boolean;
+}
+
+/* Mirrors `willie_plugins::profiles::model::ProfileSummary` and
+ * `apply::{Change, ChangeKind}`: plain field names, `ChangeKind` in
+ * `snake_case`. */
+export interface ProfileSummary {
+  name: string;
+  fragments_active: string[];
+}
+export type ChangeKind = "create" | "merge" | "overwrite";
+export interface Change {
+  path: string;
+  kind: ChangeKind;
+  after: string;
+}
+
 export interface Snapshot {
   seq: number;
   projects: Project[];
   jobs: Job[];
   sessions: Session[];
+  /* Optional: `#[serde(default)]` on the Rust side, and every existing
+   * test snapshot in this app predates the field. */
+  plugins?: PluginStatus[];
 }
 export type EventKind =
   | { kind: "project_changed"; project: Project }

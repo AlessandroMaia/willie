@@ -15,6 +15,9 @@ willie-core = { workspace = true }
 willie-proto = { workspace = true }
 willie-linux = { workspace = true }
 willie-harness = { workspace = true }
+willie-plugin-api = { workspace = true }
+willie-plugin-profiles = { workspace = true }
+willie-plugin-usage = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

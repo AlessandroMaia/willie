@@ -49,6 +49,10 @@ impl State {
             projects: self.projects.values().cloned().collect(),
             jobs: self.jobs.values().cloned().collect(),
             sessions: self.sessions.values().cloned().collect(),
+            // `State` does not own the plugin host, so the base snapshot
+            // carries no plugins; `handlers::state_snapshot` fills this
+            // from the host's live `list()` before it answers.
+            plugins: Vec::new(),
         }
     }
 

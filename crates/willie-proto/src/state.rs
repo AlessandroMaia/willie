@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use willie_core::{id::ProjectId, project::Project, session::Session};
 
 use crate::job::Job;
+use crate::plugin::PluginStatus;
 
 pub mod method {
     pub const SNAPSHOT: &str = "state.snapshot";
@@ -17,6 +18,8 @@ pub struct Snapshot {
     pub jobs: Vec<Job>,
     #[serde(default)]
     pub sessions: Vec<Session>,
+    #[serde(default)]
+    pub plugins: Vec<PluginStatus>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +36,7 @@ pub enum EventKind {
     ProjectRemoved { id: ProjectId },
     JobChanged { job: Job },
     SessionChanged { session: Session },
+    PluginChanged { plugin: PluginStatus },
 }
 
 #[cfg(test)]
@@ -102,10 +106,12 @@ mod tests {
     }
 
     #[test]
-    fn a_snapshot_without_sessions_still_parses_and_session_events_tag() {
+    fn a_snapshot_without_sessions_or_plugins_still_parses_and_session_events_tag()
+     {
         let v = serde_json::json!({ "seq": 1, "projects": [], "jobs": [] });
         let snap: Snapshot = serde_json::from_value(v).unwrap();
         assert!(snap.sessions.is_empty());
+        assert!(snap.plugins.is_empty());
         let ev = Event {
             seq: 2,
             kind: EventKind::SessionChanged {
@@ -115,5 +121,28 @@ mod tests {
         let v = serde_json::to_value(&ev).unwrap();
         assert_eq!(v["kind"], "session_changed");
         assert_eq!(v["session"]["state"]["state"], "running");
+    }
+
+    #[test]
+    fn plugin_changed_event_tags_its_kind() {
+        use crate::plugin::{Enablement, Scope};
+
+        let ev = Event {
+            seq: 3,
+            kind: EventKind::PluginChanged {
+                plugin: PluginStatus {
+                    id: "usage".into(),
+                    name: "Usage".into(),
+                    scope: Scope::Global,
+                    enabled: Enablement::Global(true),
+                    degraded: false,
+                },
+            },
+        };
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["kind"], "plugin_changed");
+        assert_eq!(v["plugin"]["id"], "usage");
+        let back: Event = serde_json::from_value(v).unwrap();
+        assert_eq!(ev, back);
     }
 }
