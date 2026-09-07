@@ -443,6 +443,100 @@ fn open_in_explorer(path: String) -> Result<(), Problem> {
         })
 }
 
+/// The Remote-WSL arguments that open `workspace` on the willie distro:
+/// VS Code's documented form for a folder in a named WSL distribution.
+fn editor_argv(workspace: &str) -> Vec<String> {
+    vec![
+        "--remote".to_owned(),
+        format!("wsl+{}", willie_engine::wsl::DISTRO_NAME),
+        workspace.to_owned(),
+    ]
+}
+
+/// The candidate walk behind `locate_code`, pure so it is deterministic
+/// under test regardless of whether this machine has VS Code installed:
+/// `path` first (PATH-style, `;`-joined dirs), then the per-user
+/// (`local`, i.e. `%LOCALAPPDATA%`) and per-machine (`pf`, i.e.
+/// `%ProgramFiles%`) install locations. Detected by presence with
+/// `symlink_metadata` — never executed — so probing cannot open a window.
+fn code_in(
+    path: Option<&std::ffi::OsStr>,
+    local: Option<&std::ffi::OsStr>,
+    pf: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    fn present(p: &std::path::Path) -> bool {
+        std::fs::symlink_metadata(p).is_ok()
+    }
+
+    if let Some(path) = path
+        && let Some(found) = std::env::split_paths(path)
+            .map(|dir| dir.join("code.cmd"))
+            .find(|p| present(p))
+    {
+        return Some(found);
+    }
+
+    if let Some(local) = local {
+        let p = std::path::Path::new(local)
+            .join("Programs")
+            .join("Microsoft VS Code")
+            .join("bin")
+            .join("code.cmd");
+        if present(&p) {
+            return Some(p);
+        }
+    }
+
+    if let Some(pf) = pf {
+        let p = std::path::Path::new(pf)
+            .join("Microsoft VS Code")
+            .join("bin")
+            .join("code.cmd");
+        if present(&p) {
+            return Some(p);
+        }
+    }
+
+    None
+}
+
+/// VS Code's `code.cmd` launcher, if installed: the PATH first, then the
+/// per-user and per-machine install locations. `None` when VS Code is
+/// absent.
+fn locate_code() -> Option<PathBuf> {
+    code_in(
+        std::env::var_os("PATH").as_deref(),
+        std::env::var_os("LOCALAPPDATA").as_deref(),
+        std::env::var_os("ProgramFiles").as_deref(),
+    )
+}
+
+#[tauri::command(async)]
+fn open_in_editor(workspace: String) -> Result<(), Problem> {
+    let code = locate_code().ok_or_else(|| Problem {
+        code: "editor_not_found".into(),
+        message: "VS Code was not found on this machine".into(),
+        remediation: "install VS Code and its `code` command, or reopen \
+                      Willie so it detects a new install"
+            .into(),
+    })?;
+    std::process::Command::new(&code)
+        .args(editor_argv(&workspace))
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| Problem {
+            code: "editor_launch_failed".into(),
+            message: e.to_string(),
+            remediation: "try opening the workspace from VS Code directly"
+                .into(),
+        })
+}
+
+#[tauri::command]
+fn editor_available() -> bool {
+    locate_code().is_some()
+}
+
 /// Starts the desktop application. Exits the process on a startup failure
 /// because there is no UI yet to report it.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -486,6 +580,8 @@ pub fn run() {
             set_projects_roots,
             discover_projects,
             open_in_explorer,
+            open_in_editor,
+            editor_available,
             session_open,
             session_resume,
             session_attach,
@@ -500,5 +596,75 @@ pub fn run() {
     if let Err(error) = result {
         eprintln!("willie-app: failed to start: {error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_argv_opens_the_workspace_on_the_willie_distro() {
+        assert_eq!(
+            editor_argv("/home/willie/projects/x"),
+            vec![
+                "--remote".to_owned(),
+                "wsl+willie".to_owned(),
+                "/home/willie/projects/x".to_owned(),
+            ]
+        );
+    }
+
+    /// A scratch directory this test owns exclusively (named with the
+    /// process id so parallel test binaries never collide), holding a
+    /// planted `code.cmd` under `bin/` the way a real install would.
+    fn plant_launcher(label: &str) -> PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("willie-code-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn code_in_finds_the_launcher_on_path() {
+        let dir = plant_launcher("path");
+        let launcher = dir.join("code.cmd");
+        std::fs::write(&launcher, "@echo off\n").unwrap();
+
+        let path = std::ffi::OsString::from(&dir);
+        let found = code_in(Some(&path), None, None);
+
+        assert_eq!(found, Some(launcher));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn code_in_finds_the_per_user_install_when_path_has_none() {
+        let dir = plant_launcher("local");
+        let bin = dir.join("Programs").join("Microsoft VS Code").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let launcher = bin.join("code.cmd");
+        std::fs::write(&launcher, "@echo off\n").unwrap();
+
+        let local = std::ffi::OsString::from(&dir);
+        let found = code_in(None, Some(&local), None);
+
+        assert_eq!(found, Some(launcher));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn code_in_is_none_when_no_candidate_exists() {
+        let dir = plant_launcher("none");
+        // The directory exists but holds no code.cmd anywhere.
+        let path = std::ffi::OsString::from(&dir);
+        let local = std::ffi::OsString::from(&dir);
+        let pf = std::ffi::OsString::from(&dir);
+
+        let found = code_in(Some(&path), Some(&local), Some(&pf));
+
+        assert_eq!(found, None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
