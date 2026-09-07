@@ -33,7 +33,7 @@ the *what*.
 ┌────────────────────────────▼──────────── distro "willie" ──────┐
 │  willied (uid 1000, unprivileged)                              │
 │  ├─ stdio  ◄─ engine                                           │
-│  ├─ /run/willie/willied.sock  ◄─ willie (CLI), not served yet  │
+│  ├─ /run/willie/willied.sock  ◄─ willie (CLI)                  │
 │  ├─ SQLite /var/lib/willie/willie.db (index)                   │
 │  └─ plugins: profiles, usage                                   │
 │                                                                │
@@ -62,7 +62,7 @@ the *what*.
 
 | Process            | User            | Role                                                                                                   |
 | ------------------ | --------------- | ------------------------------------------------------------------------------------------------------ |
-| `willied`          | `willie` (1000) | Daemon. Owns projects, profiles, session index, plugins, SQLite. Listens on **stdio** (engine); **`/run/willie/willied.sock`** (local clients) is designed and not yet served. |
+| `willied`          | `willie` (1000) | Daemon. Owns projects, profiles, session index, plugins, SQLite. Listens on **stdio** (engine); **`/run/willie/willied.sock`** (`0600`) is served for local clients — request and reply only, no `state.event` notifications, no `daemon.shutdown`. |
 | `willie-sess <id>` | `willie`        | Detached supervisor of one session: PTY, sandbox, `/run/willie/sessions/<id>.sock`, `events.jsonl`, ring buffer. Lives as long as the harness, independent of daemon and app. |
 | `willie`           | `willie`        | Stateless CLI: `attach <id>`, `doctor`, `sandbox explain <project>`, `reindex`, `dev test`.            |
 | harness            | `willie` in a user namespace | The agent CLI, child of the supervisor, inside the sandbox (§3.3).                        |
@@ -461,6 +461,11 @@ enforcement slice.
    every capability with the sentence that says what enabling costs,
    saved through `project.set_sandbox`, which resolves the profile
    before persisting it — the same two refusals `session.create` gives.
+   A `[sandbox]` table that cannot be parsed (an unknown key, a wrong
+   type) no longer removes the project from the daemon's state: it
+   loads with the default profile and a problem the Projects screen
+   shows, and `session.create`/`sandbox.explain` refuse until the
+   profile is replaced through `project.set_sandbox`.
 3. `.willie/sandbox.toml` **inside the repository** — may only
    **tighten**: remove capabilities, add denied paths. It never opens
    anything because the agent can write it. Masked inside the sandbox.

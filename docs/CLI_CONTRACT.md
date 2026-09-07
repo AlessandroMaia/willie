@@ -71,13 +71,11 @@ The argument vector, the filter summary and the path rules that
 the enforcement plan: this slice only resolves and reports the policy,
 it does not yet apply one.
 
-The subcommand needs the daemon's local socket — `docs/ARCHITECTURE.md`
-describes `/run/willie/willied.sock` for local clients, and no release
-builds it yet, so `willied` today answers only the engine's stdio pipe.
-Until that socket exists, every invocation fails closed with
-`daemon_unreachable` and names what to check instead. The parsing and
-the rendering are already complete: the command works unchanged, with
-no further CLI change, once the socket lands.
+`sandbox explain` reaches the daemon over `/run/willie/willied.sock`
+while the app is open. With no daemon it fails `daemon_unreachable`; a
+call with no reply in ten seconds is `daemon_timeout`; a transport error
+is `daemon_transport`. A slug or a `proj_…` id both work — a slug is
+resolved through `project.list`.
 
 ## Adding a command — checklist
 
