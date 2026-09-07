@@ -22,6 +22,7 @@ use willie_proto::daemon::DoctorReport;
 use willie_proto::project::{AddResult, JobRef, ProjectList};
 use willie_proto::sandbox::CapabilityInfo;
 use willie_proto::state::Snapshot;
+use willie_proto::tool::ToolList;
 
 use crate::events::EventPump;
 use crate::state::{EngineState, image_candidates, workspace_root};
@@ -378,6 +379,25 @@ fn tool_install(
 }
 
 #[tauri::command(async)]
+fn tool_list(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+) -> Result<ToolList, Problem> {
+    daemon_command(&app, &state, &pump, |engine| engine.tool_list())
+}
+
+#[tauri::command(async)]
+fn tool_update(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    tool: String,
+) -> Result<JobRef, Problem> {
+    daemon_command(&app, &state, &pump, |engine| engine.tool_update(&tool))
+}
+
+#[tauri::command(async)]
 fn session_terminal_open(
     app: AppHandle,
     state: State<'_, EngineState>,
@@ -593,6 +613,8 @@ pub fn run() {
             session_attach,
             session_stop,
             tool_install,
+            tool_list,
+            tool_update,
             session_terminal_open,
             session_terminal_input,
             session_terminal_resize,

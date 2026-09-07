@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { latestInstallJob, latestJobFor } from "@/lib/domain/jobs";
+import {
+  lastLogLine,
+  latestInstallJob,
+  latestJobFor,
+  latestToolJob,
+} from "@/lib/domain/jobs";
 import type { Job } from "@/lib/proto";
 
 /* `startedAt` mirrors the wire: the daemon stamps `started_at` as whole
@@ -65,5 +70,54 @@ describe("latestInstallJob", () => {
     ];
     expect(latestInstallJob(jobs)?.id).toBe("j3");
     expect(latestInstallJob([job("a", "add", "1", "p")])).toBeUndefined();
+  });
+});
+
+describe("latestToolJob", () => {
+  /* Shadows the outer `job` fixture: this suite needs to vary `kind`
+   * across both tool-job kinds, not just `install_harness`. */
+  const job = (
+    id: string,
+    kind: Job["kind"],
+    started_at: string,
+    project_id?: string,
+  ): Job => ({
+    id,
+    kind,
+    project_id,
+    state: { state: "running" },
+    started_at,
+    log_tail: "",
+  });
+
+  it("picks the newest install or update", () => {
+    const jobs = [
+      job("j1", "install_harness", "1"),
+      job("j2", "update_harness", "9"),
+      job("j3", "add", "20", "p1"),
+    ];
+    expect(latestToolJob(jobs)?.id).toBe("j2");
+  });
+
+  it("returns undefined when no tool job is present", () => {
+    expect(latestToolJob([job("a", "add", "1", "p")])).toBeUndefined();
+  });
+});
+
+describe("lastLogLine", () => {
+  const job = (log_tail: string): Job => ({
+    id: "j1",
+    kind: "install_harness",
+    state: { state: "running" },
+    started_at: "1",
+    log_tail,
+  });
+
+  it("returns the last non-blank line, dropping trailing blank lines", () => {
+    expect(lastLogLine(job("first\nsecond\n\n"))).toBe("second");
+  });
+
+  it("returns an empty string for an all-blank log", () => {
+    expect(lastLogLine(job("\n\n"))).toBe("");
   });
 });

@@ -18,6 +18,7 @@ pub enum JobKind {
     UpdateFromWindows,
     Relocate,
     InstallHarness,
+    UpdateHarness,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -72,5 +73,13 @@ mod tests {
         });
         let back: Job = serde_json::from_value(old).unwrap();
         assert!(back.project_id.is_some());
+    }
+
+    #[test]
+    fn update_harness_serialises_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&JobKind::UpdateHarness).unwrap(),
+            "\"update_harness\""
+        );
     }
 }

@@ -177,8 +177,14 @@ No `/etc/resolv.conf`, no kernel or initramfs in the tar.
 The agent CLI (native installer → `~/.local/bin`), .NET (`~/.dotnet`),
 Node (a version manager in the home) install **into the home**. The system
 zone stays pure and data migration is a `tar` of two directories. The
-daemon keeps a manifest (`tools`) for detection, display and reinstall
-after migration.
+daemon keeps a manifest, `/var/lib/willie/tools.toml`, for display and
+reinstall after migration: one TOML table per tool id, `{ version,
+installed_at, installer }`, written after `tool.install`/`tool.update`
+runs its installer and re-detects the tool, and read fresh on every
+`tool.list`; an absent or unreadable file loads empty, so a lost manifest
+degrades to a re-detect, never an error. The manifest is not the truth
+the Tools screen shows — live detection is, because a user can update a
+tool outside Willie (decision 0022).
 
 ### 2.3 Lifecycle
 
@@ -689,12 +695,14 @@ wizard of §2.4. Code signing is out of scope for now.
 | F1    | sessions: Claude Code session in a WT tab, no sandbox — **delivered 2026-08-28** | `session.*`, `willie-sess` (PTY, socket, events — sandbox off), `willie attach`, engine (`session_open`/`session_attach`/`session_stop`/`tool_install`), Sessions screen, Projects-row Open session + badge, Dashboard Install | S2 |
 | F2    | proxy/CA propagated                                             | engine (WinHTTP, cert stores), `machine.env`, network `doctor`                                      | S4    |
 | F3    | sandbox with capabilities and layers                            | `willie-sess` (bwrap/seccomp/Landlock, `--inner`), `willie-core` (CapabilitySet, layers), `sandbox explain`, capability UI | S3 |
-| F4    | managed tools                                                   | `tool.*`, manifest, `Harness::detect`, Tools screen                                                  | —     |
+| F4    | managed tools: the harness, install and update — **delivered 2026-09-07** | `tool.*`, manifest, `Harness::detect`, Tools screen                                                  | —     |
 | F5    | usage plugin + tray                                             | `willie-plugin-api`, `plugins/usage`, tray/notifications, Usage panel                               | —     |
 | F6    | profiles plugin                                                 | `plugins/profiles` (git, merge), Profiles panel                                                      | —     |
 
 F5/F6 order is the user's choice; F2 moves up if the first real use is on
-the corporate machine.
+the corporate machine. F4's first cut is the harness only (Claude Code);
+.NET and a Node version manager (§2.2) remain future catalogue entries,
+added through the `ManagedTool` extension point decision 0022 names.
 
 ## 6. Architectural risks
 

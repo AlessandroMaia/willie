@@ -9,11 +9,12 @@ use std::{
 
 use willie_core::{id::JobId, session::remediation_for};
 use willie_harness::Harness;
-use willie_proto::job::JobKind;
+use willie_proto::{job::JobKind, tool::ToolStatus};
 
 use crate::{
     harness,
     jobs::{JobOutcome, Runner},
+    manifest::{self, ToolRecord},
     projects::OpError,
 };
 
@@ -22,6 +23,7 @@ use crate::{
 pub fn install(
     runner: &Runner,
     home: PathBuf,
+    state_dir: PathBuf,
     name: &str,
 ) -> Result<JobId, OpError> {
     if name != harness::claude().id() {
@@ -33,16 +35,104 @@ pub fn install(
             "Claude Code is already installed",
         ));
     }
-    let command = std::env::var("WILLIE_HARNESS_INSTALLER")
-        .unwrap_or_else(|_| harness::claude().installer().to_owned());
+    let command = installer_command();
+    let id = name.to_owned();
     runner
         .submit_global(
             JobKind::InstallHarness,
-            Box::new(move |_cancel| run_installer(&command, &home)),
+            Box::new(move |_cancel| {
+                run_installer_and_record(&command, &home, &state_dir, &id)
+            }),
         )
         .map_err(|()| {
             OpError::coded("tool_busy", "a tool job is already running")
         })
+}
+
+/// Every catalogue tool with live detection merged onto the manifest.
+/// The catalogue is the harness registry today.
+pub fn list(home: &Path, state_dir: &Path) -> Vec<ToolStatus> {
+    let recorded = manifest::load(state_dir);
+    willie_harness::registry()
+        .iter()
+        .map(|h| {
+            let version = detect(h.as_ref(), home);
+            ToolStatus {
+                id: h.id().to_owned(),
+                name: display_name(h.id()),
+                installed: version.is_some(),
+                recorded_version: recorded
+                    .get(h.id())
+                    .map(|r| r.version.clone()),
+                version,
+            }
+        })
+        .collect()
+}
+
+/// Re-run the installer for an installed tool, re-detecting and recording
+/// the manifest on success. Refuses a tool that is not installed --
+/// Update is only offered for one that is, but the daemon fails closed.
+pub fn update(
+    runner: &Runner,
+    home: PathBuf,
+    state_dir: PathBuf,
+    id: &str,
+) -> Result<JobId, OpError> {
+    if id != harness::claude().id() {
+        return Err(OpError::coded("invalid_params", "unknown tool"));
+    }
+    if harness::detect_claude(&home).is_none() {
+        return Err(OpError::coded(
+            "tool_not_installed",
+            "the tool is not installed",
+        ));
+    }
+    let command = installer_command();
+    let id = id.to_owned();
+    runner
+        .submit_global(
+            JobKind::UpdateHarness,
+            Box::new(move |_cancel| {
+                run_installer_and_record(&command, &home, &state_dir, &id)
+            }),
+        )
+        .map_err(|()| {
+            OpError::coded("tool_busy", "a tool job is already running")
+        })
+}
+
+/// `WILLIE_HARNESS_INSTALLER` overrides the harness's own installer, so
+/// tests can stand in a fake one; production always runs the harness's
+/// official command line.
+fn installer_command() -> String {
+    std::env::var("WILLIE_HARNESS_INSTALLER")
+        .unwrap_or_else(|_| harness::claude().installer().to_owned())
+}
+
+/// The installed version of one catalogue tool, live. Only Claude Code
+/// exists today, so this delegates to `harness::detect_claude`; a second
+/// harness moves detection onto a `ManagedTool` trait method each entry
+/// in the registry answers for itself.
+fn detect(_h: &dyn Harness, home: &Path) -> Option<String> {
+    harness::detect_claude(home).map(|i| i.version)
+}
+
+/// The catalogue entry whose id is `id`, if the registry has one.
+fn find(id: &str) -> Option<Box<dyn Harness>> {
+    willie_harness::registry()
+        .into_iter()
+        .find(|h| h.id() == id)
+}
+
+/// The Dashboard's display name for a catalogue tool. A total match with
+/// the id itself as the fallback; moves onto a `ManagedTool` trait when a
+/// second tool arrives, so the name lives on the tool rather than here.
+fn display_name(id: &str) -> String {
+    match id {
+        "claude-code" => "Claude Code".to_owned(),
+        other => other.to_owned(),
+    }
 }
 
 /// Runs `command` through `sh -c`, inheriting the daemon's environment
@@ -70,6 +160,32 @@ fn run_installer(command: &str, home: &Path) -> JobOutcome {
             remediation(),
         ))
     }
+}
+
+/// Runs the installer, then on success re-detects `id` and records the
+/// manifest before handing back the job's log. A detection failure right
+/// after a successful installer run leaves the job `Ok` regardless -- the
+/// install or update itself succeeded; only the manifest entry is
+/// missing, and the next `tool.list` falls back to live detection.
+fn run_installer_and_record(
+    command: &str,
+    home: &Path,
+    state_dir: &Path,
+    id: &str,
+) -> JobOutcome {
+    let log = run_installer(command, home)?;
+    if let Some(version) = find(id).and_then(|h| detect(h.as_ref(), home)) {
+        manifest::record(
+            state_dir,
+            id,
+            &ToolRecord {
+                version,
+                installed_at: crate::real_clock_or_zero(),
+                installer: command.to_owned(),
+            },
+        );
+    }
+    Ok(log)
 }
 
 #[cfg(test)]
@@ -131,9 +247,13 @@ mod tests {
     fn install_refuses_an_unknown_harness() {
         let (runner, _state) = runner();
         let home = scratch("unknown-harness");
-        let err = install(&runner, home.clone(), "not-a-harness").unwrap_err();
+        let state_dir = scratch("unknown-harness-state");
+        let err =
+            install(&runner, home.clone(), state_dir.clone(), "not-a-harness")
+                .unwrap_err();
         assert_eq!(err.code, "invalid_params");
         let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&state_dir);
     }
 
     #[test]
@@ -141,10 +261,17 @@ mod tests {
         let (runner, _state) = runner();
         let home = scratch("already-installed");
         plant_claude(&home);
-        let err =
-            install(&runner, home.clone(), harness::claude().id()).unwrap_err();
+        let state_dir = scratch("already-installed-state");
+        let err = install(
+            &runner,
+            home.clone(),
+            state_dir.clone(),
+            harness::claude().id(),
+        )
+        .unwrap_err();
         assert_eq!(err.code, "harness_already_installed");
         let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&state_dir);
     }
 
     #[test]
@@ -152,6 +279,7 @@ mod tests {
         let (runner, state) = runner();
         let home = scratch("install-ok");
         std::fs::create_dir_all(&home).unwrap();
+        let state_dir = scratch("install-ok-state");
         // SAFETY: this test does not run concurrently with another test
         // that reads or writes this process-wide variable.
         unsafe {
@@ -165,8 +293,13 @@ mod tests {
                 ),
             );
         }
-        let id =
-            install(&runner, home.clone(), harness::claude().id()).unwrap();
+        let id = install(
+            &runner,
+            home.clone(),
+            state_dir.clone(),
+            harness::claude().id(),
+        )
+        .unwrap();
         wait_for_job_done(&state, id);
         let job = crate::lock(&state).jobs[&id].clone();
         assert!(
@@ -175,11 +308,20 @@ mod tests {
             job.state
         );
         assert!(harness::detect_claude(&home).is_some());
+        let recorded = manifest::load(&state_dir);
+        assert_eq!(
+            recorded
+                .get(harness::claude().id())
+                .map(|r| r.version.as_str()),
+            Some("5.0.0"),
+            "install should have recorded the manifest"
+        );
         // SAFETY: same single-threaded scope as the set above.
         unsafe {
             std::env::remove_var("WILLIE_HARNESS_INSTALLER");
         }
         let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&state_dir);
     }
 
     #[test]
@@ -187,6 +329,7 @@ mod tests {
         let (runner, state) = runner();
         let home = scratch("tool-busy");
         std::fs::create_dir_all(&home).unwrap();
+        let state_dir = scratch("tool-busy-state");
         // An installer that blocks until the test lets it finish, proving
         // the second `install` call is refused while it is still running.
         let marker = home.join("go");
@@ -201,9 +344,19 @@ mod tests {
                 ),
             );
         }
-        let first = install(&runner, home.clone(), harness::claude().id());
+        let first = install(
+            &runner,
+            home.clone(),
+            state_dir.clone(),
+            harness::claude().id(),
+        );
         let first_id = first.expect("first install must be accepted");
-        let second = install(&runner, home.clone(), harness::claude().id());
+        let second = install(
+            &runner,
+            home.clone(),
+            state_dir.clone(),
+            harness::claude().id(),
+        );
         assert_eq!(second.unwrap_err().code, "tool_busy");
         // Let the first job finish before tearing down its home
         // directory, so no orphaned shell outlives the test.
@@ -214,5 +367,103 @@ mod tests {
             std::env::remove_var("WILLIE_HARNESS_INSTALLER");
         }
         let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn list_reports_the_harness_installed_with_its_version() {
+        let home = scratch("list-installed");
+        plant_claude(&home);
+        let state_dir = scratch("list-installed-state");
+        let tools = list(&home, &state_dir);
+        let claude = tools
+            .iter()
+            .find(|t| t.id == harness::claude().id())
+            .unwrap();
+        assert!(claude.installed);
+        assert_eq!(claude.version.as_deref(), Some("1.2.3"));
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn list_reports_the_harness_absent_when_not_planted() {
+        let home = scratch("list-absent");
+        let state_dir = scratch("list-absent-state");
+        let claude = list(&home, &state_dir)
+            .into_iter()
+            .find(|t| t.id == harness::claude().id())
+            .unwrap();
+        assert!(!claude.installed);
+        assert_eq!(claude.version, None);
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn update_refuses_when_the_tool_is_absent() {
+        let (runner, _state) = runner();
+        let home = scratch("update-absent");
+        let state_dir = scratch("update-absent-state");
+        let err = update(
+            &runner,
+            home.clone(),
+            state_dir.clone(),
+            harness::claude().id(),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "tool_not_installed");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    #[test]
+    fn update_runs_the_installer_and_records_the_manifest() {
+        let (runner, state) = runner();
+        let home = scratch("update-ok");
+        std::fs::create_dir_all(&home).unwrap();
+        plant_claude(&home);
+        let state_dir = scratch("update-ok-state");
+        // SAFETY: this test does not run concurrently with another test
+        // that reads or writes this process-wide variable.
+        unsafe {
+            std::env::set_var(
+                "WILLIE_HARNESS_INSTALLER",
+                format!(
+                    "mkdir -p {home}/.local/bin && printf '#!/bin/sh\\necho \
+                     9.9.9\\n' > {home}/.local/bin/claude && chmod +x \
+                     {home}/.local/bin/claude",
+                    home = home.display()
+                ),
+            );
+        }
+        let id = update(
+            &runner,
+            home.clone(),
+            state_dir.clone(),
+            harness::claude().id(),
+        )
+        .unwrap();
+        wait_for_job_done(&state, id);
+        let job = crate::lock(&state).jobs[&id].clone();
+        assert!(
+            matches!(job.state, willie_proto::job::JobState::Done),
+            "job should have reached done: {:?}",
+            job.state
+        );
+        let recorded = manifest::load(&state_dir);
+        assert_eq!(
+            recorded
+                .get(harness::claude().id())
+                .map(|r| r.version.as_str()),
+            Some("9.9.9"),
+            "update should have recorded the manifest"
+        );
+        // SAFETY: same single-threaded scope as the set above.
+        unsafe {
+            std::env::remove_var("WILLIE_HARNESS_INSTALLER");
+        }
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&state_dir);
     }
 }
