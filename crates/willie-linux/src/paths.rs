@@ -30,6 +30,12 @@ pub fn session_socket(run_dir: &Path, id: &str) -> PathBuf {
     sessions_run_dir(run_dir).join(format!("{id}.sock"))
 }
 
+/// `<run_dir>/willied.sock`: the daemon's local socket for CLI clients.
+#[must_use]
+pub fn daemon_socket(run_dir: &Path) -> PathBuf {
+    run_dir.join("willied.sock")
+}
+
 /// Where a workspace binary should be run from inside the distribution.
 ///
 /// Cargo bakes in the Windows path of what it built, and running a file
@@ -108,6 +114,14 @@ mod tests {
         assert_eq!(
             session_socket(Path::new(RUN_DIR), "sess_01J"),
             PathBuf::from("/run/willie/sessions/sess_01J.sock")
+        );
+    }
+
+    #[test]
+    fn the_daemon_socket_sits_in_the_run_dir() {
+        assert_eq!(
+            daemon_socket(Path::new(RUN_DIR)),
+            PathBuf::from("/run/willie/willied.sock")
         );
     }
 }

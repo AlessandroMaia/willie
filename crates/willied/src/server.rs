@@ -5,8 +5,10 @@
 //! interleave with the job and project events it also carries.
 
 use std::{
-    io::{self, BufRead},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        mpsc::{Receiver, Sender},
+    },
     time::Instant,
 };
 
@@ -30,6 +32,29 @@ use crate::{
 pub enum ExitReason {
     Eof,
     Shutdown,
+}
+
+/// Where a request came from: the engine's stdio pipe, or a local socket
+/// client. `daemon.shutdown` is the engine's alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    Stdio,
+    Socket,
+}
+
+/// One request reaching the dispatcher, and the way its reply leaves. The
+/// stdin reader and every socket connection feed the same channel, so a
+/// single dispatcher answers both and the daemon keeps its one-request-at-
+/// a-time invariant. A stdio reply leaves through [`Outbound`] (stdout) and
+/// carries no `reply`; a socket reply goes back through its connection's
+/// sender.
+pub enum Inbound {
+    Line {
+        text: String,
+        origin: Origin,
+        reply: Option<Sender<Response>>,
+    },
+    StdinClosed,
 }
 
 pub struct Server {
@@ -134,28 +159,106 @@ impl Server {
         }
     }
 
-    pub fn serve<R: BufRead>(&mut self, reader: R) -> io::Result<ExitReason> {
-        for line in reader.lines() {
-            let line = line?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            let response = match serde_json::from_str::<Request>(&line) {
-                Ok(req) => self.dispatch(req),
-                Err(e) => Response::err(
-                    0,
-                    RpcError::new(
-                        "invalid_request",
-                        format!("not a JSON-RPC request: {e}"),
-                    ),
-                ),
-            };
-            self.out.send_response(response);
-            if self.shutting_down {
-                return Ok(ExitReason::Shutdown);
+    /// Dispatch a request knowing where it came from. `daemon.shutdown` is
+    /// the engine's alone: over a socket it is refused with
+    /// `method_not_served` and the daemon keeps running; over stdio it is
+    /// unchanged. Every other method is origin-agnostic.
+    pub fn dispatch_from(&mut self, origin: Origin, req: Request) -> Response {
+        if origin == Origin::Socket && req.method == daemon::SHUTDOWN {
+            return Response::err(
+                req.id,
+                RpcError::new(
+                    "method_not_served",
+                    "`daemon.shutdown` is the engine's; the daemon stops \
+                     with the app",
+                )
+                .with_remediation("restart the daemon from the Dashboard"),
+            );
+        }
+        self.dispatch(req)
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn is_shutting_down(&self) -> bool {
+        self.shutting_down
+    }
+
+    /// The request loop. One channel carries lines from every origin — the
+    /// stdin reader and one thread per socket connection — so a single
+    /// dispatcher serialises them all. A stdio reply leaves through the
+    /// single-writer [`Outbound`] (stdout); a socket reply goes back to its
+    /// connection. The loop ends when stdin closes or a stdio
+    /// `daemon.shutdown` trips the flag.
+    pub fn serve_inbound(&mut self, rx: Receiver<Inbound>) -> ExitReason {
+        for msg in rx {
+            match msg {
+                Inbound::StdinClosed => return ExitReason::Eof,
+                Inbound::Line {
+                    text,
+                    origin,
+                    reply,
+                } => {
+                    if text.trim().is_empty() {
+                        continue;
+                    }
+                    let response = match serde_json::from_str::<Request>(&text)
+                    {
+                        Ok(req) => self.dispatch_from(origin, req),
+                        Err(e) => Response::err(
+                            0,
+                            RpcError::new(
+                                "invalid_request",
+                                format!("not a JSON-RPC request: {e}"),
+                            ),
+                        ),
+                    };
+                    let shutting = self.shutting_down;
+                    match origin {
+                        Origin::Stdio => self.out.send_response(response),
+                        Origin::Socket => {
+                            if let Some(tx) = reply {
+                                let _ = tx.send(response);
+                            }
+                        }
+                    }
+                    if shutting {
+                        return ExitReason::Shutdown;
+                    }
+                }
             }
         }
-        Ok(ExitReason::Eof)
+        ExitReason::Eof
+    }
+
+    /// A thin stdio wrapper the unit tests drive: it pushes each reader
+    /// line onto a channel as a `Stdio` origin, closes it at EOF, and runs
+    /// [`Self::serve_inbound`]. The real daemon feeds the channel from two
+    /// origins in `main` (a stdin reader thread and one thread per socket
+    /// connection), but the stdio behaviour is identical. Test-only: the
+    /// daemon no longer reads stdin in place.
+    #[cfg(test)]
+    pub fn serve<R: std::io::BufRead>(
+        &mut self,
+        reader: R,
+    ) -> std::io::Result<ExitReason> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        for line in reader.lines() {
+            let line = line?;
+            if tx
+                .send(Inbound::Line {
+                    text: line,
+                    origin: Origin::Stdio,
+                    reply: None,
+                })
+                .is_err()
+            {
+                break;
+            }
+        }
+        let _ = tx.send(Inbound::StdinClosed);
+        drop(tx);
+        Ok(self.serve_inbound(rx))
     }
 }
 
@@ -214,7 +317,11 @@ mod tests {
         }
     }
 
-    fn roundtrip(input: &str) -> (ExitReason, Vec<Response>) {
+    /// Builds a `Server` over a readable stdout sink. The two callers
+    /// share it (the skill forbids duplicated fixtures): `roundtrip`
+    /// drives it through the stdin path, and the origin tests call
+    /// `dispatch_from` on it directly.
+    fn test_server() -> (Server, SharedBuf, std::thread::JoinHandle<()>) {
         let buf = SharedBuf::default();
         let (out, handle) = Outbound::spawn(buf.clone());
         let state = Arc::new(Mutex::new(State::default()));
@@ -236,8 +343,17 @@ mod tests {
             clock,
             ops.runner_handle(),
         );
-        let mut server =
+        let server =
             Server::new(fake_doctor, Arc::clone(&state), ops, sessions, out);
+        (server, buf, handle)
+    }
+
+    fn shutdown_request() -> Request {
+        Request::new(1, method::SHUTDOWN, serde_json::json!({})).unwrap()
+    }
+
+    fn roundtrip(input: &str) -> (ExitReason, Vec<Response>) {
+        let (mut server, buf, handle) = test_server();
         let reason = server.serve(Cursor::new(input)).unwrap();
         // Drop every `Outbound` sender so the writer thread drains and ends.
         drop(server);
@@ -306,6 +422,19 @@ mod tests {
             serde_json::from_value(resp[0].clone().into_result().unwrap())
                 .unwrap();
         assert_eq!(report.checks[0].name, "fake");
+    }
+
+    /// `daemon.shutdown` from a socket client is refused, and the server
+    /// is not marked shutting down; from stdio it still ends the loop
+    /// (covered by `shutdown_replies_then_stops_serving`).
+    #[test]
+    fn shutdown_over_the_socket_is_refused_not_obeyed() {
+        let (mut server, _buf, handle) = test_server();
+        let resp = server.dispatch_from(Origin::Socket, shutdown_request());
+        assert_eq!(resp.into_result().unwrap_err().code, "method_not_served");
+        assert!(!server.is_shutting_down());
+        drop(server);
+        handle.join().unwrap();
     }
 
     #[test]
