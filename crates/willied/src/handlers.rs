@@ -222,6 +222,13 @@ pub fn session_stop(ops: &SessionOps, p: Value) -> Result<Value, RpcError> {
     Ok(Value::Null)
 }
 
+pub fn session_rename(ops: &SessionOps, p: Value) -> Result<Value, RpcError> {
+    let params: willie_proto::session::RenameParams =
+        serde_json::from_value(p).map_err(invalid_params)?;
+    let session = ops.rename(params).map_err(op_error)?;
+    serde_json::to_value(session).map_err(internal)
+}
+
 pub fn session_list(ops: &SessionOps) -> Result<Value, RpcError> {
     serde_json::to_value(willie_proto::session::SessionList {
         sessions: ops.list(),

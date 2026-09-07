@@ -150,6 +150,9 @@ impl Server {
                 handlers::session_create(&self.sessions, req.params)
             }
             session::STOP => handlers::session_stop(&self.sessions, req.params),
+            session::RENAME => {
+                handlers::session_rename(&self.sessions, req.params)
+            }
             session::LIST => handlers::session_list(&self.sessions),
             sandbox::EXPLAIN => {
                 handlers::sandbox_explain(&self.state, req.params)
@@ -593,6 +596,25 @@ mod tests {
         assert_eq!(
             resp[0].clone().into_result().unwrap_err().code,
             "invalid_params"
+        );
+    }
+
+    /// `session.rename` is dispatched: an unknown id answers
+    /// `session_not_found`, not `method_not_found` — proof the arm reaches
+    /// `handlers::session_rename` rather than falling through to the
+    /// dispatch's catch-all.
+    #[test]
+    fn session_rename_is_served() {
+        let (_, resp) = roundtrip(&line(
+            session::RENAME,
+            serde_json::json!({
+                "id": "sess_00000000000000000000000000",
+                "label": "x"
+            }),
+        ));
+        assert_ne!(
+            resp[0].clone().into_result().unwrap_err().code,
+            "method_not_found"
         );
     }
 

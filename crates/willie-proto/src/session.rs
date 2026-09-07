@@ -54,7 +54,7 @@ pub struct SessionList {
 }
 
 /// `label` absent or `null` both mean "clear the session's label".
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenameParams {
     pub id: SessionId,
     #[serde(default)]

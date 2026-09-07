@@ -3,7 +3,8 @@
 //! at start.
 
 use std::{
-    fs, io,
+    fs,
+    io::{self, Write},
     path::{Path, PathBuf},
 };
 
@@ -52,6 +53,25 @@ pub fn load_all(state_dir: &Path) -> Vec<(SessionSpec, Vec<SessionEvent>)> {
     out
 }
 
+/// Appends one event line to a session's `events.jsonl`. A single
+/// `O_APPEND` write of one short JSON line is atomic against the
+/// supervisor's own appends to the same file, so this is always exactly
+/// one `write_all` call — never split into two.
+pub fn append_event(
+    state_dir: &Path,
+    id: &str,
+    ev: &SessionEvent,
+) -> io::Result<()> {
+    let mut line = serde_json::to_string(ev)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    line.push('\n');
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(session_dir(state_dir, id).join("events.jsonl"))?;
+    file.write_all(line.as_bytes())
+}
+
 fn read_events(path: &Path) -> Vec<SessionEvent> {
     let Ok(text) = fs::read_to_string(path) else {
         return Vec::new();
@@ -61,8 +81,9 @@ fn read_events(path: &Path) -> Vec<SessionEvent> {
         .collect()
 }
 
+// Plain filesystem round-trips, nothing Linux-specific: runs on the host
+// as well as inside the distribution.
 #[cfg(test)]
-#[cfg(target_os = "linux")]
 mod tests {
     use std::collections::BTreeMap;
 
@@ -127,5 +148,41 @@ mod tests {
     fn load_all_is_empty_when_there_are_no_session_directories() {
         let root = scratch("empty");
         assert!(load_all(&root.join("state")).is_empty());
+    }
+
+    /// `append_event` writes exactly the one line `load_all` reads back,
+    /// and `from_log`/`apply_event` fold a `Renamed` line into `label` —
+    /// proof the daemon's own append path (not just the supervisor's) is
+    /// visible after a restart.
+    #[test]
+    fn append_event_adds_one_line_that_load_all_folds_back() {
+        use willie_core::session::{apply_event, from_log};
+
+        let root = scratch("append");
+        let state_dir = root.join("state");
+        let id = SessionId::new();
+        let spec = spec(id);
+        write_spec(&state_dir, &spec).unwrap();
+
+        append_event(
+            &state_dir,
+            &id.to_string(),
+            &SessionEvent {
+                at: "3".into(),
+                kind: SessionEventKind::Renamed {
+                    label: Some("auth guard".into()),
+                },
+            },
+        )
+        .unwrap();
+
+        let all = load_all(&state_dir);
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].1.len(), 1);
+        let mut session = from_log(&all[0].0, &all[0].1);
+        assert_eq!(session.label.as_deref(), Some("auth guard"));
+        apply_event(&mut session, &all[0].1[0]);
+        assert_eq!(session.label.as_deref(), Some("auth guard"));
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -420,6 +420,54 @@ impl SessionOps {
             .collect()
     }
 
+    /// Applies a user-chosen label: trims it, clears it on a blank or
+    /// absent value, and refuses one over 120 characters before anything
+    /// is touched. Persists a `Renamed` event to the session's own
+    /// append-only log *before* folding it into memory and emitting the
+    /// change, so a crash between the two can never show a label that is
+    /// lost the next time the daemon re-adopts the session from its log.
+    pub fn rename(
+        &self,
+        params: willie_proto::session::RenameParams,
+    ) -> Result<Session, OpError> {
+        let willie_proto::session::RenameParams { id, label } = params;
+        let label =
+            label.map(|l| l.trim().to_owned()).filter(|l| !l.is_empty());
+        if let Some(l) = &label
+            && l.chars().count() > 120
+        {
+            return Err(OpError {
+                code: "invalid_params".to_owned(),
+                message: "the label is longer than 120 characters".to_owned(),
+                remediation: "shorten the name".to_owned(),
+            });
+        }
+        let mut session = crate::lock(&self.state)
+            .sessions
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| {
+            OpError::coded("session_not_found", "no such session")
+        })?;
+        let event = SessionEvent {
+            at: (self.clock)(),
+            kind: SessionEventKind::Renamed { label },
+        };
+        session_store::append_event(&self.state_dir, &id.to_string(), &event)
+            .map_err(|e| OpError {
+            code: "state_write_failed".to_owned(),
+            message: e.to_string(),
+            remediation: "check the daemon's state directory \
+                              permissions and try again"
+                .to_owned(),
+        })?;
+        apply_event(&mut session, &event);
+        state::emit(&self.state, &self.out, |s| {
+            s.upsert_session(session.clone())
+        });
+        Ok(session)
+    }
+
     /// At start, load every session directory, adopt the ones whose socket
     /// answers, finalise the rest from their logs.
     pub fn scan(&self) {
@@ -603,6 +651,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::outbound::Outbound;
     use willie_core::sandbox::{ExtraPath, PathMode};
 
     #[test]
@@ -750,6 +799,186 @@ mod tests {
 
         assert_eq!(err.code, "sandbox_profile_invalid");
         assert!(err.remediation.contains("absolute"), "{}", err.remediation);
+    }
+
+    /// Shared by every `rename` test: a session directory on disk (the
+    /// spec `write_spec` would have written for a real `create`) and the
+    /// matching in-memory `Session`, folded from an empty log the way
+    /// `create` builds its first session.
+    fn rename_fixture(state_dir: &Path) -> (SessionOps, SessionId, Session) {
+        use willie_core::{id::ProjectId, sandbox::CapabilitySet};
+
+        fn clock() -> String {
+            "1".to_owned()
+        }
+
+        let id = SessionId::new();
+        let spec = SessionSpec {
+            id,
+            project_id: ProjectId::new(),
+            harness: "claude-code".into(),
+            workspace: "/w".into(),
+            socket: "/run/willie/sessions/s.sock".into(),
+            argv: vec!["/bin/true".into()],
+            env: Default::default(),
+            created_at: clock(),
+            willie_version: willie_core::VERSION.to_owned(),
+            resumed_from: None,
+            kind: SessionKind::Agent,
+            capabilities: CapabilitySet::default(),
+        };
+        session_store::write_spec(state_dir, &spec).unwrap();
+        let session = from_log(&spec, &[]);
+
+        let state = Arc::new(Mutex::new(State::default()));
+        crate::lock(&state).sessions.insert(id, session.clone());
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            state_dir.to_path_buf(),
+            state_dir.join("run"),
+            state_dir.join("home"),
+            clock,
+            runner,
+        );
+        (ops, id, session)
+    }
+
+    /// A fixture whose id never went through `write_spec`/state insertion.
+    fn unknown_id_ops(state_dir: &Path) -> SessionOps {
+        fn clock() -> String {
+            "1".to_owned()
+        }
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+        SessionOps::new(
+            Arc::clone(&state),
+            out,
+            state_dir.to_path_buf(),
+            state_dir.join("run"),
+            state_dir.join("home"),
+            clock,
+            runner,
+        )
+    }
+
+    /// Renaming sets the in-memory label, appends exactly one `Renamed`
+    /// line the log's last event parses to, and leaves the change visible
+    /// in `state` for the next snapshot/emit to pick up.
+    #[test]
+    fn rename_sets_the_label_persists_the_event_and_emits_a_change() {
+        let state_dir =
+            std::env::temp_dir().join("willie-sess-rename-ok-state");
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let (ops, id, _session) = rename_fixture(&state_dir);
+
+        let session = ops
+            .rename(willie_proto::session::RenameParams {
+                id,
+                label: Some("auth guard".into()),
+            })
+            .unwrap();
+        assert_eq!(session.label.as_deref(), Some("auth guard"));
+
+        // The in-memory session held by `state` agrees.
+        assert_eq!(
+            crate::lock(&ops.state).sessions.get(&id).unwrap().label,
+            Some("auth guard".to_owned())
+        );
+
+        let (_, events) = session_store::load_all(&state_dir)
+            .into_iter()
+            .find(|(spec, _)| spec.id == id)
+            .unwrap();
+        match &events.last().unwrap().kind {
+            SessionEventKind::Renamed { label } => {
+                assert_eq!(label.as_deref(), Some("auth guard"));
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    /// An empty (or all-whitespace) label clears an existing one, both in
+    /// memory and in the persisted event.
+    #[test]
+    fn rename_with_an_empty_label_clears_it() {
+        let state_dir =
+            std::env::temp_dir().join("willie-sess-rename-clear-state");
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let (ops, id, mut session) = rename_fixture(&state_dir);
+        session.label = Some("old".into());
+        crate::lock(&ops.state).sessions.insert(id, session);
+
+        let session = ops
+            .rename(willie_proto::session::RenameParams {
+                id,
+                label: Some("   ".into()),
+            })
+            .unwrap();
+        assert_eq!(session.label, None);
+
+        let (_, events) = session_store::load_all(&state_dir)
+            .into_iter()
+            .find(|(spec, _)| spec.id == id)
+            .unwrap();
+        match &events.last().unwrap().kind {
+            SessionEventKind::Renamed { label } => assert_eq!(*label, None),
+            other => panic!("{other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    /// An unknown session id is refused before any event is appended.
+    #[test]
+    fn renaming_an_unknown_session_is_session_not_found() {
+        let state_dir =
+            std::env::temp_dir().join("willie-sess-rename-unknown-state");
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let ops = unknown_id_ops(&state_dir);
+
+        let err = ops
+            .rename(willie_proto::session::RenameParams {
+                id: SessionId::new(),
+                label: Some("x".into()),
+            })
+            .unwrap_err();
+        assert_eq!(err.code, "session_not_found");
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    /// A label past the 120-character cap is refused, and nothing is
+    /// persisted or changed.
+    #[test]
+    fn a_label_over_120_chars_is_invalid_params() {
+        let state_dir =
+            std::env::temp_dir().join("willie-sess-rename-toolong-state");
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let (ops, id, _session) = rename_fixture(&state_dir);
+
+        let long = "x".repeat(121);
+        let err = ops
+            .rename(willie_proto::session::RenameParams {
+                id,
+                label: Some(long),
+            })
+            .unwrap_err();
+        assert_eq!(err.code, "invalid_params");
+        assert_eq!(err.remediation, "shorten the name");
+        assert_eq!(
+            crate::lock(&ops.state).sessions.get(&id).unwrap().label,
+            None
+        );
+
+        let _ = std::fs::remove_dir_all(&state_dir);
     }
 }
 
