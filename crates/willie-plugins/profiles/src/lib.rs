@@ -13,10 +13,18 @@ use willie_plugin_api::{
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ProfilesPlugin;
 
+/// Constructs the plugin for the daemon's registry.
+#[must_use]
+pub fn plugin() -> ProfilesPlugin {
+    ProfilesPlugin
+}
+
 impl Plugin for ProfilesPlugin {
     fn manifest(&self) -> PluginManifest {
+        // The id doubles as the method namespace the host routes on:
+        // `profile.list`, `profile.create`, … all split to `profile`.
         PluginManifest {
-            id: "profiles",
+            id: "profile",
             name: "Configuration profiles",
             scope: Scope::PerProject,
         }

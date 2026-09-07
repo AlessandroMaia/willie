@@ -12,6 +12,12 @@ use willie_plugin_api::{
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UsagePlugin;
 
+/// Constructs the plugin for the daemon's registry.
+#[must_use]
+pub fn plugin() -> UsagePlugin {
+    UsagePlugin
+}
+
 impl Plugin for UsagePlugin {
     fn manifest(&self) -> PluginManifest {
         PluginManifest {

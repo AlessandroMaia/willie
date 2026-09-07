@@ -4209,6 +4209,9 @@ dependencies = [
  "willie-core",
  "willie-harness",
  "willie-linux",
+ "willie-plugin-api",
+ "willie-plugin-profiles",
+ "willie-plugin-usage",
  "willie-proto",
 ]
 

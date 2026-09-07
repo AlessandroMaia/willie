@@ -15,6 +15,7 @@ use std::{
 use willie_proto::{
     daemon::{DoctorReport, method as daemon},
     job::method as job,
+    plugin::method as plugin,
     project::method as project,
     rpc::{Request, Response, RpcError},
     sandbox::method as sandbox,
@@ -24,9 +25,13 @@ use willie_proto::{
 };
 
 use crate::{
-    handlers, outbound::Outbound, projects::Ops, sessions::SessionOps,
-    state::State,
+    handlers, outbound::Outbound, plugins::PluginHost, projects::Ops,
+    sessions::SessionOps, state::State,
 };
+
+/// The namespace a plugin-hosted method (e.g. `profile.list`) leads with,
+/// followed by a `.`. Any method under it is routed to `host.handle`.
+const PLUGIN_METHOD_PREFIX: &str = "profile.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitReason {
@@ -63,6 +68,7 @@ pub struct Server {
     state: Arc<Mutex<State>>,
     ops: Ops,
     sessions: SessionOps,
+    host: Arc<Mutex<PluginHost>>,
     out: Outbound,
     shutting_down: bool,
 }
@@ -82,6 +88,7 @@ impl Server {
         state: Arc<Mutex<State>>,
         ops: Ops,
         sessions: SessionOps,
+        host: Arc<Mutex<PluginHost>>,
         out: Outbound,
     ) -> Self {
         Self {
@@ -90,6 +97,7 @@ impl Server {
             state,
             ops,
             sessions,
+            host,
             out,
             shutting_down: false,
         }
@@ -141,8 +149,17 @@ impl Server {
             sandbox::EXPLAIN => {
                 handlers::sandbox_explain(&self.state, req.params)
             }
+            plugin::LIST => handlers::plugin_list(&self.host),
+            plugin::ENABLE => handlers::plugin_enable(&self.host, req.params),
+            plugin::DISABLE => handlers::plugin_disable(&self.host, req.params),
             state_method::SNAPSHOT => {
-                handlers::state_snapshot(&self.ops, &self.state)
+                handlers::state_snapshot(&self.ops, &self.state, &self.host)
+            }
+            // A plugin's own methods (e.g. `profile.list`) carry no
+            // top-level dispatch arm: the host splits `<id>.<method>` and
+            // routes them itself.
+            other if other.starts_with(PLUGIN_METHOD_PREFIX) => {
+                handlers::plugin_handle(&self.host, other, req.params)
             }
             other => Err(RpcError::new(
                 "method_not_found",
@@ -350,8 +367,21 @@ mod tests {
             clock,
             ops.runner_handle(),
         );
-        let server =
-            Server::new(fake_doctor, Arc::clone(&state), ops, sessions, out);
+        // A private plugin-state dir per server so an `enable` in one test
+        // never leaks its `enabled.toml` into another's.
+        let host = Arc::new(Mutex::new(PluginHost::new(
+            std::env::temp_dir()
+                .join("willie-server-test-plugins")
+                .join(willie_core::id::ProjectId::new().to_string()),
+        )));
+        let server = Server::new(
+            fake_doctor,
+            Arc::clone(&state),
+            ops,
+            sessions,
+            host,
+            out,
+        );
         (server, buf, handle)
     }
 
@@ -536,6 +566,81 @@ mod tests {
         assert_eq!(
             resp[0].clone().into_result().unwrap_err().code,
             "invalid_params"
+        );
+    }
+
+    /// `plugin.list` is dispatched and answers a `PluginStatus` for every
+    /// compiled-in plugin — the profiles and usage plugins today.
+    #[test]
+    fn plugin_list_answers_a_status_for_profiles_and_usage() {
+        let (_, resp) = roundtrip(&line(plugin::LIST, serde_json::json!({})));
+        let statuses: Vec<willie_proto::plugin::PluginStatus> =
+            serde_json::from_value(resp[0].clone().into_result().unwrap())
+                .unwrap();
+        let ids: Vec<&str> = statuses.iter().map(|s| s.id.as_str()).collect();
+        assert!(ids.contains(&"profile"), "{ids:?}");
+        assert!(ids.contains(&"usage"), "{ids:?}");
+    }
+
+    /// `plugin.enable` for a per-project plugin records the project id and
+    /// answers the new status.
+    #[test]
+    fn plugin_enable_a_per_project_scope_records_the_project() {
+        use willie_core::id::ProjectId;
+        use willie_proto::plugin::{EnableParams, Enablement, PluginStatus};
+
+        let project = ProjectId::new();
+        let params = EnableParams {
+            id: "profile".into(),
+            project_id: Some(project),
+        };
+        let (_, resp) = roundtrip(&line(
+            plugin::ENABLE,
+            serde_json::to_value(params).unwrap(),
+        ));
+        let status: PluginStatus =
+            serde_json::from_value(resp[0].clone().into_result().unwrap())
+                .unwrap();
+        assert_eq!(status.id, "profile");
+        assert_eq!(status.enabled, Enablement::PerProject(vec![project]));
+    }
+
+    /// A `profile.*` method carries no dispatch arm of its own: the server
+    /// routes it to `host.handle`, which — once the plugin is enabled —
+    /// reaches the plugin and returns its own coded error (the placeholder's
+    /// `profile_not_implemented` in this slice). Both lines run against one
+    /// server so the enable is visible to the call.
+    #[test]
+    fn profile_calls_route_to_the_profiles_plugin() {
+        use willie_core::id::ProjectId;
+        use willie_proto::plugin::EnableParams;
+
+        let enable = line(
+            plugin::ENABLE,
+            serde_json::to_value(EnableParams {
+                id: "profile".into(),
+                project_id: Some(ProjectId::new()),
+            })
+            .unwrap(),
+        );
+        let call = line("profile.list", serde_json::json!({}));
+        let (_, resp) = roundtrip(&format!("{enable}\n{call}\n"));
+        assert!(resp[0].clone().into_result().is_ok(), "enable failed");
+        assert_eq!(
+            resp[1].clone().into_result().unwrap_err().code,
+            "profile_not_implemented"
+        );
+    }
+
+    /// A `profile.*` call while the plugin is disabled is routed to the host
+    /// and refused with `plugin_disabled` — proof it reached the host rather
+    /// than falling through to `method_not_found`.
+    #[test]
+    fn a_profile_call_while_disabled_is_plugin_disabled_not_method_not_found() {
+        let (_, resp) = roundtrip(&line("profile.list", serde_json::json!({})));
+        assert_eq!(
+            resp[0].clone().into_result().unwrap_err().code,
+            "plugin_disabled"
         );
     }
 }

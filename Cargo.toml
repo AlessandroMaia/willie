@@ -30,6 +30,8 @@ willie-proto = { path = "crates/willie-proto" }
 willie-linux = { path = "crates/willie-linux" }
 willie-harness = { path = "crates/willie-harness" }
 willie-plugin-api = { path = "crates/willie-plugin-api" }
+willie-plugin-profiles = { path = "crates/willie-plugins/profiles" }
+willie-plugin-usage = { path = "crates/willie-plugins/usage" }
 willie-engine = { path = "crates/willie-engine" }
 
 # External crates. Adding one requires a justification in the PR/commit

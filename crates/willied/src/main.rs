@@ -24,6 +24,8 @@ mod manifest;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod outbound;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod plugins;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod projects;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod server;
@@ -238,6 +240,12 @@ fn run_stdio() -> ExitCode {
         real_clock,
         out.clone(),
     );
+    // The plugin host runs beside the ops: the server routes `plugin.*`
+    // and `profile.*` to it, and the session path feeds it `on_event`. It
+    // is shared (behind a mutex) so both sides act on the same registry and
+    // enablement. Built before `state_dir` is moved into the session ops.
+    let host =
+        Arc::new(Mutex::new(plugins::PluginHost::new(state_dir.clone())));
     // The run dir feeds both the socket path written into each spec and
     // the daemon's own connect/scan path, so both sides agree on where a
     // session's socket lives. The daemon's own socket (bound below) sits
@@ -250,7 +258,8 @@ fn run_stdio() -> ExitCode {
         home,
         real_clock,
         ops.runner_handle(),
-    );
+    )
+    .with_plugin_host(Arc::clone(&host));
     // Re-adopt live supervisors (and finalise dead ones) before serving.
     session_ops.scan();
 
@@ -295,6 +304,7 @@ fn run_stdio() -> ExitCode {
         Arc::clone(&state),
         ops,
         session_ops,
+        host,
         out.clone(),
     );
 

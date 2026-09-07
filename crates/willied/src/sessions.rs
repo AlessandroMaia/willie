@@ -22,10 +22,11 @@ use willie_core::{
 };
 use willie_harness::{Harness, LaunchMode, Resume};
 use willie_linux::paths::{SUPERVISOR_BIN, session_socket, sessions_run_dir};
+use willie_plugin_api::CoreEvent;
 
 use crate::{
-    harness, identity, jobs::Runner, projects::OpError, session_store, state,
-    state::State,
+    harness, identity, jobs::Runner, plugins::PluginHost, projects::OpError,
+    session_store, state, state::State,
 };
 
 /// Shared inputs a session operation needs.
@@ -39,6 +40,10 @@ pub struct SessionOps {
     // The same runner the project ops submit to: `create` reads its
     // per-project busy set to refuse a session while a job is in flight.
     runner: Arc<Runner>,
+    // The daemon's plugin host, shared with the server. `None` in the unit
+    // tests that build session ops without one; the real daemon wires it so
+    // a session's start and exit reach the plugins as `CoreEvent`s.
+    plugin_host: Option<Arc<Mutex<PluginHost>>>,
 }
 
 impl std::fmt::Debug for SessionOps {
@@ -66,7 +71,24 @@ impl SessionOps {
             home,
             clock,
             runner,
+            plugin_host: None,
         }
+    }
+
+    /// Shares the daemon's plugin host with the session path, so a session's
+    /// start and exit are fanned to the plugins as `CoreEvent`s. The daemon
+    /// calls this; the unit tests leave it unset.
+    #[must_use]
+    pub fn with_plugin_host(mut self, host: Arc<Mutex<PluginHost>>) -> Self {
+        self.plugin_host = Some(host);
+        self
+    }
+
+    /// Fans one `CoreEvent` to the plugin host, if the daemon wired one. The
+    /// host catches a plugin panic at its own boundary, so this never
+    /// unwinds; the lock is recovered rather than unwrapped.
+    fn notify_plugins(&self, ev: CoreEvent) {
+        notify_plugin_host(&self.plugin_host, ev);
     }
 
     /// Resolve fail-closed, write the spec, spawn the supervisor and wait
@@ -214,6 +236,10 @@ impl SessionOps {
                     s.upsert_session(session.clone())
                 });
                 self.watch(id, &socket);
+                self.notify_plugins(CoreEvent::SessionStarted {
+                    session_id: id,
+                    project_id: project.id,
+                });
                 Ok(session)
             }
             Ready::Fail { code, text } => {
@@ -327,6 +353,7 @@ impl SessionOps {
             let out = self.out.clone();
             let state_dir = self.state_dir.clone();
             let socket = socket.to_path_buf();
+            let plugin_host = self.plugin_host.clone();
             let _ = thread::Builder::new()
                 .name("session-finalise".to_owned())
                 .spawn(move || {
@@ -337,14 +364,26 @@ impl SessionOps {
                         .sessions
                         .get(&id)
                         .is_some_and(|s| s.state.is_terminal());
-                    if terminal {
-                        return;
-                    }
-                    let answers = crate::control::connect(&socket)
-                        .and_then(|mut c| c.status())
-                        .is_ok();
-                    if !answers {
-                        finalise_lost(&state, &out, &state_dir, id);
+                    // The session exited if a terminal event was folded, or
+                    // if the follow-up probe finds no live supervisor and we
+                    // finalise it lost. A socket that still answers means it
+                    // is alive despite the reader ending: no exit event then.
+                    let exited = if terminal {
+                        true
+                    } else {
+                        let answers = crate::control::connect(&socket)
+                            .and_then(|mut c| c.status())
+                            .is_ok();
+                        if !answers {
+                            finalise_lost(&state, &out, &state_dir, id);
+                        }
+                        !answers
+                    };
+                    if exited {
+                        notify_plugin_host(
+                            &plugin_host,
+                            CoreEvent::SessionExited { session_id: id },
+                        );
                     }
                 });
         }
@@ -415,6 +454,19 @@ impl SessionOps {
                 }
             }
         }
+    }
+}
+
+/// Fans one `CoreEvent` to the plugin host if the daemon wired one. Shared
+/// by the request-thread `create` path and the background finalise thread,
+/// which holds only a clone of the optional host. The host catches a plugin
+/// panic at its own boundary, so this never unwinds; the poisoned lock is
+/// recovered rather than unwrapped, keeping `willied`'s no-panic discipline.
+fn notify_plugin_host(host: &Option<Arc<Mutex<PluginHost>>>, ev: CoreEvent) {
+    if let Some(host) = host {
+        host.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .on_event(ev);
     }
 }
 

@@ -193,15 +193,48 @@ does not detect refuses synchronously with `tool_not_installed`; an
 unknown tool id is `invalid_params` instead (see Session and tool codes
 below).
 
+## `plugin.*`
+
+Plugins are compiled into the daemon, run outside every session sandbox,
+and each degrades only itself. The host keeps a registry, persists which
+plugins are enabled (and, for a per-project plugin, in which projects) in
+`/var/lib/willie/plugins/enabled.toml`, and routes calls to them.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `plugin.list` | `{}` | `[PluginStatus]` |
+| `plugin.enable` | `EnableParams { id, project_id? }` | `PluginStatus` |
+| `plugin.disable` | `EnableParams { id, project_id? }` | `PluginStatus` |
+
+A `PluginStatus` is `{ id, name, scope, enabled, degraded }`; `scope` is
+`global` or `per_project`; `enabled` is `{ global: <bool> }` for a global
+plugin or `{ per_project: [ProjectId] }` for a per-project one; `degraded`
+is `true` once a call into the plugin has returned an error or panicked.
+`EnableParams.project_id` picks the scope: absent enables (or disables) the
+plugin globally, present enables (or disables) it for that project. A scope
+the plugin's manifest forbids — a global one for a per-project plugin, or
+the reverse — is refused with `plugin_scope_mismatch`. A missing or
+unreadable `enabled.toml` reads as "nothing enabled" and the daemon still
+runs.
+
+A plugin's own methods carry no dispatch arm of their own: a method under a
+plugin's namespace (today `profile.*`, the configuration-profiles plugin)
+is routed to the host, which splits `<id>.<method>`, finds the plugin and
+calls it. The plugin id doubles as its method namespace, so the profiles
+plugin — methods `profile.*` — is identified as `profile`. An unknown id is
+`plugin_not_found`; a call to a disabled plugin is `plugin_disabled`; a
+plugin that panics is caught at the host boundary, marked `degraded`, and
+answered with `plugin_panicked` — the daemon lives.
+
 ## `state.*`
 | Method | Params | Result |
 | --- | --- | --- |
-| `state.snapshot` | `{}` | `Snapshot { seq, projects: [Project], jobs: [Job], sessions: [Session] }` |
+| `state.snapshot` | `{}` | `Snapshot { seq, projects: [Project], jobs: [Job], sessions: [Session], plugins: [PluginStatus] }` |
 
 `state.event` is a notification (daemon → client), never a request. Its
 params are `Event { seq, kind }` where `kind` is `project_changed
-{ project }`, `project_removed { id }`, `job_changed { job }` or
-`session_changed { session }`. `seq` is a
+{ project }`, `project_removed { id }`, `job_changed { job }`,
+`session_changed { session }` or `plugin_changed { plugin }`. `seq` is a
 monotonic counter shared by the snapshot and every event: a client that
 holds a snapshot at `seq = N` applies every event with `seq > N` in order.
 A single writer owns stdout, so events never interleave and their `seq`
@@ -336,6 +369,20 @@ a profile the UI edits.
 | `tool_not_installed` | `tool.update` on a tool the daemon does not detect. Not for an unknown tool id — that is `invalid_params` | install it first, then update |
 | `tool_busy` | a tool job is already running | wait for the running install to finish |
 | `install_failed` | the installer exited non-zero, or could not be spawned | read the installer output, check the network, then try again |
+
+## Plugin codes
+
+These come back as the `error` of a `plugin.*` call, or of a plugin-routed
+`profile.*` call. A plugin's own coded failures (e.g. the placeholder's
+`profile_not_implemented`) travel through unchanged, carrying the plugin's
+own code and remediation.
+
+| Code | When | When not | Remediation |
+| --- | --- | --- | --- |
+| `plugin_not_found` | `plugin.enable`/`disable`, or a `profile.*` call, names a plugin id no plugin in the registry answers to | the id is known but disabled — that is `plugin_disabled` | check `plugin.list` for the available plugin ids |
+| `plugin_disabled` | a `profile.*` (plugin-routed) call while the plugin is not enabled — a global plugin whose flag is off, or a per-project plugin enabled in no project | the plugin is enabled — the call reaches it and returns the plugin's own result or coded error | enable it with `plugin.enable` before calling its methods |
+| `plugin_scope_mismatch` | `plugin.enable`/`disable` in a scope the manifest forbids: a global scope (no `project_id`) for a per-project plugin, or a per-project scope (a `project_id`) for a global plugin | the scope matches the manifest — the enable/disable proceeds | enable it in the scope its manifest declares (a `project_id` for a per-project plugin, none for a global one) |
+| `plugin_panicked` | a plugin's `on_enable`/`on_disable`/`handle` panicked; the panic is caught at the host boundary and the plugin is marked `degraded`, the daemon lives | the plugin returned an ordinary `Err` — that carries the plugin's own code, and also marks it `degraded` | check the daemon log; the plugin stays degraded until it is re-enabled |
 
 ## Engine problem codes
 
