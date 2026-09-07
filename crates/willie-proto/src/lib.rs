@@ -19,6 +19,7 @@ pub mod session;
 pub mod state;
 pub mod supervisor;
 pub mod tool;
+pub mod usage;
 
 pub use daemon::{Hello, HelloReply};
 pub use rpc::RpcError;
