@@ -33,6 +33,11 @@ use crate::{
 /// followed by a `.`. Any method under it is routed to `host.handle`.
 const PLUGIN_METHOD_PREFIX: &str = "profile.";
 
+/// The `usage.*` namespace, routed through its own arm (sibling to
+/// [`PLUGIN_METHOD_PREFIX`]): its enrichment (live sessions, home) differs
+/// from the profiles seam, so the two are never merged.
+const USAGE_METHOD_PREFIX: &str = "usage.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExitReason {
     Eof,
@@ -154,6 +159,19 @@ impl Server {
             plugin::DISABLE => handlers::plugin_disable(&self.host, req.params),
             state_method::SNAPSHOT => {
                 handlers::state_snapshot(&self.ops, &self.state, &self.host)
+            }
+            // A `usage.*` call (e.g. `usage.snapshot`) carries no top-level
+            // dispatch arm either: `usage_handle` injects the daemon's live
+            // sessions and home directory (the same daemon-fills-targets
+            // seam as `profile.`, with its own enrichment) before the host
+            // splits `<id>.<method>` and routes to the usage plugin.
+            other if other.starts_with(USAGE_METHOD_PREFIX) => {
+                handlers::usage_handle(
+                    &self.state,
+                    &self.host,
+                    other,
+                    req.params,
+                )
             }
             // A plugin's own methods (e.g. `profile.list`) carry no
             // top-level dispatch arm: `profile_handle` resolves a
@@ -303,6 +321,7 @@ mod tests {
         CheckStatus, DoctorCheck, DoctorReport, Hello, HelloReply, method,
     };
     use willie_proto::rpc::{Request, Response};
+    use willie_proto::usage::method as usage;
 
     use super::*;
     use crate::{
@@ -639,6 +658,20 @@ mod tests {
         assert_eq!(
             resp[1].clone().into_result().unwrap(),
             serde_json::json!([])
+        );
+    }
+
+    /// A `usage.*` call is routed to the host the same way `profile.*` is
+    /// (its own dispatch arm, `handlers::usage_handle`): disabled here, it
+    /// answers `plugin_disabled` — proof it reached the host rather than
+    /// falling through to `method_not_found`.
+    #[test]
+    fn a_usage_call_while_disabled_is_plugin_disabled_not_method_not_found() {
+        let (_, resp) =
+            roundtrip(&line(usage::SNAPSHOT, serde_json::json!({})));
+        assert_eq!(
+            resp[0].clone().into_result().unwrap_err().code,
+            "plugin_disabled"
         );
     }
 
