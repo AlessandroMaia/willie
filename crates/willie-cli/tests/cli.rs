@@ -142,6 +142,7 @@ fn project_list_with(id: ProjectId, slug: &str) -> ProjectList {
             source_present: true,
             created_at: "2026-09-07T00:00:00Z".into(),
             sandbox: SandboxProfile::default(),
+            sandbox_problem: None,
         }],
     }
 }

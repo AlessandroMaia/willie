@@ -72,6 +72,20 @@ impl OpError {
             remediation,
         }
     }
+
+    /// A project's own `sandbox_problem`, carried across as it stands:
+    /// unlike `coded`/`coded_owned` its remediation is not looked up in
+    /// a static table, it is the problem's own, computed by `store`
+    /// when the `[sandbox]` table failed to parse.
+    pub(crate) fn from_problem(
+        p: &willie_core::project::SandboxProblem,
+    ) -> Self {
+        Self {
+            code: p.code.clone(),
+            message: p.message.clone(),
+            remediation: p.remediation.clone(),
+        }
+    }
 }
 
 /// A sandbox refusal is already a code, a sentence naming the
@@ -668,6 +682,7 @@ impl Ops {
             source_present: true,
             created_at: (self.clock)(),
             sandbox: SandboxProfile::default(),
+            sandbox_problem: None,
         };
         store::save_or_log(&self.state_dir, &project);
         state::emit(&self.state, &self.out, |s| {
@@ -841,7 +856,7 @@ impl Ops {
         project.name = name;
         store::save(&self.state_dir, &project).map_err(|e| {
             OpError::new(
-                "git_failed",
+                "state_write_failed",
                 e.to_string(),
                 "check the daemon's state directory permissions and \
                  try again",
@@ -875,9 +890,10 @@ impl Ops {
             &crate::harness::home().to_string_lossy(),
         )?;
         project.sandbox = profile;
+        project.sandbox_problem = None;
         store::save(&self.state_dir, &project).map_err(|e| {
             OpError::new(
-                "git_failed",
+                "state_write_failed",
                 e.to_string(),
                 "check the daemon's state directory permissions and \
                  try again",
@@ -1018,6 +1034,7 @@ mod tests {
             source_present: true,
             created_at: clock(),
             sandbox: SandboxProfile::default(),
+            sandbox_problem: None,
         }
     }
 
@@ -1652,6 +1669,52 @@ mod tests {
             state.lock().unwrap().projects[&res.project_id].sandbox,
             SandboxProfile::default()
         );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// `set_sandbox` is the one write that replaces the `[sandbox]`
+    /// table outright, so it is also the one place a `sandbox_problem`
+    /// clears: the new profile persists, not the preserved broken
+    /// table `store::save` would otherwise keep for every other write.
+    #[test]
+    fn set_sandbox_clears_a_sandbox_problem_and_replaces_the_table() {
+        let root = scratch("set-sandbox-clears-problem");
+        let state_dir = root.join("state");
+        let id = ProjectId::new();
+        let path = store::projects_dir(&state_dir).join(format!("{id}.toml"));
+        fs::create_dir_all(store::projects_dir(&state_dir)).unwrap();
+        let toml = format!(
+            "id = \"{id}\"\nname = \"x\"\nslug = \"x\"\n\
+             source = \"C:\\\\x\"\nworkspace = \"/home/willie/projects/x\"\n\
+             branch = \"main\"\ncreated_at = \"t\"\n\
+             [state]\nstate = \"ready\"\n\
+             [sandbox]\nnonsense = true\n"
+        );
+        fs::write(&path, toml).unwrap();
+        let loaded = store::load_all(&state_dir);
+        assert_eq!(loaded.len(), 1);
+        let project = loaded[0].clone();
+        assert!(project.sandbox_problem.is_some());
+
+        let (ops, state) = ops(&root);
+        state.lock().unwrap().projects.insert(id, project);
+
+        let profile = SandboxProfile {
+            agent_state: Some(false),
+            ..SandboxProfile::default()
+        };
+        let updated = ops
+            .set_sandbox(SetSandboxParams {
+                project_id: id,
+                profile: profile.clone(),
+            })
+            .unwrap();
+
+        assert_eq!(updated.sandbox, profile);
+        assert_eq!(updated.sandbox_problem, None);
+        assert_eq!(state.lock().unwrap().projects[&id].sandbox_problem, None);
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("nonsense"), "{text}");
         let _ = fs::remove_dir_all(&root);
     }
 

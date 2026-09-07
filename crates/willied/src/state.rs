@@ -147,6 +147,7 @@ mod tests {
             source_present: true,
             created_at: "t".into(),
             sandbox: SandboxProfile::default(),
+            sandbox_problem: None,
         }
     }
 
