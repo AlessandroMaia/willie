@@ -22,7 +22,8 @@ enablement record cannot lean on an index.
 | --- | --- | --- |
 | Enablement in SQLite vs a TOML file | queryable, transactional | pulls SQLite in early, against the slice's deferral; the record is tiny and read whole |
 | Unreadable `enabled.toml` fails closed vs loads empty | a corrupt record is loud | a plugin being off is already the safe state; failing the daemon over it is worse than starting with nothing enabled |
-| A plugin `Err`/panic degrades only that plugin vs propagates | the daemon and other plugins survive | an ordinary business refusal also trips `degraded` until a plugin's methods distinguish the two |
+| A fault (`Internal`) or panic degrades only that plugin vs propagates | the daemon and other plugins survive | a fault surfaces as `degraded` rather than a crash, but the caller must read the status to notice |
+| Degrade on any `Err` vs only on a genuine fault | any-`Err` is simplest | a coded refusal (`profile_exists`) is a legitimate "no", not a malfunction; degrading on it mislabels a healthy plugin and flaps as refusals and successes alternate |
 | Plugin id separate from its method namespace vs the id *is* the namespace | a plugin could host several namespaces | needs a namespace field the trait does not carry; one namespace per plugin is enough today |
 
 ## Decision
@@ -39,9 +40,12 @@ at the first `.` into `<id>.<rest>`, so the plugin id doubles as its method
 namespace — the configuration-profiles plugin, whose methods are
 `profile.*`, is therefore identified as `profile`. Every call into a plugin
 — `handle`, the lifecycle hooks and `on_event` — runs inside
-`catch_unwind`; a returned `Err` or a caught panic marks the plugin
-`degraded` (surfaced in its status and the snapshot) and, for a panic,
-answers `plugin_panicked`, while the daemon keeps running. The host lives
+`catch_unwind`. A plugin is marked `degraded` (surfaced in its status and
+the snapshot) only by a genuine fault: a caught panic (answered
+`plugin_panicked`) or a returned `PluginError::Internal`. A `Coded` refusal
+or a `BadRequest` passes through as its `OpError`, code and remediation
+preserved, without degrading the plugin — a refusal is a legitimate answer,
+not a malfunction. The daemon keeps running in every case. The host lives
 behind a mutex shared between the server (which routes `plugin.*` and
 `profile.*` and merges `list()` into the snapshot) and the session path
 (which feeds it `SessionStarted`/`SessionExited` as `CoreEvent`s), so the
@@ -55,10 +59,10 @@ boxed plugins must be `Send`.
   distribution with no `enabled.toml` reads as "no plugins enabled".
 - `plugin.*`, `profile.*`, the `plugins` snapshot field and the
   `plugin_changed` event are additive; `PROTOCOL_VERSION` is unchanged.
-- An ordinary `Err` from a plugin's `handle` currently also marks it
-  `degraded` — acceptable for this slice, where the only `handle` is a
-  placeholder; it wants refining once profiles' real methods can tell a
-  business refusal from a fault.
+- `degraded` tracks genuine faults only — a panic or `PluginError::Internal`
+  — so a plugin's ordinary coded refusal (`profile_exists`, and once Task 4
+  lands the real methods, the rest) never mislabels a healthy plugin as
+  broken and never flaps as refusals and successes alternate.
 - Every hosted plugin must be `Send`, since the host is shared across
   threads. The concrete plugins are, and the registry boxes them as
   `dyn Plugin + Send`.

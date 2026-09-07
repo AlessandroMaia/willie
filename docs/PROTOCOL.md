@@ -209,7 +209,9 @@ plugins are enabled (and, for a per-project plugin, in which projects) in
 A `PluginStatus` is `{ id, name, scope, enabled, degraded }`; `scope` is
 `global` or `per_project`; `enabled` is `{ global: <bool> }` for a global
 plugin or `{ per_project: [ProjectId] }` for a per-project one; `degraded`
-is `true` once a call into the plugin has returned an error or panicked.
+is `true` once a call into the plugin has panicked or returned an internal
+fault (`plugin_internal`) — a genuine malfunction. An ordinary coded refusal
+(a legitimate "no", e.g. `profile_exists`) does not degrade it.
 `EnableParams.project_id` picks the scope: absent enables (or disables) the
 plugin globally, present enables (or disables) it for that project. A scope
 the plugin's manifest forbids — a global one for a per-project plugin, or
@@ -226,6 +228,12 @@ plugin — methods `profile.*` — is identified as `profile`. An unknown id is
 plugin that panics is caught at the host boundary, marked `degraded`, and
 answered with `plugin_panicked` — the daemon lives.
 
+The `plugin_changed` `state.event` kind and a plugin's own `plugin.emitted`
+notification are reserved in the protocol but **not yet emitted**: an
+enable/disable returns the new `PluginStatus` synchronously and a client
+sees the change on its next `state.snapshot` (whose `plugins` field the host
+fills). Forwarding live plugin changes and emissions is a follow-up.
+
 ## `state.*`
 | Method | Params | Result |
 | --- | --- | --- |
@@ -233,8 +241,9 @@ answered with `plugin_panicked` — the daemon lives.
 
 `state.event` is a notification (daemon → client), never a request. Its
 params are `Event { seq, kind }` where `kind` is `project_changed
-{ project }`, `project_removed { id }`, `job_changed { job }`,
-`session_changed { session }` or `plugin_changed { plugin }`. `seq` is a
+{ project }`, `project_removed { id }`, `job_changed { job }` or
+`session_changed { session }`. (`plugin_changed { plugin }` is reserved but
+not yet emitted — see `plugin.*` above.) `seq` is a
 monotonic counter shared by the snapshot and every event: a client that
 holds a snapshot at `seq = N` applies every event with `seq > N` in order.
 A single writer owns stdout, so events never interleave and their `seq`
@@ -382,7 +391,8 @@ own code and remediation.
 | `plugin_not_found` | `plugin.enable`/`disable`, or a `profile.*` call, names a plugin id no plugin in the registry answers to | the id is known but disabled — that is `plugin_disabled` | check `plugin.list` for the available plugin ids |
 | `plugin_disabled` | a `profile.*` (plugin-routed) call while the plugin is not enabled — a global plugin whose flag is off, or a per-project plugin enabled in no project | the plugin is enabled — the call reaches it and returns the plugin's own result or coded error | enable it with `plugin.enable` before calling its methods |
 | `plugin_scope_mismatch` | `plugin.enable`/`disable` in a scope the manifest forbids: a global scope (no `project_id`) for a per-project plugin, or a per-project scope (a `project_id`) for a global plugin | the scope matches the manifest — the enable/disable proceeds | enable it in the scope its manifest declares (a `project_id` for a per-project plugin, none for a global one) |
-| `plugin_panicked` | a plugin's `on_enable`/`on_disable`/`handle` panicked; the panic is caught at the host boundary and the plugin is marked `degraded`, the daemon lives | the plugin returned an ordinary `Err` — that carries the plugin's own code, and also marks it `degraded` | check the daemon log; the plugin stays degraded until it is re-enabled |
+| `plugin_panicked` | a plugin's `on_enable`/`on_disable`/`handle` panicked; the panic is caught at the host boundary and the plugin is marked `degraded`, the daemon lives | the plugin returned an ordinary coded refusal — that carries the plugin's own code and does not degrade it; only a panic or an internal fault (`plugin_internal`) does | check the daemon log; the plugin stays degraded until a later call succeeds or it is re-enabled |
+| `plugin_internal` | a plugin returned `PluginError::Internal` — a genuine fault (not a `Coded` refusal it can name); the plugin is marked `degraded` | the plugin returned a coded refusal (e.g. `profile_exists`) — a legitimate "no" that carries its own code and leaves the plugin healthy | retry; if it repeats, check the daemon log — the plugin stays degraded until a later call succeeds or it is re-enabled |
 
 ## Engine problem codes
 

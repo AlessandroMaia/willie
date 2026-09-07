@@ -72,7 +72,7 @@ mod tests {
     fn a_per_project_plugin_status_round_trips() {
         let project = ProjectId::new();
         let status = PluginStatus {
-            id: "profiles".into(),
+            id: "profile".into(),
             name: "Profiles".into(),
             scope: Scope::PerProject,
             enabled: Enablement::PerProject(vec![project]),

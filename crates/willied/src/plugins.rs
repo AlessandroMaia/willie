@@ -3,9 +3,11 @@
 //! and the routing of `plugin.*`/`<id>.*` calls to them.
 //!
 //! Plugins run inside the daemon, outside every session sandbox, and each
-//! degrades only itself. A plugin is marked `degraded` when a call into it
-//! returns `Err` or panics; the panic is caught at this boundary so one
-//! plugin's crash never takes the daemon down. Enablement is a file under
+//! degrades only itself. A plugin is marked `degraded` only when a call
+//! into it panics or returns an internal fault; a coded refusal (a
+//! legitimate "no", e.g. `profile_exists`) is not a malfunction and leaves
+//! it healthy. The panic is caught at this boundary so one plugin's crash
+//! never takes the daemon down. Enablement is a file under
 //! `<state_dir>/plugins/enabled.toml`; a missing or unreadable file reads
 //! as "nothing enabled" (a plugin being off is the safe default).
 
@@ -185,8 +187,9 @@ impl PluginHost {
 
     /// The shared body of `enable`/`disable`: validate the scope, run the
     /// lifecycle hook inside the panic boundary, record the change and
-    /// persist. A hook that errs or panics does not persist the change; it
-    /// marks the plugin degraded and reports the failure.
+    /// persist. A hook that fails does not persist the change; a panic or an
+    /// internal fault marks the plugin degraded, while a coded refusal
+    /// passes through without degrading it.
     fn set_enabled(
         &mut self,
         params: EnableParams,
@@ -238,7 +241,9 @@ impl PluginHost {
                 return Err(panicked(&id));
             }
             Ok(Err(e)) => {
-                self.degraded.insert(id.clone());
+                if is_fault(&e) {
+                    self.degraded.insert(id.clone());
+                }
                 return Err(plugin_error_to_op(e));
             }
             Ok(Ok(())) => {
@@ -262,9 +267,10 @@ impl PluginHost {
     }
 
     /// Routes `<id>.<method>` to its plugin. An unknown id is
-    /// `plugin_not_found`, a disabled plugin `plugin_disabled`; a panic in
-    /// the plugin is caught, the plugin marked degraded, and
-    /// `plugin_panicked` returned.
+    /// `plugin_not_found`, a disabled plugin `plugin_disabled`. A panic is
+    /// caught and answered `plugin_panicked`, marking the plugin degraded; a
+    /// returned internal fault also marks it degraded, while a coded refusal
+    /// passes through as its `OpError` and leaves the plugin healthy.
     pub fn handle(
         &mut self,
         method: &str,
@@ -294,7 +300,9 @@ impl PluginHost {
                 Err(panicked(id))
             }
             Ok(Err(e)) => {
-                self.degraded.insert(id.to_owned());
+                if is_fault(&e) {
+                    self.degraded.insert(id.to_owned());
+                }
                 Err(plugin_error_to_op(e))
             }
             Ok(Ok(response)) => {
@@ -420,6 +428,14 @@ fn panicked(id: &str) -> OpError {
     )
 }
 
+/// Whether a plugin error is a genuine fault the plugin should be marked
+/// degraded for. `Internal` is a malfunction; a `Coded` refusal (e.g.
+/// `profile_exists`) or a `BadRequest` is a legitimate "no" answer that
+/// leaves the plugin healthy, so it is not a fault.
+fn is_fault(e: &PluginError) -> bool {
+    matches!(e, PluginError::Internal(_))
+}
+
 /// Maps a `PluginError` onto the host's `OpError`, preserving its code and
 /// remediation so the wire reply carries what the plugin chose.
 fn plugin_error_to_op(e: PluginError) -> OpError {
@@ -463,15 +479,39 @@ mod tests {
         }
     }
 
-    /// A global plugin whose `handle` always fails, for the degraded path.
+    /// A global plugin whose `handle` returns an internal fault — a genuine
+    /// malfunction, for the degraded path.
     #[derive(Debug)]
-    struct Failing;
+    struct Faulting;
 
-    impl Plugin for Failing {
+    impl Plugin for Faulting {
         fn manifest(&self) -> PluginManifest {
             PluginManifest {
-                id: "failing",
-                name: "Failing",
+                id: "faulting",
+                name: "Faulting",
+                scope: ApiScope::Global,
+            }
+        }
+
+        fn handle(
+            &mut self,
+            _ctx: &PluginCtx<'_>,
+            _req: PluginRequest,
+        ) -> Result<PluginResponse, PluginError> {
+            Err(PluginError::Internal("this plugin malfunctioned".into()))
+        }
+    }
+
+    /// A global plugin whose `handle` returns a coded refusal — a legitimate
+    /// "no", not a malfunction, so it must not degrade the plugin.
+    #[derive(Debug)]
+    struct Refusing;
+
+    impl Plugin for Refusing {
+        fn manifest(&self) -> PluginManifest {
+            PluginManifest {
+                id: "refusing",
+                name: "Refusing",
                 scope: ApiScope::Global,
             }
         }
@@ -482,9 +522,9 @@ mod tests {
             _req: PluginRequest,
         ) -> Result<PluginResponse, PluginError> {
             Err(PluginError::coded(
-                "failing_boom",
-                "this plugin always fails",
-                "nothing to do; it is a test fixture",
+                "refusing_no",
+                "this plugin says no",
+                "nothing to fix; it is a refusal, not a fault",
             ))
         }
     }
@@ -667,18 +707,40 @@ mod tests {
     }
 
     #[test]
-    fn a_plugin_whose_handle_errs_is_marked_degraded_and_the_host_answers() {
+    fn a_fault_from_handle_marks_the_plugin_degraded_and_the_host_answers() {
         let dir = tmp_state_dir();
-        let mut host = PluginHost::with_registry(dir, vec![Box::new(Failing)]);
-        host.enable(global("failing")).unwrap();
+        let mut host = PluginHost::with_registry(dir, vec![Box::new(Faulting)]);
+        host.enable(global("faulting")).unwrap();
 
-        let err = host.handle("failing.x", Value::Null).unwrap_err();
-        assert_eq!(err.code, "failing_boom");
+        let err = host.handle("faulting.x", Value::Null).unwrap_err();
+        assert_eq!(err.code, "plugin_internal");
 
         // The host still answers, and the plugin is degraded in its status.
-        let status =
-            host.list().into_iter().find(|s| s.id == "failing").unwrap();
+        let status = host
+            .list()
+            .into_iter()
+            .find(|s| s.id == "faulting")
+            .unwrap();
         assert!(status.degraded);
+    }
+
+    #[test]
+    fn a_coded_refusal_from_handle_does_not_mark_the_plugin_degraded() {
+        let dir = tmp_state_dir();
+        let mut host = PluginHost::with_registry(dir, vec![Box::new(Refusing)]);
+        host.enable(global("refusing")).unwrap();
+
+        let err = host.handle("refusing.x", Value::Null).unwrap_err();
+        assert_eq!(err.code, "refusing_no");
+
+        // A refusal is a legitimate "no", not a malfunction: the plugin
+        // stays healthy, so a later call is not blocked by a false degrade.
+        let status = host
+            .list()
+            .into_iter()
+            .find(|s| s.id == "refusing")
+            .unwrap();
+        assert!(!status.degraded);
     }
 
     #[test]
