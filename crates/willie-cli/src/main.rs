@@ -10,11 +10,25 @@ use std::process::ExitCode;
 #[cfg(target_os = "linux")]
 mod attach;
 
+/// A client for the daemon's own local socket, named apart from the
+/// `daemon` proto module alias below so `fetch_explain` can use both in
+/// the same scope.
+#[cfg(target_os = "linux")]
+mod daemon_client;
+
+#[cfg(target_os = "linux")]
+use willie_core::id::ProjectId;
 use willie_core::sandbox::{Explained, Source};
 use willie_proto::{
     daemon::{CheckStatus, DoctorReport},
     rpc::RpcError,
     sandbox::ExplainResult,
+};
+#[cfg(target_os = "linux")]
+use willie_proto::{
+    daemon::{Hello, HelloReply, method as daemon},
+    project::{ProjectList, method as project},
+    sandbox::{ExplainParams, method as sandbox},
 };
 
 const EXIT_FAILURE: u8 = 1;
@@ -208,32 +222,85 @@ fn error_line(command: &str, err: &RpcError) -> String {
     line
 }
 
-/// `willie sandbox explain` has nowhere to send this yet: `willied`
-/// speaks JSON-RPC only over the engine's stdio pipe
-/// (`crates/willied/src/main.rs`'s `run_stdio`), and the local socket
-/// docs/ARCHITECTURE.md promises for CLI clients (`/run/willie/willied.sock`)
-/// is not built by any task in the sandbox-policy plan. Reading the
-/// project's record off disk here instead would duplicate `willied`'s
-/// private file layout, and spawning a second daemon process would run
-/// its startup side effects (interrupted-project recovery, live-session
-/// re-adoption) for what should be a read-only query. Fails closed with
-/// a coded error rather than either.
+/// Where the daemon's socket lives: `WILLIE_RUN_DIR` when set (tests, a
+/// hermetic run), else `willie_linux::paths::RUN_DIR`, matching how
+/// `willied` itself resolves the run dir.
+#[cfg(target_os = "linux")]
+fn daemon_socket_path() -> std::path::PathBuf {
+    let run_dir = std::env::var("WILLIE_RUN_DIR")
+        .unwrap_or_else(|_| willie_linux::paths::RUN_DIR.to_owned());
+    willie_linux::paths::daemon_socket(std::path::Path::new(&run_dir))
+}
+
+/// `project` as a `proj_…` id is used as-is (a malformed one is
+/// `project_not_found`, not a parse error the caller has to interpret);
+/// otherwise it's a slug, resolved through `project.list`.
+#[cfg(target_os = "linux")]
+fn resolve_project(
+    client: &mut daemon_client::Client,
+    project: &str,
+) -> Result<ProjectId, RpcError> {
+    if project.starts_with("proj_") {
+        return project.parse::<ProjectId>().map_err(|_| {
+            RpcError::new(
+                "project_not_found",
+                "the id is not a valid project id",
+            )
+            .with_remediation(
+                "check the slug against the Projects screen, or pass the \
+                 proj_ id",
+            )
+        });
+    }
+    let list: ProjectList =
+        client.call(project::LIST, serde_json::json!({}))?;
+    list.projects
+        .into_iter()
+        .find(|p| p.slug == project)
+        .map(|p| p.id)
+        .ok_or_else(|| {
+            RpcError::new(
+                "project_not_found",
+                "no project has that slug; the slug is the workspace \
+                 directory name under ~/projects",
+            )
+            .with_remediation(
+                "check the slug against the Projects screen, or pass the \
+                 proj_ id",
+            )
+        })
+}
+
+/// Connects to the daemon's local socket, says hello, resolves `project`
+/// to a project id, and asks for its sandbox explanation. No socket (or
+/// nothing listening) is `daemon_unreachable`; a reply that doesn't
+/// arrive in ten seconds is `daemon_timeout`; anything else on the wire
+/// is `daemon_transport`.
+#[cfg(target_os = "linux")]
+fn fetch_explain(project: &str) -> Result<ExplainResult, RpcError> {
+    let socket = daemon_socket_path();
+    let mut client = daemon_client::Client::connect(&socket)?;
+    let _hello: HelloReply =
+        client.call(daemon::HELLO, Hello::for_client("willie"))?;
+    let project_id = resolve_project(&mut client, project)?;
+    client.call(sandbox::EXPLAIN, ExplainParams { project_id })
+}
+
+/// Never reached: the non-Linux build's `main` never dispatches to
+/// `sandbox_explain`. Kept, with the pre-socket error code, so `cargo
+/// check --workspace` still succeeds on the Windows host — mirroring
+/// `real_clock_or_zero` in `willied`.
+#[cfg(not(target_os = "linux"))]
 fn fetch_explain(project: &str) -> Result<ExplainResult, RpcError> {
     let _ = project;
     Err(RpcError::new(
         "daemon_unreachable",
-        "willie has no way to reach the daemon's project registry yet",
-    )
-    .with_remediation(
-        "inspect the project's sandbox policy from the desktop app, or \
-         read the project's record under /var/lib/willie/projects/ \
-         directly",
+        "willie only runs inside the Willie Linux distribution",
     ))
 }
 
 /// `willie sandbox explain <project>`: data on stdout, prose on stderr,
-/// `--json` prints the reply verbatim. See `fetch_explain` for why every
-/// call takes the error path today.
+/// `--json` prints the reply verbatim.
 fn sandbox_explain(project: &str, json: bool) -> ExitCode {
     match fetch_explain(project) {
         Ok(reply) => {
@@ -519,18 +586,6 @@ mod tests {
         );
     }
 
-    /// `fetch_explain` performs no transport call today (see its doc
-    /// comment): it is already a pure function of its argument, so its
-    /// error shape is asserted directly, with no extraction needed.
-    #[test]
-    fn fetch_explain_reports_daemon_unreachable_with_a_remediation() {
-        let err = fetch_explain("proj_x").unwrap_err();
-
-        assert_eq!(err.code, "daemon_unreachable");
-        assert!(err.message.contains("daemon"), "{}", err.message);
-        assert!(err.remediation.is_some());
-    }
-
     #[test]
     fn a_text_mode_error_names_the_code_then_the_message_then_the_hint() {
         let err = RpcError::new("daemon_unreachable", "nothing to ask")
@@ -545,19 +600,5 @@ mod tests {
             error_line("willie sandbox explain", &RpcError::new("x", "no")),
             "willie sandbox explain: x: no"
         );
-    }
-
-    /// The portable half of `tests/cli.rs`'s
-    /// `sandbox_explain_fails_closed_with_no_daemon_to_ask`, which only
-    /// runs inside the distribution: whatever the subcommand refuses
-    /// with, the line a human reads names the code.
-    #[test]
-    fn the_text_line_of_a_failed_explain_carries_its_code() {
-        let line = error_line(
-            "willie sandbox explain",
-            &fetch_explain("p").unwrap_err(),
-        );
-
-        assert!(line.contains("daemon_unreachable"), "{line}");
     }
 }

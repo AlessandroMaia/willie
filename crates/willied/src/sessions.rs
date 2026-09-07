@@ -98,6 +98,9 @@ impl SessionOps {
                 .map(|se| se.id);
             (project, live, resumed_from)
         };
+        if let Some(problem) = &project.sandbox_problem {
+            return Err(OpError::from_problem(problem));
+        }
         if !matches!(project.state, ProjectState::Ready) {
             return Err(OpError::coded(
                 "project_not_ready",
@@ -725,6 +728,7 @@ mod create_tests {
             source_present: true,
             created_at: clock(),
             sandbox: SandboxProfile::default(),
+            sandbox_problem: None,
         }
     }
 
@@ -874,5 +878,48 @@ mod create_tests {
         assert_eq!(err.code, "sandbox_capability_unsupported");
         assert!(err.message.contains("ssh"), "{}", err.message);
         assert!(!identity.exists());
+    }
+
+    /// A project whose `[sandbox]` table failed to parse carries the
+    /// default profile in memory, but the daemon must still refuse to
+    /// open a session for it until its owner replaces the table: the
+    /// default profile is not what the person wrote, and running under
+    /// it silently would hide the problem instead of surfacing it.
+    #[test]
+    fn create_refuses_a_project_with_a_sandbox_problem() {
+        use willie_core::project::SandboxProblem;
+
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+        let mut project = ready_project();
+        project.sandbox_problem = Some(SandboxProblem {
+            code: "sandbox_profile_invalid".into(),
+            message: "the [sandbox] table could not be read: bad".into(),
+            remediation: "fix the file".into(),
+        });
+        let pid = project.id;
+        crate::lock(&state).projects.insert(pid, project);
+
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            std::env::temp_dir().join("willie-sess-problem-state"),
+            std::env::temp_dir().join("willie-sess-problem-run"),
+            std::env::temp_dir().join("willie-sess-problem-home"),
+            clock,
+            Arc::clone(&runner),
+        );
+        let err = ops
+            .create(CreateParams {
+                project_id: pid,
+                git_identity: None,
+                resume: false,
+            })
+            .unwrap_err();
+
+        assert_eq!(err.code, "sandbox_profile_invalid");
+        assert_eq!(err.remediation, "fix the file");
     }
 }

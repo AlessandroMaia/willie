@@ -6,13 +6,25 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use willie_core::{id::ProjectId, project::Project};
+use willie_core::{
+    id::ProjectId,
+    project::{Project, SandboxProblem},
+    sandbox::SandboxProfile,
+};
 
 #[must_use]
 pub fn projects_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("projects")
 }
 
+/// Parses each project file in two stages. The record's `[sandbox]`
+/// table is a `deny_unknown_fields` `SandboxProfile`, hand-edited by
+/// people, so one mistyped key there must not fail the whole record: a
+/// record that parses as a bare TOML table but whose `[sandbox]`
+/// sub-table does not become a `SandboxProfile` loads with the default
+/// profile and a `sandbox_problem` recording why. A record that fails
+/// to parse at all, or whose *other* fields do not match `Project`, is
+/// still skipped as before.
 pub fn load_all(state_dir: &Path) -> Vec<Project> {
     let dir = projects_dir(state_dir);
     let mut out = Vec::new();
@@ -25,26 +37,70 @@ pub fn load_all(state_dir: &Path) -> Vec<Project> {
         if path.extension().and_then(|e| e.to_str()) != Some("toml") {
             continue;
         }
-        match fs::read_to_string(&path)
-            .ok()
-            .and_then(|t| toml::from_str::<Project>(&t).ok())
-        {
-            Some(p) => out.push(p),
-            None => eprintln!(
+        let Ok(text) = fs::read_to_string(&path) else {
+            eprintln!(
                 "willied: skipping unreadable project {}",
                 path.display()
-            ),
+            );
+            continue;
+        };
+        let path_display = path.display().to_string();
+        let Ok(mut table) = toml::from_str::<toml::Table>(&text) else {
+            eprintln!("willied: skipping unreadable project {path_display}");
+            continue;
+        };
+        let raw_sandbox = table.remove("sandbox");
+        let sandbox_problem = match &raw_sandbox {
+            Some(v) => match v.clone().try_into::<SandboxProfile>() {
+                Ok(_) => None,
+                Err(e) => Some(SandboxProblem {
+                    code: "sandbox_profile_invalid".to_owned(),
+                    message: format!(
+                        "the [sandbox] table could not be read: {e}"
+                    ),
+                    remediation: "open Sandbox… for this project and save \
+                                  it to replace the table, or fix the file"
+                        .to_owned(),
+                }),
+            },
+            None => None,
+        };
+        if sandbox_problem.is_none()
+            && let Some(v) = raw_sandbox
+        {
+            table.insert("sandbox".to_owned(), v);
         }
+        let Ok(mut project) = table.try_into::<Project>() else {
+            eprintln!("willied: skipping unreadable project {path_display}");
+            continue;
+        };
+        project.sandbox_problem = sandbox_problem;
+        out.push(project);
     }
     out
 }
 
+/// Writes `p`'s record. A project loaded with an unreadable `[sandbox]`
+/// table carries the default profile in memory, not the person's own
+/// table, so an unrelated save (a rename, a job's completion, …) must
+/// not overwrite that table with the default until its owner replaces
+/// it via `set_sandbox`.
 pub fn save(state_dir: &Path, p: &Project) -> io::Result<()> {
     let dir = projects_dir(state_dir);
     fs::create_dir_all(&dir)?;
-    let text =
-        toml::to_string(p).map_err(|e| io::Error::other(e.to_string()))?;
     let final_path = dir.join(format!("{}.toml", p.id));
+    let mut doc = toml::Table::try_from(p)
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    if p.sandbox_problem.is_some()
+        && let Ok(text) = fs::read_to_string(&final_path)
+        && let Ok(mut old) = toml::from_str::<toml::Table>(&text)
+        && let Some(sandbox) = old.remove("sandbox")
+    {
+        doc.insert("sandbox".to_owned(), sandbox);
+    }
+    doc.remove("sandbox_problem"); // recomputed on load, not persisted as truth
+    let text =
+        toml::to_string(&doc).map_err(|e| io::Error::other(e.to_string()))?;
     let tmp = dir.join(format!("{}.toml.tmp", p.id));
     fs::write(&tmp, text)?;
     fs::rename(&tmp, &final_path)
@@ -102,6 +158,7 @@ mod tests {
             source_present: true,
             created_at: "t".into(),
             sandbox: SandboxProfile::default(),
+            sandbox_problem: None,
         }
     }
 
@@ -135,6 +192,97 @@ mod tests {
             .unwrap();
         save(&dir, &sample("ok")).unwrap();
         assert_eq!(load_all(&dir).len(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unknown_sandbox_key_loads_the_project_with_a_problem() {
+        let dir = std::env::temp_dir()
+            .join(format!("willie-store-bad-sandbox-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(projects_dir(&dir)).unwrap();
+        let id = ProjectId::new();
+        let toml = format!(
+            "id = \"{id}\"\nname = \"x\"\nslug = \"x\"\n\
+             source = \"C:\\\\x\"\nworkspace = \"/home/willie/projects/x\"\n\
+             branch = \"main\"\ncreated_at = \"t\"\n\
+             [state]\nstate = \"ready\"\n\
+             [sandbox]\nnonsense = true\n"
+        );
+        fs::write(projects_dir(&dir).join(format!("{id}.toml")), toml).unwrap();
+
+        let loaded = load_all(&dir);
+
+        assert_eq!(loaded.len(), 1);
+        let p = &loaded[0];
+        assert_eq!(p.sandbox, SandboxProfile::default());
+        let problem = p.sandbox_problem.as_ref().expect("a problem");
+        assert_eq!(problem.code, "sandbox_profile_invalid");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_valid_sandbox_table_loads_without_a_problem() {
+        let dir = std::env::temp_dir()
+            .join(format!("willie-store-good-sandbox-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(projects_dir(&dir)).unwrap();
+        let id = ProjectId::new();
+        let toml = format!(
+            "id = \"{id}\"\nname = \"x\"\nslug = \"x\"\n\
+             source = \"C:\\\\x\"\nworkspace = \"/home/willie/projects/x\"\n\
+             branch = \"main\"\ncreated_at = \"t\"\n\
+             [state]\nstate = \"ready\"\n\
+             [sandbox]\nagent_state = false\n"
+        );
+        fs::write(projects_dir(&dir).join(format!("{id}.toml")), toml).unwrap();
+
+        let loaded = load_all(&dir);
+
+        assert_eq!(loaded.len(), 1);
+        let p = &loaded[0];
+        assert_eq!(p.sandbox_problem, None);
+        assert_eq!(
+            p.sandbox,
+            SandboxProfile {
+                agent_state: Some(false),
+                ..SandboxProfile::default()
+            }
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_save_preserves_an_unreadable_sandbox_table() {
+        let dir = std::env::temp_dir().join(format!(
+            "willie-store-preserve-sandbox-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(projects_dir(&dir)).unwrap();
+        let id = ProjectId::new();
+        let path = projects_dir(&dir).join(format!("{id}.toml"));
+        let toml = format!(
+            "id = \"{id}\"\nname = \"x\"\nslug = \"x\"\n\
+             source = \"C:\\\\x\"\nworkspace = \"/home/willie/projects/x\"\n\
+             branch = \"main\"\ncreated_at = \"t\"\n\
+             [state]\nstate = \"ready\"\n\
+             [sandbox]\nnonsense = true\n"
+        );
+        fs::write(&path, toml).unwrap();
+
+        let loaded = load_all(&dir);
+        assert_eq!(loaded.len(), 1);
+        let p = loaded[0].clone();
+        assert!(p.sandbox_problem.is_some());
+
+        // An unrelated save (the in-memory project holds the default
+        // profile, not the hand-written table) must not clobber it.
+        save(&dir, &p).unwrap();
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("nonsense = true"), "{text}");
+        assert!(!text.contains("sandbox_problem"), "{text}");
         let _ = fs::remove_dir_all(&dir);
     }
 }

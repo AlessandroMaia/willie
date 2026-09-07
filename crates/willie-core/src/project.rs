@@ -16,6 +16,17 @@ pub enum ProjectState {
     },
 }
 
+/// Set by the daemon when a project's `[sandbox]` table could not be
+/// read. Recomputed on every load and never trusted from disk; while it
+/// is set, `sandbox` holds the default and the daemon refuses to open a
+/// session for the project until it is replaced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SandboxProblem {
+    pub code: String,
+    pub message: String,
+    pub remediation: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Project {
     pub id: ProjectId,
@@ -36,6 +47,8 @@ pub struct Project {
     /// so the TOML table it serialises to lands at the end of the file.
     #[serde(default)]
     pub sandbox: SandboxProfile,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_problem: Option<SandboxProblem>,
 }
 
 fn yes() -> bool {
@@ -128,6 +141,7 @@ mod tests {
             source_present: true,
             created_at: "2026-08-26T00:00:00Z".into(),
             sandbox: SandboxProfile::default(),
+            sandbox_problem: None,
         }
     }
 
@@ -208,5 +222,14 @@ state = \"ready\"
 ";
         let p: Project = toml::from_str(text).unwrap();
         assert!(p.source_present);
+    }
+
+    #[test]
+    fn a_project_without_a_sandbox_problem_omits_the_field() {
+        let p = sample_project();
+        let toml = toml::to_string(&p).unwrap();
+        assert!(!toml.contains("sandbox_problem"), "{toml}");
+        let back: Project = toml::from_str(&toml).unwrap();
+        assert_eq!(back.sandbox_problem, None);
     }
 }

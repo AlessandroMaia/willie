@@ -81,14 +81,21 @@ synchronous.
 | `project.set_sandbox` | `SetSandboxParams { project_id, profile }` | `Project` |
 
 A `Project` is `{ id, name, slug, source, workspace, branch, state,
-source_present, created_at, sandbox }`; `state` is `preparing`, `ready`
-or `failed { code, message, remediation }`. `source_present` is
-recomputed from the filesystem on every `state.snapshot`, never trusted
-from disk. `sandbox` is layer 2 of the sandbox policy (a `SandboxProfile`
-— see `sandbox.*` below); `set_sandbox` replaces it outright rather than
-merging onto the stored one, resolving the replacement against the
-harness defaults before persisting it, the same fail-closed check
-`session.create` and `sandbox.explain` apply.
+source_present, created_at, sandbox, sandbox_problem? }`; `state` is
+`preparing`, `ready` or `failed { code, message, remediation }`.
+`source_present` is recomputed from the filesystem on every
+`state.snapshot`, never trusted from disk. `sandbox` is layer 2 of the
+sandbox policy (a `SandboxProfile` — see `sandbox.*` below);
+`set_sandbox` replaces it outright rather than merging onto the stored
+one, resolving the replacement against the harness defaults before
+persisting it, the same fail-closed check `session.create` and
+`sandbox.explain` apply.
+
+`sandbox_problem` is present only when the record's `[sandbox]` table
+could not be read; the project then loads with the default profile, and
+`session.create`/`sandbox.explain` refuse with `sandbox_profile_invalid`
+until the profile is replaced through `set_sandbox`. It is recomputed on
+every load, never trusted from disk.
 
 ## `job.*`
 | Method | Params | Result |
@@ -194,10 +201,24 @@ the client's own — a gap, however it happened — or the daemon restarts
 what it has and calls `state.snapshot` again instead of trying to
 reconcile the hole.
 
+## Transports
+
+The same messages travel two ways. The **engine** speaks over the
+daemon's **stdio** pipe: it may call every method, receives every
+`state.event` notification, and ends the daemon by closing stdin or
+calling `daemon.shutdown`. A **local client** (the `willie` CLI) speaks
+over the daemon's Unix socket, `/run/willie/willied.sock` (`0600`, the
+distro user's own): request and reply only, no notifications — a client
+that wants state calls `state.snapshot`. `daemon.shutdown` over the
+socket is refused with `method_not_served`; the daemon's lifecycle is the
+engine's. A session never reaches the socket: the sandbox does not mount
+`/run/willie`.
+
 ## Error codes (daemon)
 | Code | Meaning |
 | --- | --- |
 | `method_not_found` | unknown method |
+| `method_not_served` | the method exists but this transport does not serve it (`daemon.shutdown` over the local socket); not `method_not_found`, which is an unknown method |
 | `invalid_params` | params did not deserialise |
 | `invalid_request` | the line was not a JSON-RPC request (malformed JSON or missing fields); the daemon answers with id 0 and keeps serving |
 | `protocol_version_mismatch` | client speaks another `PROTOCOL_VERSION` |
@@ -257,7 +278,8 @@ to the same add/relocate flow as the codes around it.
 | `workspace_diverged` | `update_from_windows` fetches `windows` and neither the workspace's `HEAD` nor `windows/<branch>` is an ancestor of the other — both sides moved, each holding commits the other does not | the workspace is simply behind — that fast-forwards silently and the job ends `done` — or simply ahead of, or equal to, `windows/<branch>`: there is nothing to update, so the job ends `done` without touching the workspace | the workspace and the Windows checkout have both moved; reconcile them (rebase or merge in a terminal), then sync |
 | `workspace_dirty` | `remove` is called with `delete_workspace: true` and `force: false`, and the workspace has uncommitted changes | the same case with `force: true` — the workspace is deleted regardless | commit or discard the workspace's changes, or remove with force (a one-click "Remove anyway" on the row) |
 | `source_unrelated` | `relocate`'s new source is a git repository whose history does not contain the workspace's current `HEAD` commit | the new source is not a git repository at all — that is `not_a_git_repository`, checked first | point relocate at a checkout that shares history with the workspace |
-| `git_failed` | any `git` invocation inside a job exits non-zero, or `git` itself cannot be spawned — the message carries git's own error output: the last few lines for an ordinary git command, and the whole clone log when `add`'s clone itself fails. The same code also covers a `remove`'s workspace-delete or a `rename`'s project-file write failing — an I/O error, not git's, so the message and remediation are I/O-appropriate there instead | the failure is one of the specific refusals above (dirty tree, diverged, unrelated history) — those are refused before the failing command ever runs, with their own code | check git's output and try again |
+| `git_failed` | any `git` invocation inside a job exits non-zero, or `git` itself cannot be spawned — the message carries git's own error output: the last few lines for an ordinary git command, and the whole clone log when `add`'s clone itself fails. The same code also covers a `remove`'s workspace-delete failing — an I/O error, not git's, so the message and remediation are I/O-appropriate there instead | the failure is one of the specific refusals above (dirty tree, diverged, unrelated history) — those are refused before the failing command ever runs, with their own code; a project record write failing (`rename`, `set_sandbox`) is `state_write_failed`, not this code | check git's output and try again |
+| `state_write_failed` | a project record could not be written to the daemon's state directory (a `rename` or `set_sandbox` persisting) — an I/O failure, not git's, so it is no longer reported as `git_failed` | the write succeeds, or the failure is git's own — an `add`'s clone or a `sync_to_windows`/`update_from_windows` push — which stays `git_failed` | check the daemon's state directory permissions and try again |
 | `interrupted` | two cases: (1) a project is still `preparing` when the daemon starts — an `add` whose clone never finished, turned `Failed{interrupted}` by the start-up sweep; (2) `job.cancel` (or a daemon shutdown, if the process survives long enough) trips a job's cancel flag after its work has already started — the job only notices at its next cancellation checkpoint, and reports `interrupted` for any job kind | the cancel flag is already tripped *before* the job's work starts — that produces `cancelled`, not `interrupted`; an app close mid-`sync_to_windows`/`update_from_windows`/`relocate` whose process exits before the next checkpoint runs leaves no code at all — job records are never persisted, so that job simply vanishes and the project is left exactly as it was | per kind: for `add`, there is no retry — remove the project and add it again; for every other kind, just retry the operation |
 | `cancelled` | the job's cancel flag was already tripped when its work was about to start, so the runner ended it `failed { code: "cancelled" }` without ever running it | the flag trips after the work has begun — that is `interrupted`, reported at the job's next cancellation checkpoint; the job had already finished when cancel was called — a no-op, the job keeps its real outcome | start the operation again if it is still needed |
 
@@ -288,7 +310,7 @@ a profile the UI edits.
 | `harness_not_installed` | no harness binary on the session `PATH` (or `--version` fails) | click Install on the Dashboard |
 | `git_identity_missing` | none of the identity sources — an existing `~/.gitconfig`, the Windows identity, the source checkout's — yields a name and e-mail | set `git config --global user.name` and `user.email` on Windows, then open the session again |
 | `sandbox_capability_unsupported` | `session.create` on a project whose sandbox profile enables a capability this version cannot apply | remove it from the project's sandbox settings; the message names it |
-| `sandbox_profile_invalid` | `session.create` on a project whose sandbox profile lists an `extra_paths` entry that is not absolute, contains a `..` component (refused outright, never resolved), or — compared textually, after collapsing repeated separators and `.` components — names, reaches into, or is an ancestor of what the base closes or a deferred capability grants: the whole filesystem; `/mnt` itself, a bare drive letter under it (a whole drive is `mnt.all`), or anything under it whose first component is not a drive letter, the same family `/run` closes; `/init`; `/run`; the kernel's interfaces; the system directories; `/opt/willie`; `/var/lib/willie`; the managed tool roots and package caches; the home directory and the private temporary directory themselves, though a path inside either is still grantable; `~/.willie`; `~/.ssh`; `~/.claude`; `~/.claude.json`; `~/.gitconfig`. An ancestor of any of these — `/home`, `/var`, `/opt` among them, none of which is itself on the list — is refused too, because it would contain what it is an ancestor of; the message names the path and the reason. An unknown key or a wrong type never reaches it: the profile is a section of the project's own record, so `toml` refuses the whole record and the daemon skips it at start-up (`willied: skipping unreadable project …` on stderr); the project is then absent from the Projects screen with no coded error at all; or, at launch, an `extra_paths` entry that cannot be resolved on disk, or that resolves through a symbolic link into a location the guard refuses — the daemon's guard is textual, so this is the same rule applied to the path that will actually be mounted | the message names the path; correct it in the project's sandbox settings |
+| `sandbox_profile_invalid` | `session.create` on a project whose sandbox profile lists an `extra_paths` entry that is not absolute, contains a `..` component (refused outright, never resolved), or — compared textually, after collapsing repeated separators and `.` components — names, reaches into, or is an ancestor of what the base closes or a deferred capability grants: the whole filesystem; `/mnt` itself, a bare drive letter under it (a whole drive is `mnt.all`), or anything under it whose first component is not a drive letter, the same family `/run` closes; `/init`; `/run`; the kernel's interfaces; the system directories; `/opt/willie`; `/var/lib/willie`; the managed tool roots and package caches; the home directory and the private temporary directory themselves, though a path inside either is still grantable; `~/.willie`; `~/.ssh`; `~/.claude`; `~/.claude.json`; `~/.gitconfig`. An ancestor of any of these — `/home`, `/var`, `/opt` among them, none of which is itself on the list — is refused too, because it would contain what it is an ancestor of; the message names the path and the reason. An unknown key or a wrong type in the `[sandbox]` table also carries this code, set once at load: the daemon parses the record's other fields separately from its `sandbox` sub-table, so a `[sandbox]` that fails to become a `SandboxProfile` no longer takes the whole record down with it — the project loads with the default profile and this code recorded as its `sandbox_problem` (shown on the Projects screen), and `session.create`/`sandbox.explain` refuse with it until the profile is replaced through `set_sandbox`, which clears it; a record that fails to parse at all, or whose *other* fields do not match `Project`, is still skipped at start-up (`willied: skipping unreadable project …` on stderr) with no coded error. Also: at launch, an `extra_paths` entry that cannot be resolved on disk, or that resolves through a symbolic link into a location the guard refuses — the daemon's guard is textual, so this is the same rule applied to the path that will actually be mounted | the message names the path; correct it in the project's sandbox settings |
 | `supervisor_spawn_failed` | `willie-sess` could not be executed, or its launcher's readiness line could not be parsed | run `willie doctor`; reinstall the distribution if the supervisor binary is missing |
 | `supervisor_timeout` | no readiness reply from the supervisor within ten seconds | open the session again; run `willie doctor` if it repeats |
 | `harness_exec_failed` | the harness binary is not an executable file, or the workspace is not a directory — checked by the supervisor before the helper is spawned (binary gone, workspace deleted by hand), and again at the spawn itself when the child cannot enter the working directory, which is the same condition a moment later and not the helper failing to start | reinstall Claude Code, or remove the project and add it again |

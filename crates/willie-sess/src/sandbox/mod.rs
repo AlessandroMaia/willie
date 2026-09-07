@@ -167,14 +167,14 @@ pub fn prepare(
     let binary = plan.argv.first().cloned().unwrap_or_default();
     if !is_executable_file(Path::new(&binary)) {
         return Err(PrepareError::Harness {
-            step: "cannot execute the harness",
+            step: crate::EXEC_STEP,
             error: not_found(),
             path: binary,
         });
     }
     if !Path::new(&plan.workspace).is_dir() {
         return Err(PrepareError::Harness {
-            step: "cannot enter the workspace",
+            step: crate::WORKSPACE_STEP,
             error: not_found(),
             path: plan.workspace.clone(),
         });

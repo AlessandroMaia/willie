@@ -259,8 +259,9 @@ impl CapabilityError {
                  distribution, starting with `/`"
                     .to_owned()
             }
-            Self::ExtraPathGuarded { reason, .. } => {
-                format!("this version will not grant it: {reason}")
+            Self::ExtraPathGuarded { .. } => {
+                "name a narrower path outside it, or remove the entry"
+                    .to_owned()
             }
         }
     }
@@ -1127,7 +1128,15 @@ extra_paths = [{ path = \"/srv/shared\", mode = \"ro\" }]
                 panic!("{path}: {err:?}");
             };
             assert!(reason.contains(expected), "{path}: {reason}");
-            assert!(err.remediation().contains(expected), "{path}");
+            assert!(
+                !err.remediation().contains(expected),
+                "{path}: the remediation repeats the reason `{expected}`"
+            );
+            assert!(
+                err.remediation().contains("narrower path"),
+                "{path}: {}",
+                err.remediation()
+            );
         }
     }
 

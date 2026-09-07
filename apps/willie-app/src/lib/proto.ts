@@ -42,6 +42,14 @@ export interface Project {
   source_present: boolean;
   created_at: string;
   sandbox: SandboxProfile;
+  /* Mirrors `willie_core::project::SandboxProblem`: set only when the
+   * daemon could not read this project's `[sandbox]` table. `sandbox`
+   * then holds the default profile instead, and the daemon refuses
+   * `session.create`/`sandbox.explain` while this stays set. Same
+   * shape as `Problem` (`lib/ipc.ts`), declared structurally here
+   * rather than imported, because `ipc.ts` already imports `Project`
+   * from this file. */
+  sandbox_problem?: { code: string; message: string; remediation: string };
 }
 
 /* Mirrors `willie_core::sandbox::Capability`: the dotted name and the

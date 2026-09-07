@@ -59,6 +59,13 @@ fixed-form query, then reads what the log named.
 | 17 | `!printf '\e[6n'; read -rs -t1 -d R rep; printf '%s\n' "$rep" \| cat -v` | a line like `^[[<row>;<col>` prints — the DSR cursor-position query (`CSI 6n`) still got its reply, proving the fixed-form queries pass |
 | 18 | Stop the session; `wsl -d willie --user willie -- cat /var/lib/willie/sessions/<id>/events.jsonl` | after `started`: a `sandbox_denied` line with `"class":"terminal","name":"clipboard"` for step 15 and one with `"name":"title"` for step 16; no `terminal` line names `window` or `query_echo` (step 17's query passed); every `sandbox_denied` line sits before `exited` |
 
+## Follow-ups — the prctl deny
+
+| # | Step | Expected |
+| - | ---- | -------- |
+| 19 | Projects → **Open session**; `!perl -e 'syscall(157, 22, 2, 0) == 0 or die $!'` | `Operation not permitted` — installing a seccomp filter through `prctl(PR_SET_SECCOMP)` is refused |
+| 20 | Stop the session; `wsl -d willie --user willie -- cat /var/lib/willie/sessions/<id>/events.jsonl` | after `started`: a `sandbox_denied` line with `"class":"syscall","name":"prctl","count":1` for step 19, before `exited` |
+
 ## Results
 
 | # | Date | Result | Notes |

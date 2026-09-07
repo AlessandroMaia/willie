@@ -60,10 +60,10 @@ capabilities inside it; the filter is where that closes, together with
   input injection (0016: `LEGACY_TIOCSTI` unset). The filter denies
   `ioctl(TIOCSTI)` as depth, and the terminal *output* filter is phase 4,
   a different mechanism entirely.
-- **Filtering by syscall argument beyond `ioctl` and `socket`.** The filter
-  reads the low word of the relevant argument for those two and is
-  otherwise a syscall-number allow/deny. Deep argument inspection is a
-  seccomp anti-pattern (TOCTOU on pointers) and buys nothing here.
+- **Filtering by syscall argument beyond `ioctl`, `socket` and `prctl`.**
+  The filter reads the low word of the relevant argument for those three
+  and is otherwise a syscall-number allow/deny. Deep argument inspection
+  is a seccomp anti-pattern (TOCTOU on pointers) and buys nothing here.
 - **A per-project filter, or a configurable deny list.** The list is fixed
   and part of the base boundary.
 - **Closing file denials into the log.** Landlock and mounts stay silent to
@@ -88,7 +88,11 @@ Linux-only test asserts each against `libc::SYS_*`). The program:
    type → deny (the kernel rewrites `AF_INET` + `SOCK_PACKET` into a
    packet socket, so the family check alone misses it). Otherwise
    `ALLOW`.
-5. Everything else → `ALLOW`.
+5. `prctl`: load the low word of `args[0]` (option). `PR_SET_SECCOMP` →
+   `USER_NOTIF` — a filter can be installed this way too, without ever
+   calling `seccomp(2)`, so it gets the same refusal for the same
+   reason. Every other option → `ALLOW`.
+6. Everything else → `ALLOW`.
 
 The deny list: `ptrace`, `process_vm_readv`, `process_vm_writev`,
 `pidfd_getfd`, `bpf`, `io_uring_setup`, `io_uring_enter`,
@@ -99,6 +103,12 @@ calls this one marks, and could continue them), `mount`, `umount2`,
 `fsconfig`, `fsmount`, `fspick`, `unshare`, `setns`, `init_module`,
 `finit_module`, `delete_module`, `kexec_load`, `kexec_file_load`,
 `add_key`, `request_key`, `keyctl`.
+
+`prctl(PR_SET_SECCOMP)` is refused for the same reason as `seccomp`
+itself — it installs a filter without ever calling `seccomp(2)` — so the
+two are the deny list's only "a filter of its own" refusals; `prctl` is
+judged by argument, like `ioctl` and `socket`, since its other options
+must pass.
 
 `clone` and `clone3` are left untouched: the namespace-creating flags are
 refused by the kernel because the vector gains `--disable-userns` and an
@@ -197,6 +207,7 @@ instruction forms the program uses) evaluates the program against synthetic
 - `socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE)` allows (iproute2's own
   call); `socket(AF_NETLINK, SOCK_DGRAM, NETLINK_KOBJECT_UEVENT)` denies;
 - `socket(AF_PACKET, SOCK_RAW)` denies;
+- `prctl(PR_SET_NAME)` allows, `prctl(PR_SET_SECCOMP)` denies;
 - `clone3` and `execve` allow;
 - the wrong `arch`, and an x32 syscall number, kill;
 - every jump lands inside the program (structural);

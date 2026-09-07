@@ -186,19 +186,14 @@ pub enum SpawnError {
     /// PTY, fork or pipe trouble in the supervisor itself.
     Setup(io::Error),
     /// The child reached `chdir`/`execve` and it failed: the errno, and
-    /// what was being attempted — [`WORKSPACE_STEP`] or [`EXEC_STEP`],
-    /// which the caller tells apart because only the second one is the
-    /// program failing to start.
+    /// what was being attempted — [`crate::WORKSPACE_STEP`] or
+    /// [`crate::EXEC_STEP`], which the caller tells apart because only
+    /// the second one is the program failing to start.
     Exec {
         step: &'static str,
         error: io::Error,
     },
 }
-
-/// `chdir` into the session's working directory failed.
-pub const WORKSPACE_STEP: &str = "cannot enter the workspace";
-/// `execve` of the program failed.
-pub const EXEC_STEP: &str = "cannot execute the harness";
 
 impl std::fmt::Display for SpawnError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -316,9 +311,9 @@ pub fn spawn(
             let _ = wait(pid);
             let code = i32::from_ne_bytes([buf[1], buf[2], buf[3], buf[4]]);
             let step = if buf[0] == b'c' {
-                WORKSPACE_STEP
+                crate::WORKSPACE_STEP
             } else {
-                EXEC_STEP
+                crate::EXEC_STEP
             };
             Err(SpawnError::Exec {
                 step,

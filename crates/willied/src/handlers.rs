@@ -224,6 +224,9 @@ pub fn sandbox_explain(
         .get(&project_id)
         .cloned()
         .ok_or_else(|| op_error(crate::projects::not_found_err(project_id)))?;
+    if let Some(problem) = &project.sandbox_problem {
+        return Err(op_error(crate::projects::OpError::from_problem(problem)));
+    }
     let defaults = crate::harness::claude().default_capabilities();
     let home = crate::harness::home();
     let capabilities = willie_core::sandbox::resolve(
@@ -254,4 +257,58 @@ pub fn state_snapshot(
     ops.refresh_source_present();
     let snapshot: Snapshot = lock(state).snapshot();
     serde_json::to_value(snapshot).map_err(internal)
+}
+
+#[cfg(test)]
+mod tests {
+    use willie_core::{
+        id::ProjectId,
+        project::{Project, ProjectState, SandboxProblem},
+        sandbox::SandboxProfile,
+    };
+
+    use super::*;
+
+    fn project_with_a_sandbox_problem() -> Project {
+        Project {
+            id: ProjectId::new(),
+            name: "p".into(),
+            slug: "p".into(),
+            source: "C:\\src".into(),
+            workspace: "/w".into(),
+            branch: "main".into(),
+            state: ProjectState::Ready,
+            source_present: true,
+            created_at: "t".into(),
+            sandbox: SandboxProfile::default(),
+            sandbox_problem: Some(SandboxProblem {
+                code: "sandbox_profile_invalid".into(),
+                message: "the [sandbox] table could not be read: bad".into(),
+                remediation: "fix the file".into(),
+            }),
+        }
+    }
+
+    /// A project whose `[sandbox]` table failed to parse must not
+    /// answer with a resolved policy over the default profile it
+    /// loaded with: that would silently hide the problem instead of
+    /// surfacing it, so `sandbox.explain` refuses the same way
+    /// `session.create` does.
+    #[test]
+    fn sandbox_explain_refuses_a_project_with_a_sandbox_problem() {
+        let project = project_with_a_sandbox_problem();
+        let pid = project.id;
+        let state = Mutex::new(State::default());
+        state.lock().unwrap().projects.insert(pid, project);
+
+        let params =
+            serde_json::to_value(willie_proto::sandbox::ExplainParams {
+                project_id: pid,
+            })
+            .unwrap();
+        let err = sandbox_explain(&state, params).unwrap_err();
+
+        assert_eq!(err.code, "sandbox_profile_invalid");
+        assert_eq!(err.remediation.as_deref(), Some("fix the file"));
+    }
 }

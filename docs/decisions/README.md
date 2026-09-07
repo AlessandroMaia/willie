@@ -52,3 +52,4 @@ Things deliberately left open or explicitly rejected for now, and why.
 | 0018 | the syscall filter is answered and recorded by the supervisor; nested user namespaces are closed from both sides |
 | 0019 | Landlock reads and executes everywhere and writes where the plan mounts read-write; ABI 1 counts as unavailable |
 | 0020 | the terminal output is filtered: the sequences that act on the host or echo attacker text are dropped, the fixed-form queries the harness needs pass |
+| 0021 | the daemon's local socket: one dispatcher, request and reply, no shutdown |
