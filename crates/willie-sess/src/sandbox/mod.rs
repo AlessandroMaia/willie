@@ -10,20 +10,15 @@ pub mod landlock;
 pub mod seccomp;
 
 #[cfg(target_os = "linux")]
-use std::fs;
-#[cfg(target_os = "linux")]
 use std::time::Duration;
-use std::{fmt, io, path::Path};
+use std::{fmt, fs, io, path::Path};
 
+use willie_core::session::SessionSpec;
 // The re-exec stage and its Landlock applier live in this crate's own
 // `inner` and `landlock` submodules, so the request/report types and the
 // rule derivation cross-linked from `willie_linux` are pulled in by name
 // rather than under a clashing module alias.
-#[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
-use willie_core::session::SessionSpec;
-#[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 use willie_linux::sandbox::inner::{Request, Rlimits};
-#[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 use willie_linux::sandbox::landlock::rules as landlock_rules;
 use willie_linux::sandbox::{self as plan, bwrap};
 
@@ -36,7 +31,6 @@ pub struct Prepared {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub enum PrepareError {
     /// The spec names a harness this build does not know.
     HarnessUnknown(String),
@@ -111,14 +105,10 @@ impl fmt::Display for PrepareError {
 
 impl std::error::Error for PrepareError {}
 
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
 fn not_found() -> io::Error {
     io::Error::from(io::ErrorKind::NotFound)
 }
 
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
 fn is_executable_file(path: &Path) -> bool {
     let Ok(meta) = fs::metadata(path) else {
         return false;
@@ -140,8 +130,6 @@ fn is_executable_file(path: &Path) -> bool {
 /// Point one extra path's bind at `resolved`, leaving its destination
 /// as configured. The plan appends one bind per extra path after
 /// everything else, so the last op with that destination is that bind.
-#[cfg(target_os = "linux")]
-#[allow(dead_code)]
 fn rebind_source(ops: &mut [plan::Op], destination: &str, resolved: &str) {
     for op in ops.iter_mut().rev() {
         if let plan::Op::Bind { src, dest, .. } = op
@@ -160,7 +148,6 @@ fn rebind_source(ops: &mut [plan::Op], destination: &str, resolved: &str) {
 /// created first, because the plan both creates and binds those — a
 /// session never starts without them. `helper` is injected so the
 /// checks are testable without the image.
-#[cfg(target_os = "linux")]
 pub fn prepare(
     spec: &SessionSpec,
     helper: &Path,
@@ -180,14 +167,14 @@ pub fn prepare(
     let binary = plan.argv.first().cloned().unwrap_or_default();
     if !is_executable_file(Path::new(&binary)) {
         return Err(PrepareError::Harness {
-            step: crate::pty::EXEC_STEP,
+            step: crate::EXEC_STEP,
             error: not_found(),
             path: binary,
         });
     }
     if !Path::new(&plan.workspace).is_dir() {
         return Err(PrepareError::Harness {
-            step: crate::pty::WORKSPACE_STEP,
+            step: crate::WORKSPACE_STEP,
             error: not_found(),
             path: plan.workspace.clone(),
         });
@@ -794,7 +781,6 @@ fn only_child(pid: libc::pid_t) -> Option<libc::pid_t> {
 }
 
 #[cfg(test)]
-#[allow(dead_code)]
 mod tests {
     use std::{collections::BTreeMap, fs, path::PathBuf};
 
@@ -856,7 +842,6 @@ mod tests {
         }
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn prepare_creates_the_per_project_caches_and_carries_the_request() {
         let root = scratch("ok");
@@ -899,7 +884,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_missing_helper_is_sandbox_backend_missing_before_anything_is_created()
     {
@@ -917,7 +901,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_missing_harness_binary_is_harness_exec_failed_naming_it() {
         let root = scratch("nobin");
@@ -938,7 +921,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_missing_workspace_is_harness_exec_failed_naming_the_directory() {
         let root = scratch("nows");
@@ -966,7 +948,7 @@ mod tests {
     /// so a symbolic link into a guarded location passes it as written.
     /// The supervisor sees where it goes and refuses what would actually
     /// be mounted.
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     #[test]
     fn an_extra_path_that_resolves_into_a_guarded_location_is_refused() {
         use willie_core::sandbox::{ExtraPath, PathMode};
@@ -997,7 +979,7 @@ mod tests {
     /// resolved: a last component that is a symbolic link can be
     /// re-pointed between the check and the mount, and a link inside
     /// the project is writable by every session on it.
-    #[cfg(target_os = "linux")]
+    #[cfg(unix)]
     #[test]
     fn an_extra_path_is_bound_from_the_source_the_check_resolved() {
         use willie_core::sandbox::{ExtraPath, PathMode};
@@ -1036,7 +1018,6 @@ mod tests {
     /// An extra path that is not there refuses the session here, with a
     /// code, rather than letting the helper fail with its own message
     /// from inside a namespace nobody is watching.
-    #[cfg(target_os = "linux")]
     #[test]
     fn an_extra_path_that_does_not_exist_is_refused() {
         use willie_core::sandbox::{ExtraPath, PathMode};
@@ -1061,7 +1042,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn an_unknown_harness_id_is_spec_invalid() {
         let root = scratch("unknown");
@@ -1078,7 +1058,6 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_spec_without_a_home_is_spec_invalid() {
         let root = scratch("nohome");
@@ -1117,7 +1096,6 @@ mod tests {
     /// The helper dies with a message on the session's terminal and a
     /// bare exit when a source it must bind is not there, so the whole
     /// class is refused here, by name, before any process exists.
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_missing_non_tolerant_bind_source_is_sandbox_apply_failed_naming_it() {
         let root = scratch("nobind");
@@ -1140,7 +1118,6 @@ mod tests {
     /// A tool root the machine has not installed is bound tolerantly, so
     /// its absence is not a refusal: the layout is fixed, the machine is
     /// not.
-    #[cfg(target_os = "linux")]
     #[test]
     fn a_missing_tolerant_bind_source_is_not_a_refusal() {
         let root = scratch("tolerant");

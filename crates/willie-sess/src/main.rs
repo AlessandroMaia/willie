@@ -30,6 +30,13 @@ const EXIT_USAGE: u8 = 2;
 /// Exit code when the session could not be started.
 const EXIT_FAILURE: u8 = 1;
 
+/// Label for a sandbox-prepare or spawn failure that could not enter the
+/// session's working directory.
+pub(crate) const WORKSPACE_STEP: &str = "cannot enter the workspace";
+/// Label for a sandbox-prepare or spawn failure that could not execute
+/// the harness.
+pub(crate) const EXEC_STEP: &str = "cannot execute the harness";
+
 fn version_line() -> String {
     format!("willie-sess {}", willie_core::VERSION)
 }
@@ -43,7 +50,7 @@ fn version_line() -> String {
 #[cfg(target_os = "linux")]
 fn spawn_failure(error: &pty::SpawnError) -> (&'static str, String) {
     match error {
-        pty::SpawnError::Exec { step, .. } if *step == pty::WORKSPACE_STEP => {
+        pty::SpawnError::Exec { step, .. } if *step == WORKSPACE_STEP => {
             ("harness_exec_failed", error.to_string())
         }
         pty::SpawnError::Exec { .. } => (
@@ -480,6 +487,7 @@ fn main() -> ExitCode {
         events::EventLog::append,
         events::epoch_secs,
         EXIT_FAILURE,
+        sandbox::prepare,
         sandbox::PrepareError::code,
         sandbox::helper_exit,
         sandbox::parse_children,
@@ -533,20 +541,16 @@ mod tests {
     #[test]
     fn a_working_directory_failure_is_not_the_helper_failing_to_start() {
         let workspace = spawn_failure(&pty::SpawnError::Exec {
-            step: pty::WORKSPACE_STEP,
+            step: WORKSPACE_STEP,
             error: std::io::Error::from(std::io::ErrorKind::NotFound),
         });
         let helper = spawn_failure(&pty::SpawnError::Exec {
-            step: pty::EXEC_STEP,
+            step: EXEC_STEP,
             error: std::io::Error::from(std::io::ErrorKind::PermissionDenied),
         });
 
         assert_eq!(workspace.0, "harness_exec_failed");
-        assert!(
-            workspace.1.starts_with(pty::WORKSPACE_STEP),
-            "{}",
-            workspace.1
-        );
+        assert!(workspace.1.starts_with(WORKSPACE_STEP), "{}", workspace.1);
         assert!(!workspace.1.contains("namespace helper"), "{}", workspace.1);
         assert_eq!(helper.0, "sandbox_apply_failed");
         assert!(helper.1.contains("the namespace helper did not start"));
