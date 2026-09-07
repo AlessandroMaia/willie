@@ -19,12 +19,15 @@ pub struct SessionReading {
     pub context_pct: Option<u8>,
 }
 
-/// The four token fields a usage block may carry, each defaulting to 0.
+/// The four token fields a usage block may carry, each defaulting to 0,
+/// paired with that same record's model — kept together so a later
+/// record's model can never combine with an earlier record's usage.
 struct TokenCounts {
     input: u64,
     cache_creation: u64,
     cache_read: u64,
     output: u64,
+    model: Option<String>,
 }
 
 /// Reads the newest usage block out of a session log tail.
@@ -35,9 +38,12 @@ struct TokenCounts {
 /// `usage` or nested under `message.usage` — Claude Code writes the
 /// latter for assistant turns; both are accepted. The *last* matching
 /// line in the tail wins, since JSONL is append-order and the tail is
-/// assumed to end at (or near) "now". `context_pct` covers only the
-/// input-side fields (a session's context window is what it must hold
-/// on the next turn, not what it just produced), clamped to 0..=100.
+/// assumed to end at (or near) "now". That same record's model —
+/// `message.model`, else a top-level `model` — resolves the context
+/// window through `context_window_for`, falling back to the `context_window`
+/// param when the model is missing or unrecognised. `context_pct` covers
+/// only the input-side fields (a session's context window is what it must
+/// hold on the next turn, not what it just produced), clamped to 0..=100.
 #[must_use]
 pub fn project_session(
     jsonl_tail: &str,
@@ -69,11 +75,18 @@ pub fn project_session(
 
         let field =
             |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+        let model = record
+            .get("message")
+            .and_then(|m| m.get("model"))
+            .or_else(|| record.get("model"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         newest = Some(TokenCounts {
             input: field("input_tokens"),
             cache_creation: field("cache_creation_input_tokens"),
             cache_read: field("cache_read_input_tokens"),
             output: field("output_tokens"),
+            model,
         });
     }
 
@@ -98,7 +111,8 @@ pub fn project_session(
         .input
         .saturating_add(counts.cache_creation)
         .saturating_add(counts.cache_read);
-    let context_pct = context_window.filter(|&w| w > 0).map(|window| {
+    let window = context_window_for(counts.model.as_deref()).or(context_window);
+    let context_pct = window.filter(|&w| w > 0).map(|window| {
         (u128::from(context_side) * 100 / u128::from(window)).min(100) as u8
     });
 
@@ -226,6 +240,32 @@ mod tests {
     #[test]
     fn missing_context_window_yields_no_context_pct() {
         let tail = r#"{"message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}}}"#;
+
+        let reading = project_session(tail, None);
+
+        assert_eq!(reading.tokens, 11);
+        assert_eq!(reading.context_pct, None);
+    }
+
+    /// The newest record's own `message.model` resolves the context
+    /// window through `context_window_for` — no caller-supplied window
+    /// needed at all — proving `context_pct` is derived from the record,
+    /// not merely from whatever the caller happened to pass in.
+    #[test]
+    fn a_recognized_model_on_the_newest_record_resolves_the_window() {
+        let tail = r#"{"message":{"model":"claude-sonnet-4-20250514","usage":{"input_tokens":50000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1000}}}"#;
+
+        let reading = project_session(tail, None);
+
+        assert_eq!(reading.tokens, 51_000);
+        assert_eq!(reading.context_pct, Some(25));
+    }
+
+    /// An unrecognized model on the newest record resolves to no window,
+    /// same as no model at all — best-effort, never a guess.
+    #[test]
+    fn an_unrecognized_model_on_the_newest_record_yields_no_context_pct() {
+        let tail = r#"{"message":{"model":"gpt-x","usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":1}}}"#;
 
         let reading = project_session(tail, None);
 

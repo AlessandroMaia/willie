@@ -204,9 +204,9 @@ export interface ToolList {
 
 /* Mirrors `willie_proto::usage::{ProviderUsage, SessionUsage,
  * ProjectUsage, UsageSnapshot}`. `context_pct` is omitted (Rust's
- * `skip_serializing_if`) whenever the harness has not reported one yet —
- * always the case this cut, so the panel treats a missing value as "no
- * usage yet" rather than a 0% meter. */
+ * `skip_serializing_if`) whenever the session's model is not recognised
+ * (the `claude-` family) or unreported, so the panel treats a missing
+ * value as "no usage yet" rather than a 0% meter. */
 export interface ProviderUsage {
   id: string;
   windows: string[];

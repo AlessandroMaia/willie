@@ -10,10 +10,10 @@ export const CONTEXT_ERROR_PCT = 90;
  * caller passes the result straight into a `StatusBadge`'s `tone` prop. */
 export type ContextTone = "ok" | "warning" | "error" | "muted";
 
-/** The tone a session's context percentage takes. `null` means the
- * harness has not reported a context window yet (always true this
- * cut) — rendered `muted`, never a 0% meter, since 0 and "unknown"
- * mean different things to the user. */
+/** The tone a session's context percentage takes. `null` means no
+ * context window was resolved for this session's model — rendered
+ * `muted`, never a 0% meter, since 0 and "unknown" mean different
+ * things to the user. */
 export function contextTone(pct: number | null): ContextTone {
   if (pct === null) return "muted";
   if (pct >= CONTEXT_ERROR_PCT) return "error";

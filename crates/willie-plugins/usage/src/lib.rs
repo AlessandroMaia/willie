@@ -167,7 +167,7 @@ fn read_session(
         return NO_DATA;
     };
     let tail = read_tail(&logdir.join(file_name), TAIL_BYTES);
-    read::project_session(&tail, read::context_window_for(None))
+    read::project_session(&tail, None)
 }
 
 /// The first registry harness that keeps session logs under `home`.
@@ -280,10 +280,12 @@ mod tests {
     }
 
     /// A JSONL planted at the exact path a registry harness resolves to
-    /// (`session_logs_dir`/`escape_workspace`) is read and projected
-    /// into the session's token count.
+    /// (`session_logs_dir`/`escape_workspace`) is read and projected into
+    /// the session's token count; the assistant record's own
+    /// `message.model` resolves a real `context_pct` end to end, proving
+    /// `read_session` no longer forces the window to `None`.
     #[test]
-    fn snapshot_reads_tokens_from_a_planted_session_log() {
+    fn snapshot_reads_tokens_and_context_pct_from_a_planted_session_log() {
         let home = scratch_dir("present");
         let harness = willie_harness::registry().remove(0);
         let workspace = "/home/willie/projects/x";
@@ -294,7 +296,7 @@ mod tests {
         fs::create_dir_all(&logdir).unwrap();
         fs::write(
             logdir.join("a.jsonl"),
-            r#"{"message":{"usage":{"input_tokens":10,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}}"#,
+            r#"{"message":{"model":"claude-sonnet-4-20250514","usage":{"input_tokens":50000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":5}}}"#,
         )
         .unwrap();
 
@@ -320,15 +322,15 @@ mod tests {
             snapshot.sessions,
             vec![SessionUsage {
                 id: session_id,
-                tokens: 15,
-                context_pct: None,
+                tokens: 50_005,
+                context_pct: Some(25),
             }]
         );
         assert_eq!(
             snapshot.projects,
             vec![ProjectUsage {
                 id: project_id,
-                tokens: 15,
+                tokens: 50_005,
             }]
         );
 
