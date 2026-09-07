@@ -55,4 +55,18 @@ mod tests {
         let json = serde_json::to_string(&s).unwrap();
         assert_eq!(serde_json::from_str::<ToolStatus>(&json).unwrap(), s);
     }
+
+    #[test]
+    fn an_uninstalled_tool_omits_version_fields() {
+        let s = ToolStatus {
+            id: "x".into(),
+            name: "X".into(),
+            installed: false,
+            version: None,
+            recorded_version: None,
+        };
+        let v = serde_json::to_value(&s).unwrap();
+        assert!(v.get("version").is_none());
+        assert!(v.get("recorded_version").is_none());
+    }
 }
