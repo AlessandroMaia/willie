@@ -4,8 +4,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import type {
   Candidate,
   CapabilityInfo,
+  Change,
   Event,
   PluginStatus,
+  ProfileSummary,
   Project,
   SandboxProfile,
   Session,
@@ -154,6 +156,47 @@ export const plugins = {
     invoke<PluginStatus>("plugin_enable", { id, projectId }),
   disable: (id: string, projectId?: string) =>
     invoke<PluginStatus>("plugin_disable", { id, projectId }),
+};
+
+/* The profiles plugin's own methods (`profile.*`), reached through the
+ * engine's one guarded pass-through (`plugin_call`): willie-engine never
+ * grows a typed method per plugin, so every call here names its own
+ * `profile.*` method and shapes its own params/result. */
+function pluginCall<R>(method: string, params: unknown): Promise<R> {
+  return invoke<R>("plugin_call", { method, params });
+}
+
+export const profiles = {
+  list: () => pluginCall<ProfileSummary[]>("profile.list", {}),
+  create: (name: string) =>
+    pluginCall<ProfileSummary>("profile.create", { name }),
+  readFragment: (name: string, fragment: string) =>
+    pluginCall<{ content: string }>("profile.read_fragment", {
+      name,
+      fragment,
+    }),
+  writeFragment: (name: string, fragment: string, content: string) =>
+    pluginCall<{ content: string }>("profile.write_fragment", {
+      name,
+      fragment,
+      content,
+    }),
+  check: (name: string, projectId: string) =>
+    pluginCall<{ changes: Change[] }>("profile.check", {
+      name,
+      project_id: projectId,
+    }),
+  apply: (name: string, projectId: string) =>
+    pluginCall<{ changes: Change[]; backup_path: string }>("profile.apply", {
+      name,
+      project_id: projectId,
+    }),
+  setRemote: (name: string, url: string) =>
+    pluginCall<Record<string, never>>("profile.set_remote", { name, url }),
+  push: (name: string) =>
+    pluginCall<Record<string, never>>("profile.push", { name }),
+  pull: (name: string) =>
+    pluginCall<Record<string, never>>("profile.pull", { name }),
 };
 
 /* Static domain data (`willie_core::sandbox::Capability`), not a

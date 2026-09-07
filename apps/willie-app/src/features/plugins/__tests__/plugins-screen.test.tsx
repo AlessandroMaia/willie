@@ -15,6 +15,17 @@ const emptySnapshot = (): Snapshot => ({
  * fake (see shell.test.tsx, tools-screen.test.tsx). */
 const ipc = vi.hoisted(() => ({
   plugins: { list: vi.fn(), enable: vi.fn(), disable: vi.fn() },
+  profiles: {
+    list: vi.fn(async () => []),
+    create: vi.fn(),
+    readFragment: vi.fn(),
+    writeFragment: vi.fn(),
+    check: vi.fn(),
+    apply: vi.fn(),
+    setRemote: vi.fn(),
+    push: vi.fn(),
+    pull: vi.fn(),
+  },
   projects: { snapshot: vi.fn() },
   onDaemonEvent: vi.fn(async () => () => {}),
 }));
@@ -49,6 +60,21 @@ function perProjectPlugin(overrides: Partial<PluginStatus> = {}): PluginStatus {
   return {
     id: "profiles",
     name: "Profiles",
+    scope: "per_project",
+    enabled: { per_project: ["proj_1"] },
+    degraded: false,
+    ...overrides,
+  };
+}
+
+/* The real profiles plugin's id is singular — "profile" — matching
+ * `crates/willie-plugins/profiles/src/lib.rs`'s manifest, unlike the
+ * generic `perProjectPlugin` fixture above (its "profiles" id is
+ * incidental, not a stand-in for the real plugin). */
+function profilesPlugin(overrides: Partial<PluginStatus> = {}): PluginStatus {
+  return {
+    id: "profile",
+    name: "Configuration profiles",
     scope: "per_project",
     enabled: { per_project: ["proj_1"] },
     degraded: false,
@@ -135,5 +161,34 @@ describe("PluginsScreen", () => {
 
     expect(await screen.findByText("Usage")).toBeDefined();
     expect(screen.queryByText("error")).toBeNull();
+  });
+
+  it('mounts the profiles panel below the list when "profile" is enabled and healthy', async () => {
+    ipc.plugins.list.mockResolvedValue([profilesPlugin()]);
+
+    render(<PluginsScreen />);
+
+    expect(await screen.findByText("Configuration profiles")).toBeDefined();
+    expect(
+      await screen.findByRole("heading", { name: "Profiles" }),
+    ).toBeDefined();
+  });
+
+  it('never mounts the profiles panel for a degraded "profile" plugin', async () => {
+    ipc.plugins.list.mockResolvedValue([profilesPlugin({ degraded: true })]);
+
+    render(<PluginsScreen />);
+
+    expect(await screen.findByText("Configuration profiles")).toBeDefined();
+    expect(screen.queryByRole("heading", { name: "Profiles" })).toBeNull();
+  });
+
+  it('never mounts the profiles panel for a plugin whose id is not the literal "profile"', async () => {
+    ipc.plugins.list.mockResolvedValue([perProjectPlugin()]);
+
+    render(<PluginsScreen />);
+
+    expect(await screen.findByText("Profiles")).toBeDefined();
+    expect(screen.queryByRole("heading", { name: "Profiles" })).toBeNull();
   });
 });

@@ -45,6 +45,13 @@ use crate::{
 /// every checkout's own directory tree.
 const DISCOVER_MAX_DEPTH: usize = 2;
 
+/// The namespace [`Engine::plugin_call`] alone is allowed to forward.
+/// Mirrors `willied`'s own `PLUGIN_METHOD_PREFIX` (`crates/willied/src/
+/// server.rs`) without sharing it: the two crates never depend on each
+/// other, so each names the one plugin this phase ships on its own
+/// side of the wire.
+const PLUGIN_METHOD_PREFIX: &str = "profile.";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Problem {
     pub code: String,
@@ -414,6 +421,25 @@ impl Engine {
         self.daemon_call(plugin::DISABLE, EnableParams { id, project_id })
     }
 
+    /// The one seam the webview reaches a plugin's own methods through
+    /// (`profile.list`, `profile.apply`, …): one generic pass-through
+    /// rather than a typed engine method per plugin method, which would
+    /// couple the engine — transport — to every plugin's own method
+    /// list. The prefix check is a security boundary, not a convenience:
+    /// without it the webview could invoke `daemon.shutdown`,
+    /// `project.remove`, or any other daemon method through this one
+    /// command.
+    pub fn plugin_call(
+        &mut self,
+        method: String,
+        params: serde_json::Value,
+    ) -> Result<serde_json::Value, EngineError> {
+        if !method.starts_with(PLUGIN_METHOD_PREFIX) {
+            return Err(EngineError::MethodNotServed { method });
+        }
+        self.daemon_call(&method, params)
+    }
+
     pub fn state_snapshot(&mut self) -> Result<Snapshot, EngineError> {
         self.daemon_call(state::SNAPSHOT, serde_json::json!({}))
     }
@@ -516,5 +542,28 @@ mod tests {
             .project_add(r"C:\does\not\exist\willie-xyz", None)
             .unwrap_err();
         assert_eq!(err.code(), "path_not_found");
+    }
+
+    /// The security boundary itself: a method outside the `profile.`
+    /// namespace is refused before `plugin_call` ever reaches the
+    /// daemon — no distro, no running daemon needed to observe it.
+    #[test]
+    fn plugin_call_refuses_a_method_outside_the_profile_namespace() {
+        let mut engine = Engine::new(Vec::new());
+        let err = engine
+            .plugin_call("daemon.shutdown".into(), serde_json::json!({}))
+            .unwrap_err();
+        assert_eq!(err.code(), "method_not_served");
+    }
+
+    /// A method that merely starts with the right prefix as a
+    /// substring, but not at the start, is not "profile.*" either.
+    #[test]
+    fn plugin_call_refuses_a_method_that_only_contains_the_prefix() {
+        let mut engine = Engine::new(Vec::new());
+        let err = engine
+            .plugin_call("plugin.profile.list".into(), serde_json::json!({}))
+            .unwrap_err();
+        assert_eq!(err.code(), "method_not_served");
     }
 }

@@ -15,7 +15,14 @@ import type { Problem } from "@/lib/ipc";
 import { plugins } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
 import type { PluginStatus } from "@/lib/proto";
+import { ProfilesPanel } from "@/plugins/profiles/profiles-panel";
 import { useSnapshot } from "@/store/use-snapshot";
+
+/** The profiles plugin's real id (singular — `crates/willie-plugins/
+ * profiles/src/lib.rs`'s `manifest().id`), never "profiles": the panel
+ * mounts strictly on this literal so a fixture or a future plugin named
+ * anything close cannot accidentally pull it in. */
+const PROFILES_PLUGIN_ID = "profile";
 
 function scopeLabel(status: PluginStatus): string {
   return status.scope === "global" ? "Global" : "Per-project";
@@ -55,6 +62,8 @@ export function PluginsScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const profilesPlugin = list.find((p) => p.id === PROFILES_PLUGIN_ID);
 
   async function toggle(status: PluginStatus, next: boolean) {
     setBusyId(status.id);
@@ -116,6 +125,8 @@ export function PluginsScreen() {
           );
         })}
       </ItemGroup>
+
+      {profilesPlugin && !profilesPlugin.degraded && <ProfilesPanel />}
     </div>
   );
 }

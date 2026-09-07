@@ -433,6 +433,22 @@ fn plugin_disable(
     })
 }
 
+/// The webview's only path to a plugin's own methods (`profile.*`, …):
+/// one generic command mirroring `Engine::plugin_call`, which is itself
+/// the only place that decides what `method` may forward — never here.
+#[tauri::command(async)]
+fn plugin_call(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    method: String,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.plugin_call(method, params)
+    })
+}
+
 #[tauri::command(async)]
 fn session_terminal_open(
     app: AppHandle,
@@ -654,6 +670,7 @@ pub fn run() {
             plugin_list,
             plugin_enable,
             plugin_disable,
+            plugin_call,
             session_terminal_open,
             session_terminal_input,
             session_terminal_resize,

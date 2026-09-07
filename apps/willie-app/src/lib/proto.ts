@@ -150,6 +150,21 @@ export interface PluginStatus {
   degraded: boolean;
 }
 
+/* Mirrors `willie_plugins::profiles::model::ProfileSummary` and
+ * `apply::{Change, ChangeKind}`: plain field names, `ChangeKind` in
+ * `snake_case`. Reached only through `lib/ipc.ts`'s `profiles` bridge
+ * (`profile.*` via the engine's guarded `plugin_call` pass-through). */
+export interface ProfileSummary {
+  name: string;
+  fragments_active: string[];
+}
+export type ChangeKind = "create" | "merge" | "overwrite";
+export interface Change {
+  path: string;
+  kind: ChangeKind;
+  after: string;
+}
+
 export interface Snapshot {
   seq: number;
   projects: Project[];

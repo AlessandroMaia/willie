@@ -135,6 +135,8 @@ pub enum EngineError {
     },
     #[error("embedded terminal failed: {message}")]
     EmbeddedTerminal { message: String },
+    #[error("`{method}` is not a plugin method")]
+    MethodNotServed { method: String },
 }
 
 impl EngineError {
@@ -163,6 +165,7 @@ impl EngineError {
             Self::ConfigWrite { .. } => "config_write_failed",
             Self::TerminalLaunch { .. } => "terminal_launch_failed",
             Self::EmbeddedTerminal { .. } => "embedded_terminal_failed",
+            Self::MethodNotServed { .. } => "method_not_served",
         }
     }
 
@@ -231,6 +234,9 @@ impl EngineError {
                  Windows Terminal tab instead (Open session), or click \
                  Run doctor"
                 .into(),
+            Self::MethodNotServed { .. } => {
+                "the app calls plugin methods, not daemon methods".into()
+            }
         }
     }
 }
@@ -449,6 +455,9 @@ mod tests {
             EngineError::EmbeddedTerminal {
                 message: "x".into(),
             },
+            EngineError::MethodNotServed {
+                method: "daemon.shutdown".into(),
+            },
         ]
     }
 
@@ -497,5 +506,21 @@ mod tests {
         });
         assert_eq!(p.code, "terminal_launch_failed");
         assert!(p.remediation.contains("willie attach sess_1"));
+    }
+
+    /// The `plugin_call` guard's rejection: a daemon method reaching for
+    /// it must read as "wrong kind of call", not as some transport fault
+    /// worth a doctor retry.
+    #[test]
+    fn a_non_plugin_method_is_refused_with_its_own_code_and_remediation() {
+        let err = EngineError::MethodNotServed {
+            method: "daemon.shutdown".into(),
+        };
+        assert_eq!(err.code(), "method_not_served");
+        assert!(err.to_string().contains("daemon.shutdown"));
+        assert_eq!(
+            err.remediation(),
+            "the app calls plugin methods, not daemon methods"
+        );
     }
 }
