@@ -65,8 +65,14 @@ export function SandboxDialog({
   onSave,
   onCancel,
 }: SandboxDialogProps) {
-  const [local, setLocal] = useState<SandboxProfile>(
-    () => project?.sandbox ?? {},
+  /* `project.sandbox` is the default profile the daemon substituted
+   * while its `[sandbox]` table could not be read (see
+   * `sandbox_problem` below) — never a saved override, so it must not
+   * seed `local`: every row instead falls back to the harness's own
+   * default, and Save writes out exactly the table that replaces the
+   * unreadable one. */
+  const [local, setLocal] = useState<SandboxProfile>(() =>
+    project?.sandbox_problem ? {} : (project?.sandbox ?? {}),
   );
 
   function setFlag(capability: BooleanCapability, value: boolean) {
@@ -115,6 +121,16 @@ export function SandboxDialog({
             session records the policy it ran under.
           </DialogDescription>
         </DialogHeader>
+
+        {/* A load problem, not a rejected save: it comes from the project
+         * itself and is present the instant the dialog opens, so it is
+         * rendered straight off `project.sandbox_problem` — distinct from
+         * `problem` below, which only ever answers a Save. Its
+         * remediation already says that saving here replaces the
+         * unreadable table (see `store::load_all`). */}
+        {project?.sandbox_problem && (
+          <ProblemAlert problem={project.sandbox_problem} />
+        )}
 
         <ScrollArea className="min-h-0">
           <div className="flex flex-col gap-3 pr-3">

@@ -27,6 +27,17 @@ export function ProjectStateChip({
     );
   }
 
+  if (project.sandbox_problem) {
+    return (
+      <FailureChip
+        tone="warning"
+        code={project.sandbox_problem.code}
+        message={project.sandbox_problem.message}
+        remediation={project.sandbox_problem.remediation}
+      />
+    );
+  }
+
   if (job && job.state.state === "failed") {
     /* `workspace_dirty` only ever arrives this way: `project_remove`
      * resolves the instant the job is queued, so the dirty-workspace

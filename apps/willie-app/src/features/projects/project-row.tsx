@@ -80,6 +80,11 @@ export function ProjectRow({
   onOpenRemoveDialog,
 }: ProjectRowProps) {
   const actionable = !isBusy && project.state.state === "ready" && !jobRunning;
+  /* The workspace is fine even when the policy is not: only the two
+   * actions that launch a session are held while the daemon refuses
+   * `session.create` for this project (`sandbox_problem` set); Send to
+   * Windows and Update from Windows never touch the sandbox. */
+  const sandboxBlocked = project.sandbox_problem != null;
 
   return (
     <Item variant="outline" className="flex-col items-stretch gap-2">
@@ -174,13 +179,19 @@ export function ProjectRow({
       {openNotice && <ProblemAlert problem={openNotice} tone="notice" />}
 
       <ItemActions className="flex flex-wrap gap-2">
-        <Button size="sm" disabled={!actionable} onClick={onOpenSession}>
+        <Button
+          size="sm"
+          disabled={!actionable || sandboxBlocked}
+          title={sandboxBlocked ? project.sandbox_problem?.message : undefined}
+          onClick={onOpenSession}
+        >
           Open session
         </Button>
         <Button
           size="sm"
           variant="outline"
-          disabled={!actionable || !canResume}
+          disabled={!actionable || !canResume || sandboxBlocked}
+          title={sandboxBlocked ? project.sandbox_problem?.message : undefined}
           onClick={onResumeSession}
         >
           Resume

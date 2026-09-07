@@ -222,6 +222,65 @@ describe("SandboxDialog", () => {
     expect(rows?.contains(save)).toBe(false);
   });
 
+  /* A `sandbox_problem` is a load failure, not a rejected save: it comes
+   * from the project itself, is present the instant the dialog opens,
+   * and stays even though `problem` (the save-rejection prop) is null. */
+  it("shows an alert when the project's sandbox table could not be read", () => {
+    render(
+      <SandboxDialog
+        project={{
+          ...project(),
+          sandbox_problem: {
+            code: "sandbox_table_invalid",
+            message: "the [sandbox] table could not be read",
+            remediation: "open the Sandbox dialog and save to replace it",
+          },
+        }}
+        catalogue={catalogue()}
+        problem={null}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain(
+      "the [sandbox] table could not be read",
+    );
+  });
+
+  /* `local` must start from `{}`, not from `project.sandbox` (the
+   * default profile the daemon substituted): every row falls back to
+   * the harness's own default, proving the dialog never treats that
+   * substitute as a saved override. */
+  it("starts from the harness defaults, not the substituted profile, when the sandbox table could not be read", () => {
+    render(
+      <SandboxDialog
+        project={{
+          ...project(),
+          /* What the daemon loads a project with while the table can't
+           * be read: the default profile, which happens to turn
+           * `agent_state` off here — the opposite of what the
+           * catalogue's own default says. If `local` started from this
+           * instead of `{}`, the checkbox would come up unchecked. */
+          sandbox: { agent_state: false },
+          sandbox_problem: {
+            code: "sandbox_table_invalid",
+            message: "the [sandbox] table could not be read",
+            remediation: "open the Sandbox dialog and save to replace it",
+          },
+        }}
+        catalogue={catalogue()}
+        problem={null}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    const credential = screen.getByRole("checkbox", { name: /agent\.state/ });
+    expect(credential.hasAttribute("data-checked")).toBe(true);
+  });
+
   /* A refusal is the answer to pressing Save, so it belongs beside the
    * button and not in the part that scrolls, where it could be out of
    * sight at the moment it appears. */
