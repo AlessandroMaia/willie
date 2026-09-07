@@ -520,16 +520,22 @@ fn open_in_editor(workspace: String) -> Result<(), Problem> {
                       Willie so it detects a new install"
             .into(),
     })?;
-    std::process::Command::new(&code)
-        .args(editor_argv(&workspace))
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| Problem {
-            code: "editor_launch_failed".into(),
-            message: e.to_string(),
-            remediation: "try opening the workspace from VS Code directly"
-                .into(),
-        })
+    let mut command = std::process::Command::new(&code);
+    command.args(editor_argv(&workspace));
+    // GUI-subsystem release builds have no console; std runs code.cmd via
+    // cmd.exe (a console app), which would otherwise flash a fresh console
+    // window. CREATE_NO_WINDOW suppresses it.
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command.spawn().map(|_| ()).map_err(|e| Problem {
+        code: "editor_launch_failed".into(),
+        message: e.to_string(),
+        remediation: "try opening the workspace from VS Code directly".into(),
+    })
 }
 
 #[tauri::command]
