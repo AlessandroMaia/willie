@@ -34,6 +34,7 @@ interface ProjectRowProps {
   openNotice: Problem | null;
   live: number;
   canResume: boolean;
+  editorAvailable: boolean;
   onEditingNameChange: (value: string) => void;
   onStartRename: () => void;
   onSaveRename: () => void;
@@ -41,6 +42,7 @@ interface ProjectRowProps {
   onRetry: (job: Job) => void;
   onCopyPath: () => void;
   onOpenInExplorer: () => void;
+  onOpenInEditor: () => void;
   onOpenRelocateDialog: () => void;
   onOpenSandboxDialog: () => void;
   onOpenSession: () => void;
@@ -63,6 +65,7 @@ export function ProjectRow({
   openNotice,
   live,
   canResume,
+  editorAvailable,
   onEditingNameChange,
   onStartRename,
   onSaveRename,
@@ -70,6 +73,7 @@ export function ProjectRow({
   onRetry,
   onCopyPath,
   onOpenInExplorer,
+  onOpenInEditor,
   onOpenRelocateDialog,
   onOpenSandboxDialog,
   onOpenSession,
@@ -139,6 +143,17 @@ export function ProjectRow({
             </DropdownMenuItem>
             <DropdownMenuItem onClick={onOpenInExplorer}>
               Open in Explorer
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={onOpenInEditor}
+              disabled={!editorAvailable}
+              title={
+                editorAvailable
+                  ? undefined
+                  : "VS Code was not found on this machine"
+              }
+            >
+              Open in VS Code
             </DropdownMenuItem>
             {!project.source_present && (
               <DropdownMenuItem onClick={onOpenRelocateDialog}>

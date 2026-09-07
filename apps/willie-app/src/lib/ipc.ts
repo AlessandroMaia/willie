@@ -91,7 +91,15 @@ export const projects = {
   setRoots: (roots: string[]) => invoke("set_projects_roots", { roots }),
   discover: () => invoke<Candidate[]>("discover_projects"),
   openInExplorer: (path: string) => invoke("open_in_explorer", { path }),
+  openInEditor: (workspace: string) => invoke("open_in_editor", { workspace }),
 };
+
+/* Static per-machine fact (is VS Code installed?), checked once when the
+ * Projects screen mounts — a screen-level gate like the daemon-health
+ * check, not a per-project RPC, so it lives beside `projects` rather
+ * than inside it. */
+export const editorAvailable = (): Promise<boolean> =>
+  invoke<boolean>("editor_available");
 
 export interface SessionOpened {
   session: Session;

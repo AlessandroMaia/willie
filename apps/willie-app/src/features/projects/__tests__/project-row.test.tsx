@@ -1,7 +1,8 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ProjectRow } from "@/features/projects/project-row";
-import type { Project } from "@/lib/proto";
+import type { Project, ProjectState } from "@/lib/proto";
 
 const project = (): Project => ({
   id: "proj_1",
@@ -16,20 +17,29 @@ const project = (): Project => ({
   sandbox: {},
 });
 
-function renderRow(project: Project) {
+function renderRow(
+  project: Project,
+  overrides: Partial<{
+    isBusy: boolean;
+    jobRunning: boolean;
+    editorAvailable: boolean;
+    onOpenInEditor: () => void;
+  }> = {},
+) {
   render(
     <ProjectRow
       project={project}
       job={undefined}
       isEditing={false}
       editingName=""
-      isBusy={false}
-      jobRunning={false}
+      isBusy={overrides.isBusy ?? false}
+      jobRunning={overrides.jobRunning ?? false}
       path="\\\\wsl.localhost\\willie\\home\\willie\\projects\\willie"
       rowProblem={null}
       openNotice={null}
       live={0}
       canResume={true}
+      editorAvailable={overrides.editorAvailable ?? true}
       onEditingNameChange={vi.fn()}
       onStartRename={vi.fn()}
       onSaveRename={vi.fn()}
@@ -37,6 +47,7 @@ function renderRow(project: Project) {
       onRetry={vi.fn()}
       onCopyPath={vi.fn()}
       onOpenInExplorer={vi.fn()}
+      onOpenInEditor={overrides.onOpenInEditor ?? vi.fn()}
       onOpenRelocateDialog={vi.fn()}
       onOpenSandboxDialog={vi.fn()}
       onOpenSession={vi.fn()}
@@ -101,5 +112,46 @@ describe("ProjectRow", () => {
       (screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement)
         .disabled,
     ).toBe(false);
+  });
+
+  it("offers Open in VS Code and calls onOpenInEditor when clicked", async () => {
+    const user = userEvent.setup();
+    const onOpenInEditor = vi.fn();
+    renderRow(project(), { onOpenInEditor });
+
+    await user.click(screen.getByRole("button", { name: /More actions/ }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open in VS Code" }),
+    );
+
+    expect(onOpenInEditor).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables Open in VS Code when VS Code is absent", async () => {
+    const user = userEvent.setup();
+    renderRow(project(), { editorAvailable: false });
+
+    await user.click(screen.getByRole("button", { name: /More actions/ }));
+    const item = await screen.findByRole("menuitem", {
+      name: "Open in VS Code",
+    });
+
+    expect(item.hasAttribute("data-disabled")).toBe(true);
+  });
+
+  it("keeps Open in VS Code enabled for a busy, non-ready project", async () => {
+    const user = userEvent.setup();
+    const preparing: ProjectState = { state: "preparing" };
+    renderRow(
+      { ...project(), state: preparing },
+      { isBusy: true, jobRunning: true, editorAvailable: true },
+    );
+
+    await user.click(screen.getByRole("button", { name: /More actions/ }));
+    const item = await screen.findByRole("menuitem", {
+      name: "Open in VS Code",
+    });
+
+    expect(item.hasAttribute("data-disabled")).toBe(false);
   });
 });

@@ -67,6 +67,7 @@ const ipc = vi.hoisted(() => ({
     setRoots: vi.fn(),
     discover: vi.fn(),
     openInExplorer: vi.fn(),
+    openInEditor: vi.fn(),
   },
   sessions: { open: vi.fn(), resume: vi.fn(), attach: vi.fn(), stop: vi.fn() },
   sessionTerminal: {
@@ -80,6 +81,7 @@ const ipc = vi.hoisted(() => ({
   dialogs: { pickFolder: vi.fn(async () => null) },
   onDaemonEvent: vi.fn(async () => () => {}),
   onSessionOutput: vi.fn(async () => () => {}),
+  editorAvailable: vi.fn(async () => true),
 }));
 
 vi.mock("@/lib/ipc", () => ipc);

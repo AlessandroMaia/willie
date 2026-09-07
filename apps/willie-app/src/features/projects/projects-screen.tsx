@@ -24,6 +24,7 @@ import { isLive, liveCount } from "@/lib/domain/sessions";
 import type { Problem } from "@/lib/ipc";
 import {
   dialogs,
+  editorAvailable as editorAvailableApi,
   projects as projectsApi,
   sandbox as sandboxApi,
   sessions as sessionsApi,
@@ -101,6 +102,12 @@ export function ProjectsScreen() {
    * empty dialog, not a fallback — a fetch failure is surfaced below,
    * not swallowed. */
   const [catalogue, setCatalogue] = useState<CapabilityInfo[]>([]);
+  /* Static per-machine fact, fetched once on mount: whether VS Code is
+   * installed. Gates the row's "Open in VS Code" item the same way the
+   * catalogue gates the Sandbox dialog — a fetch failure defaults to
+   * unavailable rather than leaving the action stuck in an unknown
+   * state. */
+  const [editorAvailable, setEditorAvailable] = useState(false);
   /* Synchronous RPC-level rejects that belong to one project (a job
    * already running, a cancel or retry that failed) — shown on that
    * project's row, never in the page-level banner below, which is
@@ -152,6 +159,12 @@ export function ProjectsScreen() {
       .catalogue()
       .then(setCatalogue)
       .catch((error: unknown) => setLocal(asProblem(error)));
+  }, []);
+
+  useEffect(() => {
+    editorAvailableApi()
+      .then(setEditorAvailable)
+      .catch(() => setEditorAvailable(false));
   }, []);
 
   async function run(
@@ -410,6 +423,15 @@ export function ProjectsScreen() {
       .catch((error: unknown) => setRowProblem(project.id, asProblem(error)));
   }
 
+  /* The ext4 workspace, not the Windows `source` — editing happens in
+   * the fast clone the same way `openInExplorer` shows the Windows-side
+   * UNC path. */
+  function openInEditor(project: Project) {
+    projectsApi
+      .openInEditor(project.workspace)
+      .catch((error: unknown) => setRowProblem(project.id, asProblem(error)));
+  }
+
   function openRemoveDialog(project: Project) {
     setRemoving(project);
     setDeleteWorkspace(true);
@@ -629,6 +651,7 @@ export function ProjectsScreen() {
                   openNotice={openNotice}
                   live={live}
                   canResume={canResume}
+                  editorAvailable={editorAvailable}
                   onEditingNameChange={setEditingName}
                   onStartRename={() => startRename(project)}
                   onSaveRename={() => saveRename(project)}
@@ -636,6 +659,7 @@ export function ProjectsScreen() {
                   onRetry={retry}
                   onCopyPath={() => copyPath(path)}
                   onOpenInExplorer={() => openInExplorer(project, path)}
+                  onOpenInEditor={() => openInEditor(project)}
                   onOpenRelocateDialog={() => openRelocateDialog(project)}
                   onOpenSandboxDialog={() => openSandboxDialog(project)}
                   onOpenSession={() => openSession(project)}
