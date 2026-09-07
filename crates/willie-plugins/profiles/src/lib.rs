@@ -74,6 +74,9 @@ impl Plugin for ProfilesPlugin {
             "profile.write_fragment" => write_fragment(ctx, req.params),
             "profile.check" => check(ctx, req.params),
             "profile.apply" => apply_to_project(ctx, req.params),
+            "profile.set_remote" => set_remote(ctx, req.params),
+            "profile.push" => push(ctx, req.params),
+            "profile.pull" => pull(ctx, req.params),
             other => Err(PluginError::BadRequest(format!(
                 "unknown method `{other}`"
             ))),
@@ -128,6 +131,26 @@ struct ApplyParams {
     workspace: String,
     #[serde(rename = "_harness_settings", default)]
     harness_settings: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetRemoteParams {
+    name: String,
+    url: String,
+}
+
+/// `profile.push`'s params — its own type, not shared with
+/// [`PullParams`], even though the shape is identical: the two methods'
+/// request shapes should stay free to diverge independently, same
+/// reasoning as `CheckParams`/`ApplyParams` above.
+#[derive(Debug, Deserialize)]
+struct PushParams {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PullParams {
+    name: String,
 }
 
 /// Parses `params` into `T`, or a `BadRequest` naming what did not fit.
@@ -325,6 +348,55 @@ fn apply_to_project(
         "changes": changes,
         "backup_path": backup_dir.to_string_lossy(),
     }))
+}
+
+// -------------------------------------------------------------- sync
+
+/// `profile.set_remote { name, url }`: points the profile's own
+/// repository at `url` as `origin`, adding it if this is the first time
+/// or repointing it if one is already configured — the minimal sync's
+/// only setup step.
+fn set_remote(
+    ctx: &PluginCtx<'_>,
+    params: Value,
+) -> Result<PluginResponse, PluginError> {
+    let SetRemoteParams { name, url } = parse_params(params)?;
+    let dir = existing_profile_dir(ctx, &name)?;
+    git::set_remote(&dir, &url).map_err(git_fault)?;
+    json_response(&json!({}))
+}
+
+/// `profile.push { name }`: `git push -u origin HEAD`, publishing the
+/// profile's current history and recording the upstream so a later
+/// `profile.pull` needs no branch name. No credential handling beyond
+/// whatever the distribution's own `git` already has configured (an SSH
+/// remote uses the session's own keys, out of scope here).
+fn push(
+    ctx: &PluginCtx<'_>,
+    params: Value,
+) -> Result<PluginResponse, PluginError> {
+    let PushParams { name } = parse_params(params)?;
+    let dir = existing_profile_dir(ctx, &name)?;
+    git::push(&dir).map_err(git_fault)?;
+    json_response(&json!({}))
+}
+
+/// `profile.pull { name }`: `git pull --ff-only`. A divergent history —
+/// this machine and the remote each have commits the other lacks — has
+/// no fast-forward to land, so it is refused as `profile_sync_conflict`
+/// naming the profile, rather than left to git to attempt a merge that
+/// could conflict inside the profile's own tracked files.
+fn pull(
+    ctx: &PluginCtx<'_>,
+    params: Value,
+) -> Result<PluginResponse, PluginError> {
+    let PullParams { name } = parse_params(params)?;
+    let dir = existing_profile_dir(ctx, &name)?;
+    match git::pull(&dir) {
+        Ok(()) => json_response(&json!({})),
+        Err(e) if e.code == "pull_conflict" => Err(sync_conflict(&name)),
+        Err(e) => Err(git_fault(e)),
+    }
 }
 
 // ----------------------------------------------------- check / apply
@@ -757,6 +829,19 @@ fn not_found(name: &str) -> PluginError {
         "profile_not_found",
         format!("no profile named `{name}`"),
         "check profile.list for the available profile names",
+    )
+}
+
+/// `profile.pull` hit a non-fast-forward or conflict: this machine and
+/// the remote have each moved on independently, so nothing was changed.
+fn sync_conflict(name: &str) -> PluginError {
+    PluginError::coded(
+        "profile_sync_conflict",
+        format!(
+            "profile `{name}` has diverged from its remote and cannot be \
+             fast-forwarded"
+        ),
+        "resolve it in a terminal inside the distribution, then pull again",
     )
 }
 
@@ -1560,5 +1645,205 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         let _ = fs::remove_dir_all(&ws);
         let _ = fs::remove_dir_all(&harness_dir);
+    }
+
+    // ------------------------------------ set_remote / push / pull
+
+    /// A fresh bare repository standing in for the private remote a
+    /// profile syncs through — a real `git` transport (a filesystem
+    /// path), not a fake.
+    fn bare_remote(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "willie-profiles-plugin-remote-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        // `-b main` matches every profile repo's own default branch
+        // (see `git::init`): a bare repo's `HEAD` otherwise follows
+        // whatever `init.defaultBranch` this machine's git config
+        // carries, and a clone's checkout follows that — if it is not
+        // `main`, a clone sees an empty working tree even though `main`
+        // itself has every commit.
+        git::run(&dir, &["init", "-q", "--bare", "-b", "main"]).unwrap();
+        dir
+    }
+
+    /// `git clone <remote> <dest>` plus a fixed local identity — how a
+    /// profile first arrives on the user's other machine (a manual
+    /// clone, outside Willie); `profile.pull` carries it from there.
+    fn clone_profile(remote: &Path, dest: &Path) {
+        let output = std::process::Command::new("git")
+            .arg("clone")
+            .arg("-q")
+            .arg(remote)
+            .arg(dest)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        git::run(dest, &["config", "user.name", "Willie"]).unwrap();
+        git::run(dest, &["config", "user.email", "willie@localhost"]).unwrap();
+    }
+
+    #[test]
+    fn set_remote_then_push_publishes_and_a_fresh_clone_pulls_the_update() {
+        let dir_a = scratch_dir("sync-a");
+        let dir_b = scratch_dir("sync-b");
+        let remote = bare_remote("sync");
+        let ctx_a = PluginCtx::new(&dir_a, &noop_emit);
+        let mut plugin = ProfilesPlugin;
+
+        plugin
+            .handle(&ctx_a, req("profile.create", json!({"name": "x"})))
+            .unwrap();
+        plugin
+            .handle(
+                &ctx_a,
+                req(
+                    "profile.set_remote",
+                    json!({"name": "x", "url": remote.to_string_lossy()}),
+                ),
+            )
+            .unwrap();
+        plugin
+            .handle(&ctx_a, req("profile.push", json!({"name": "x"})))
+            .unwrap();
+
+        // A second machine's profile store: a plain `git clone` of the
+        // remote, the way it would arrive there for the first time.
+        clone_profile(&remote, &dir_b.join("x"));
+        assert!(dir_b.join("x/profile.toml").is_file());
+
+        // A later edit on the first machine is pushed...
+        plugin
+            .handle(
+                &ctx_a,
+                req(
+                    "profile.write_fragment",
+                    json!({
+                        "name": "x",
+                        "fragment": "instructions",
+                        "content": "from a"
+                    }),
+                ),
+            )
+            .unwrap();
+        plugin
+            .handle(&ctx_a, req("profile.push", json!({"name": "x"})))
+            .unwrap();
+
+        // ...and `profile.pull` on the second machine fast-forwards to it.
+        let ctx_b = PluginCtx::new(&dir_b, &noop_emit);
+        plugin
+            .handle(&ctx_b, req("profile.pull", json!({"name": "x"})))
+            .unwrap();
+        assert_eq!(
+            fs::read_to_string(dir_b.join("x/CLAUDE.md")).unwrap(),
+            "from a"
+        );
+
+        let _ = fs::remove_dir_all(&dir_a);
+        let _ = fs::remove_dir_all(&dir_b);
+        let _ = fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn pull_on_a_divergent_history_is_profile_sync_conflict() {
+        let dir_a = scratch_dir("conflict-a");
+        let dir_b = scratch_dir("conflict-b");
+        let remote = bare_remote("conflict");
+        let ctx_a = PluginCtx::new(&dir_a, &noop_emit);
+        let ctx_b = PluginCtx::new(&dir_b, &noop_emit);
+        let mut plugin = ProfilesPlugin;
+
+        plugin
+            .handle(&ctx_a, req("profile.create", json!({"name": "x"})))
+            .unwrap();
+        plugin
+            .handle(
+                &ctx_a,
+                req(
+                    "profile.set_remote",
+                    json!({"name": "x", "url": remote.to_string_lossy()}),
+                ),
+            )
+            .unwrap();
+        plugin
+            .handle(&ctx_a, req("profile.push", json!({"name": "x"})))
+            .unwrap();
+        clone_profile(&remote, &dir_b.join("x"));
+
+        // `b` edits and commits locally, without pushing.
+        plugin
+            .handle(
+                &ctx_b,
+                req(
+                    "profile.write_fragment",
+                    json!({
+                        "name": "x",
+                        "fragment": "instructions",
+                        "content": "from b"
+                    }),
+                ),
+            )
+            .unwrap();
+
+        // `a` edits, commits, and pushes ahead: the two histories now
+        // diverge.
+        plugin
+            .handle(
+                &ctx_a,
+                req(
+                    "profile.write_fragment",
+                    json!({
+                        "name": "x",
+                        "fragment": "settings",
+                        "content": "{\"a\": 1}"
+                    }),
+                ),
+            )
+            .unwrap();
+        plugin
+            .handle(&ctx_a, req("profile.push", json!({"name": "x"})))
+            .unwrap();
+
+        let err = plugin
+            .handle(&ctx_b, req("profile.pull", json!({"name": "x"})))
+            .unwrap_err();
+        assert_eq!(err.code(), "profile_sync_conflict");
+
+        let _ = fs::remove_dir_all(&dir_a);
+        let _ = fs::remove_dir_all(&dir_b);
+        let _ = fs::remove_dir_all(&remote);
+    }
+
+    #[test]
+    fn an_unknown_profile_is_refused_on_set_remote_push_and_pull() {
+        let dir = scratch_dir("unknown-sync");
+        let ctx = PluginCtx::new(&dir, &noop_emit);
+        let mut plugin = ProfilesPlugin;
+
+        let err = plugin
+            .handle(
+                &ctx,
+                req(
+                    "profile.set_remote",
+                    json!({"name": "ghost", "url": "https://example.invalid/x.git"}),
+                ),
+            )
+            .unwrap_err();
+        assert_eq!(err.code(), "profile_not_found");
+
+        let err = plugin
+            .handle(&ctx, req("profile.push", json!({"name": "ghost"})))
+            .unwrap_err();
+        assert_eq!(err.code(), "profile_not_found");
+
+        let err = plugin
+            .handle(&ctx, req("profile.pull", json!({"name": "ghost"})))
+            .unwrap_err();
+        assert_eq!(err.code(), "profile_not_found");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

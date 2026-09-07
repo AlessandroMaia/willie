@@ -250,6 +250,9 @@ with the plugin codes there, not the ones below. A profile is
 | `profile.write_fragment` | `{ name, fragment, content }` | `{ content }` |
 | `profile.check` | `{ name, project_id }` | `{ changes: [Change] }` |
 | `profile.apply` | `{ name, project_id }` | `{ changes: [Change], backup_path }` |
+| `profile.set_remote` | `{ name, url }` | `{}` |
+| `profile.push` | `{ name }` | `{}` |
+| `profile.pull` | `{ name }` | `{}` |
 
 `fragment` is one of `settings`, `instructions`, `mcp` (booleans in
 `profile.toml`'s `[fragments]` table), or `rules/<file>` / `hooks/<file>`
@@ -289,8 +292,21 @@ workspace-relative ones) — every other project's sessions read that
 file, so a profile opts into touching it explicitly rather than by
 surprise.
 
-Phase 3 (`profile.set_remote`/`push`/`pull`, the minimal sync) is a
-later slice of this same plugin and not yet built.
+`profile.set_remote`/`push`/`pull` (Phase 3, the minimal sync) carry a
+profile between the user's two machines through a private git remote the
+user configures, over the same plugin-owned `git` — no credential
+handling beyond what the distribution's own `git` already has (an SSH
+remote uses the session's keys story, out of scope here). `set_remote`
+adds `origin` pointing at `url`, or repoints it with `set-url` if one is
+already configured; it is safe to call again to point an existing
+profile at a new remote. `push` runs `git push -u origin HEAD`,
+publishing the profile's current history and recording the upstream so
+a later `pull` needs no branch name. `pull` runs `git pull --ff-only`;
+a divergent history — this machine and the remote each have commits the
+other lacks, so no fast-forward exists — is refused as
+`profile_sync_conflict` naming the profile, rather than left to git to
+attempt a merge that could conflict inside the profile's own tracked
+files.
 
 ## `state.*`
 | Method | Params | Result |
@@ -461,13 +477,14 @@ above); none of them mark the plugin `degraded` — each is a legitimate
 | Code | When | Remediation |
 | --- | --- | --- |
 | `profile_exists` | `profile.create` names a profile that already has a directory under `store_dir` | pick a different name, or edit the existing profile |
-| `profile_not_found` | `profile.read_fragment`/`write_fragment` names a **valid-shaped** profile name with no `profile.toml` under it | check `profile.list` for the available profile names |
+| `profile_not_found` | `profile.read_fragment`/`write_fragment`/`set_remote`/`push`/`pull` names a **valid-shaped** profile name with no `profile.toml` under it | check `profile.list` for the available profile names |
 | `profile_fragment_unknown` | `profile.read_fragment`/`write_fragment`'s `fragment` is not `settings`, `instructions`, `mcp`, or a `rules/<file>`/`hooks/<file>` naming a single, safe file name | use one of `settings`, `instructions`, `mcp`, `rules/<file>`, `hooks/<file>` |
 | `profile_name_invalid` | any of the methods' `name` is empty, contains a path separator, is `.`/`..`, or opens with a Windows drive-letter pattern (`C:foo`, `a:bar`) — checked before any path is built from it, and re-checked after joining it onto `store_dir` in case the join itself produced something outside it (belt and suspenders, since this crate has no `cfg(target_os = "linux")` of its own and so also builds and runs under Windows path semantics) | use a name with no path separators, not `.` or `..`, and not shaped like a drive letter |
 | `profile_target_missing` | `profile.check`/`profile.apply` against a project whose ext4 `workspace` directory does not exist on disk — checked first, before any fragment is read | re-add the project (its ext4 clone is gone) before checking or applying a profile |
 | `profile_fragment_invalid` | an active `settings`/`mcp` fragment, or the project's own existing `.claude/settings.json` (or the harness state's), is not valid JSON — from the pure merge in `apply.rs`, surfaced before any write | fix the fragment's or the target's content so it parses as JSON, then check or apply again |
 | `profile_markers_malformed` | the project's existing `CLAUDE.md` has a `<!-- willie:begin -->` marker with no matching `<!-- willie:end -->` after it — refused rather than appending a second block that would never converge on a later apply | fix or remove the stray `<!-- willie:begin -->` marker in `CLAUDE.md`, then apply again |
 | `profile_fragment_missing` | an internal wiring fault: an active fragment for which `check`/`apply` did not supply target content to the pure planner — not expected to occur, since every active fragment's target is always read before planning | check the daemon log; this is a bug in Willie, not something to fix in the profile |
+| `profile_sync_conflict` | `profile.pull`'s `git pull --ff-only` hit a non-fast-forward or conflict: this machine and the remote have each moved on independently, so no fast-forward exists and nothing was changed | resolve it in a terminal inside the distribution, then pull again |
 
 ## Engine problem codes
 
