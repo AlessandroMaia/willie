@@ -111,4 +111,22 @@ describe("ToolsScreen", () => {
     expect(await screen.findByText("installed v2.2.0")).toBeDefined();
     expect(screen.getByText("updated outside Willie")).toBeDefined();
   });
+
+  it("does not note a recorded version for a tool that is not installed", async () => {
+    const removed: ToolStatus = {
+      id: "claude-code",
+      name: "Claude Code",
+      installed: false,
+      version: undefined,
+      recorded_version: "1.2.3",
+    };
+    ipc.tools.list.mockResolvedValue({ tools: [removed] });
+
+    render(<ToolsScreen />);
+
+    expect(await screen.findByText("Claude Code")).toBeDefined();
+    expect(screen.getByText("not installed")).toBeDefined();
+    expect(screen.getByRole("button", { name: "Install" })).toBeDefined();
+    expect(screen.queryByText(/updated outside/i)).toBeNull();
+  });
 });

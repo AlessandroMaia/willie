@@ -85,6 +85,7 @@ export function ToolsScreen() {
       <ItemGroup className="gap-1">
         {toolList.map((status) => {
           const outdatedRecord =
+            status.installed &&
             status.recorded_version !== undefined &&
             status.recorded_version !== status.version;
           return (
