@@ -54,3 +54,5 @@ Things deliberately left open or explicitly rejected for now, and why.
 | 0020 | the terminal output is filtered: the sequences that act on the host or echo attacker text are dropped, the fixed-form queries the harness needs pass |
 | 0021 | the daemon's local socket: one dispatcher, request and reply, no shutdown |
 | 0022 | the managed-tool model: the harness registry is the catalogue, the manifest records installs |
+| 0023 | the plugin host: a compiled-in registry, file-based enablement, isolated failure |
+| 0024 | profiles apply with a format-preserving merge, a differential backup, and project-only settings by default |

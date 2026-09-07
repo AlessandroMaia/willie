@@ -4,21 +4,29 @@
 //! rules, hooks, MCP servers). Applying one writes into the project and
 //! into the harness state while preserving the existing files' format.
 //!
-//! Phase 1 (this crate's `handle`) only creates a profile and lets its
+//! Phase 1 (this crate's `handle`) creates a profile and lets its
 //! fragments be read and written, each edit its own git commit inside the
 //! profile's own repository at `<store_dir>/<name>/`. [`apply`] carries
-//! Phase 2's format-preserving merge, pure over its inputs; `handle` does
-//! not yet route to it — that, and the minimal sync
-//! (`profile.push`/`pull`), are later phases of this slice.
+//! Phase 2's format-preserving merge, pure over its inputs. `handle`
+//! routes `profile.check`/`profile.apply` to it: `check` reads a
+//! project's target files and plans the changes without writing; `apply`
+//! additionally backs up every changing file under
+//! `<workspace>/.willie-bak/<timestamp>/` and writes. Neither method
+//! resolves a project id itself — the daemon fills the resolved
+//! `_workspace` (and `_harness_settings`) into the request params before
+//! `handle` ever runs (see `crates/willied/src/handlers.rs`'s
+//! `profile_handle`), so this plugin never reaches into daemon state.
 
 pub mod apply;
 mod git;
 mod model;
 
 use std::{
+    collections::HashMap,
     fs,
     io::ErrorKind,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::Deserialize;
@@ -28,7 +36,10 @@ use willie_plugin_api::{
     PluginResponse, Scope,
 };
 
-use model::{Fragment, Profile, ProfileSummary, is_valid_profile_name};
+use apply::{Change, ChangeKind, FragmentContent, Targets};
+use model::{
+    Fragment, Profile, ProfileSummary, SettingsScope, is_valid_profile_name,
+};
 
 /// The profiles plugin.
 #[derive(Debug, Clone, Copy, Default)]
@@ -61,6 +72,8 @@ impl Plugin for ProfilesPlugin {
             "profile.create" => create(ctx, req.params),
             "profile.read_fragment" => read_fragment(ctx, req.params),
             "profile.write_fragment" => write_fragment(ctx, req.params),
+            "profile.check" => check(ctx, req.params),
+            "profile.apply" => apply_to_project(ctx, req.params),
             other => Err(PluginError::BadRequest(format!(
                 "unknown method `{other}`"
             ))),
@@ -86,6 +99,35 @@ struct WriteFragmentParams {
     name: String,
     fragment: String,
     content: String,
+}
+
+/// `profile.check`'s params. `workspace`/`harness_settings` are never
+/// supplied by a caller directly — they arrive as `_workspace`/
+/// `_harness_settings`, filled in by the daemon's `profile_handle` seam
+/// before this plugin ever runs (see the module doc). A bare `project_id`
+/// with no matching `_workspace` is a caller wiring bug, so `workspace`
+/// is required rather than optional: missing, it is `plugin_bad_request`,
+/// distinct from `profile_target_missing` (a resolved workspace whose
+/// directory is gone).
+#[derive(Debug, Deserialize)]
+struct CheckParams {
+    name: String,
+    #[serde(rename = "_workspace")]
+    workspace: String,
+    #[serde(rename = "_harness_settings", default)]
+    harness_settings: Option<String>,
+}
+
+/// `profile.apply`'s params — the same shape as `CheckParams`; kept as
+/// its own type rather than reused so the two methods' request shapes
+/// can diverge without one accidentally affecting the other.
+#[derive(Debug, Deserialize)]
+struct ApplyParams {
+    name: String,
+    #[serde(rename = "_workspace")]
+    workspace: String,
+    #[serde(rename = "_harness_settings", default)]
+    harness_settings: Option<String>,
 }
 
 /// Parses `params` into `T`, or a `BadRequest` naming what did not fit.
@@ -219,6 +261,398 @@ fn write_fragment(
         .map_err(git_fault)?;
 
     json_response(&json!({ "content": content }))
+}
+
+/// `profile.check { name, project_id }` (the daemon resolves `project_id`
+/// to `_workspace`/`_harness_settings`, see the module doc): plans the
+/// changes applying `name` would make, without writing anything.
+fn check(
+    ctx: &PluginCtx<'_>,
+    params: Value,
+) -> Result<PluginResponse, PluginError> {
+    let CheckParams {
+        name,
+        workspace,
+        harness_settings,
+    } = parse_params(params)?;
+    let dir = existing_profile_dir(ctx, &name)?;
+    let profile = read_profile_toml(&dir)?;
+    let workspace = PathBuf::from(workspace);
+    let harness_settings = harness_settings.map(PathBuf::from);
+
+    let changes = plan_project_changes(
+        &dir,
+        &profile,
+        &workspace,
+        harness_settings.as_deref(),
+    )?;
+
+    json_response(&json!({ "changes": changes }))
+}
+
+/// `profile.apply { name, project_id }`: plans the same changes `check`
+/// would, then backs up every changing target under
+/// `<workspace>/.willie-bak/<timestamp>/` and writes them. Named
+/// `apply_to_project` (not `apply`, `apply.rs`'s own module name) purely
+/// for readability at the call site — the two do not collide, `mod
+/// apply` and a same-named `fn` live in different namespaces, but a
+/// human skimming `handle`'s match arms should not have to know that.
+fn apply_to_project(
+    ctx: &PluginCtx<'_>,
+    params: Value,
+) -> Result<PluginResponse, PluginError> {
+    let ApplyParams {
+        name,
+        workspace,
+        harness_settings,
+    } = parse_params(params)?;
+    let dir = existing_profile_dir(ctx, &name)?;
+    let profile = read_profile_toml(&dir)?;
+    let workspace = PathBuf::from(workspace);
+    let harness_settings = harness_settings.map(PathBuf::from);
+
+    let changes = plan_project_changes(
+        &dir,
+        &profile,
+        &workspace,
+        harness_settings.as_deref(),
+    )?;
+
+    let backup_dir = backup_changes(&workspace, &changes)?;
+    write_changes(&dir, &workspace, &changes)?;
+
+    json_response(&json!({
+        "changes": changes,
+        "backup_path": backup_dir.to_string_lossy(),
+    }))
+}
+
+// ----------------------------------------------------- check / apply
+
+/// Reads a profile's active fragments and the corresponding target
+/// files, then runs [`apply::plan_changes`] to compute what applying
+/// would do. Shared by `check` (which stops here) and `apply_to_project`
+/// (which additionally backs up and writes). A missing `workspace`
+/// directory is `profile_target_missing`, checked before anything is
+/// read — neither `check` nor `apply_to_project` can answer meaningfully
+/// against a project whose ext4 clone is gone. A `settings` fragment
+/// marked `scope = "global"` in `profile.toml` additionally plans a
+/// second change against the harness state's own `settings.json`
+/// (`harness_settings`), independent of the project's — each keeps its
+/// own existing key order.
+fn plan_project_changes(
+    profile_dir: &Path,
+    profile: &Profile,
+    workspace: &Path,
+    harness_settings: Option<&Path>,
+) -> Result<Vec<Change>, PluginError> {
+    if !workspace.is_dir() {
+        return Err(target_missing(workspace));
+    }
+
+    let settings_content = read_fragment_pair(
+        profile_dir,
+        workspace,
+        "settings.json",
+        ".claude/settings.json",
+        profile.fragments.settings,
+    )?;
+    let mcp_content = read_fragment_pair(
+        profile_dir,
+        workspace,
+        "mcp.json",
+        ".claude/settings.json",
+        profile.fragments.mcp,
+    )?;
+    let instructions_content = read_fragment_pair(
+        profile_dir,
+        workspace,
+        "CLAUDE.md",
+        "CLAUDE.md",
+        profile.fragments.instructions,
+    )?;
+    let rules = read_file_family(
+        profile_dir,
+        workspace,
+        "rules",
+        &profile.fragments.rules,
+    )?;
+    let hooks = read_file_family(
+        profile_dir,
+        workspace,
+        "hooks",
+        &profile.fragments.hooks,
+    )?;
+
+    let targets = Targets {
+        settings: settings_content.clone(),
+        mcp: mcp_content.clone(),
+        instructions: instructions_content,
+        rules,
+        hooks,
+    };
+    let mut changes = apply::plan_changes(profile, &targets)
+        .map_err(apply_error_to_plugin)?;
+
+    if profile.fragments.settings
+        && profile.fragments.settings_scope == SettingsScope::Global
+        && let Some(harness_path) = harness_settings
+        && let Some(change) = plan_harness_settings_change(
+            profile,
+            settings_content,
+            mcp_content,
+            harness_path,
+        )?
+    {
+        changes.push(change);
+    }
+
+    Ok(changes)
+}
+
+/// The second, harness-scoped `Change` a `scope = "global"` `settings`
+/// fragment plans: the same `settings`/`mcp` fragment content the
+/// project's own change used, merged instead against the harness
+/// state's own existing `settings.json` — a different destination can
+/// have different existing content and key order, so this is not simply
+/// a copy of the project's change. Reuses [`apply::plan_changes`] with a
+/// profile mask that turns off every fragment but `settings`/`mcp` (the
+/// only two that ever target `.claude/settings.json`), so the harness
+/// destination is never handed a rule or hook file it has no directory
+/// for. The resulting `Change`'s `path` is overwritten with
+/// `harness_path` itself (an absolute path) — `apply_to_project`'s
+/// `resolve_dest` tells an absolute destination from the project's
+/// relative ones by that alone.
+fn plan_harness_settings_change(
+    profile: &Profile,
+    settings_content: Option<FragmentContent>,
+    mcp_content: Option<FragmentContent>,
+    harness_path: &Path,
+) -> Result<Option<Change>, PluginError> {
+    let harness_existing = read_optional(harness_path)?;
+    let mut harness_profile = profile.clone();
+    harness_profile.fragments.instructions = false;
+    harness_profile.fragments.rules.clear();
+    harness_profile.fragments.hooks.clear();
+
+    let harness_targets = Targets {
+        settings: settings_content.map(|c| FragmentContent {
+            fragment: c.fragment,
+            existing: harness_existing.clone(),
+        }),
+        mcp: mcp_content.map(|c| FragmentContent {
+            fragment: c.fragment,
+            existing: harness_existing,
+        }),
+        ..Targets::default()
+    };
+    let mut harness_changes =
+        apply::plan_changes(&harness_profile, &harness_targets)
+            .map_err(apply_error_to_plugin)?;
+    let Some(mut change) = harness_changes.pop() else {
+        return Ok(None);
+    };
+    change.path = harness_path.to_string_lossy().into_owned();
+    Ok(Some(change))
+}
+
+/// One fragment's inputs when `active` — the fragment file under
+/// `profile_dir` (an unwritten-but-active fragment reads as empty, same
+/// as `read_fragment`) and the existing content at
+/// `workspace.join(target_rel)`. `None` when the fragment is not active:
+/// `plan_changes` never looks at it, so there is nothing to read.
+fn read_fragment_pair(
+    profile_dir: &Path,
+    workspace: &Path,
+    fragment_file: &str,
+    target_rel: &str,
+    active: bool,
+) -> Result<Option<FragmentContent>, PluginError> {
+    if !active {
+        return Ok(None);
+    }
+    let fragment = read_required(&profile_dir.join(fragment_file))?;
+    let existing = read_optional(&workspace.join(target_rel))?;
+    Ok(Some(FragmentContent { fragment, existing }))
+}
+
+/// Every active `rules`/`hooks` file's inputs, keyed by file name — the
+/// same shape `apply::Targets::rules`/`hooks` expect.
+fn read_file_family(
+    profile_dir: &Path,
+    workspace: &Path,
+    family: &str,
+    names: &[String],
+) -> Result<HashMap<String, FragmentContent>, PluginError> {
+    let mut map = HashMap::new();
+    for name in names {
+        let fragment = read_required(&profile_dir.join(family).join(name))?;
+        let existing =
+            read_optional(&workspace.join(".claude").join(family).join(name))?;
+        map.insert(name.clone(), FragmentContent { fragment, existing });
+    }
+    Ok(map)
+}
+
+/// A file's content, or an empty string if it does not exist yet — a
+/// profile fragment marked active in `profile.toml` whose file was
+/// somehow never written reads the same way `read_fragment` treats it.
+fn read_required(path: &Path) -> Result<String, PluginError> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(s),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(io_fault(path, e)),
+    }
+}
+
+/// A target file's content, or `None` if it does not exist yet (the
+/// change plans as a `Create` rather than a `Merge`/`Overwrite`).
+fn read_optional(path: &Path) -> Result<Option<String>, PluginError> {
+    match fs::read_to_string(path) {
+        Ok(s) => Ok(Some(s)),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(io_fault(path, e)),
+    }
+}
+
+/// Backs up every changing target's *current* content (a `Merge`/
+/// `Overwrite`; a `Create` has nothing to back up yet) into
+/// `<workspace>/.willie-bak/<timestamp>/`, before any write — a
+/// differential backup, not a full snapshot. Returns the backup
+/// directory even when nothing was actually copied (every change was a
+/// `Create`): `apply_to_project` still reports a `backup_path`, and an
+/// empty directory is an honest answer to "what did applying change".
+fn backup_changes(
+    workspace: &Path,
+    changes: &[Change],
+) -> Result<PathBuf, PluginError> {
+    let backup_root = workspace.join(".willie-bak").join(backup_timestamp());
+    for change in changes {
+        if change.kind == ChangeKind::Create {
+            continue;
+        }
+        let dest = resolve_dest(workspace, &change.path);
+        let backup_dest = backup_root.join(backup_relative_path(&change.path));
+        if let Some(parent) = backup_dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| io_fault(parent, e))?;
+        }
+        match fs::read(&dest) {
+            Ok(bytes) => fs::write(&backup_dest, bytes)
+                .map_err(|e| io_fault(&backup_dest, e))?,
+            // Changed on disk since planning: nothing to back up.
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(io_fault(&dest, e)),
+        }
+    }
+    Ok(backup_root)
+}
+
+/// Writes every change's `after` content to its destination, creating
+/// parent directories as needed. A hook file's executable bit is
+/// best-effort copied from the profile's own fragment file afterwards —
+/// its content is already correct either way, so a failure to copy the
+/// mode is not surfaced as a fault.
+fn write_changes(
+    profile_dir: &Path,
+    workspace: &Path,
+    changes: &[Change],
+) -> Result<(), PluginError> {
+    for change in changes {
+        let dest = resolve_dest(workspace, &change.path);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent).map_err(|e| io_fault(parent, e))?;
+        }
+        fs::write(&dest, &change.after).map_err(|e| io_fault(&dest, e))?;
+        if let Some(name) = change.path.strip_prefix(".claude/hooks/") {
+            copy_hook_mode(&profile_dir.join("hooks").join(name), &dest);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn copy_hook_mode(source: &Path, dest: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = fs::metadata(source) {
+        let _ = fs::set_permissions(
+            dest,
+            fs::Permissions::from_mode(meta.permissions().mode()),
+        );
+    }
+}
+
+#[cfg(not(unix))]
+fn copy_hook_mode(_source: &Path, _dest: &Path) {}
+
+/// A change's destination: `workspace.join(path)` for a project-relative
+/// path, or `path` itself when it is absolute (the harness-scoped
+/// `settings.json`, outside the workspace entirely).
+fn resolve_dest(workspace: &Path, path: &str) -> PathBuf {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        workspace.join(p)
+    }
+}
+
+/// Where a change's *prior* content backs up to, relative to the backup
+/// root: the change's own relative path, mirrored — except an absolute
+/// path (the harness-scoped settings.json) backs up under a fixed name,
+/// since there is at most one such destination and its own path carries
+/// no meaningful relative structure under the workspace.
+fn backup_relative_path(path: &str) -> PathBuf {
+    let p = Path::new(path);
+    if p.is_absolute() {
+        PathBuf::from("harness-settings.json")
+    } else {
+        p.to_path_buf()
+    }
+}
+
+/// A monotonic-enough backup folder name: decimal nanoseconds since the
+/// Unix epoch. Plain `std`, no date-time dependency; not meant to be
+/// read as a calendar date, only to keep repeated applies from
+/// collapsing into the same backup directory.
+fn backup_timestamp() -> String {
+    let dur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}{:09}", dur.as_secs(), dur.subsec_nanos())
+}
+
+/// Maps a pure [`apply::ApplyError`] onto the plugin's coded error,
+/// preserving its code and message and adding a remediation per code —
+/// `apply.rs` has no business knowing about `PluginError`'s shape.
+fn apply_error_to_plugin(e: apply::ApplyError) -> PluginError {
+    let remediation = match e.code {
+        "profile_fragment_invalid" => {
+            "fix the fragment's or the target's content so it parses as \
+             JSON, then check or apply again"
+        }
+        "profile_markers_malformed" => {
+            "fix or remove the stray <!-- willie:begin --> marker in the \
+             target file, then apply again"
+        }
+        "profile_fragment_missing" => {
+            "this is a wiring bug in Willie, not something to fix in the \
+             profile; check the daemon log"
+        }
+        _ => "check the daemon log for details",
+    };
+    PluginError::coded(e.code, e.message, remediation)
+}
+
+fn target_missing(workspace: &Path) -> PluginError {
+    PluginError::coded(
+        "profile_target_missing",
+        format!(
+            "the project workspace {} does not exist",
+            workspace.display()
+        ),
+        "the project's ext4 workspace is gone; re-add the project before \
+         checking or applying a profile",
+    )
 }
 
 // --------------------------------------------------------------- helpers
@@ -362,6 +796,20 @@ mod tests {
     fn scratch_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "willie-profiles-plugin-{name}-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A unique, empty scratch directory standing in for a project's ext4
+    /// workspace — `check`/`apply` read and write `.claude/`, `CLAUDE.md`
+    /// and `.willie-bak/` under it, distinct from the profile store dir
+    /// above.
+    fn workspace_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "willie-profiles-workspace-{name}-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
@@ -721,5 +1169,396 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code(), "plugin_bad_request");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    // ------------------------------------------- profile.check / apply
+
+    #[test]
+    fn check_lists_changes_without_writing_anything() {
+        let dir = scratch_dir("check");
+        let ws = workspace_dir("check-ws");
+        let ctx = PluginCtx::new(&dir, &noop_emit);
+        let mut plugin = ProfilesPlugin;
+        plugin
+            .handle(&ctx, req("profile.create", json!({"name": "x"})))
+            .unwrap();
+        plugin
+            .handle(
+                &ctx,
+                req(
+                    "profile.write_fragment",
+                    json!({
+                        "name": "x",
+                        "fragment": "settings",
+                        "content": "{\"a\": 1}"
+                    }),
+                ),
+            )
+            .unwrap();
+
+        let resp = ok_value(plugin.handle(
+            &ctx,
+            req(
+                "profile.check",
+                json!({"name": "x", "_workspace": ws.to_string_lossy()}),
+            ),
+        ));
+        let changes = resp["changes"].as_array().unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0]["path"], ".claude/settings.json");
+        assert_eq!(changes[0]["kind"], "create");
+
+        // Nothing was written: `check` only previews.
+        assert!(!ws.join(".claude").exists());
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn apply_writes_settings_claude_md_and_a_rule_and_backs_up_the_prior_files()
+    {
+        let dir = scratch_dir("apply");
+        let ws = workspace_dir("apply-ws");
+        fs::create_dir_all(ws.join(".claude/rules")).unwrap();
+        fs::write(ws.join(".claude/settings.json"), "{\"b\": 1, \"a\": 2}\n")
+            .unwrap();
+        fs::write(ws.join("CLAUDE.md"), "# Notes\n\nprose\n").unwrap();
+        fs::write(ws.join(".claude/rules/no-force-push.md"), "old rule\n")
+            .unwrap();
+
+        let ctx = PluginCtx::new(&dir, &noop_emit);
+        let mut plugin = ProfilesPlugin;
+        plugin
+            .handle(&ctx, req("profile.create", json!({"name": "x"})))
+            .unwrap();
+        plugin
+            .handle(
+                &ctx,
+                req(
+                    "profile.write_fragment",
+                    json!({
+                        "name": "x",
+                        "fragment": "settings",
+                        "content": "{\"a\": 20, \"c\": 3}"
+                    }),
+                ),
+            )
+            .unwrap();
+        plugin
+            .handle(
+                &ctx,
+                req(
+                    "profile.write_fragment",
+                    json!({
+                        "name": "x",
+                        "fragment": "instructions",
+                        "content": "new"
+                    }),
+                ),
+            )
+            .unwrap();
+        plugin
+            .handle(
+                &ctx,
+                req(
+                    "profile.write_fragment",
+                    json!({
+                        "name": "x",
+                        "fragment": "rules/no-force-push.md",
+                        "content": "new rule\n"
+                    }),
+                ),
+            )
+            .unwrap();
+
+        let resp = ok_value(plugin.handle(
+            &ctx,
+            req(
+                "profile.apply",
+                json!({"name": "x", "_workspace": ws.to_string_lossy()}),
+            ),
+        ));
+
+        // settings.json is merged and keeps the target's key order: `b`
+        // first (untouched), then `a` (updated in place), then `c`
+        // (appended).
+        let settings =
+            fs::read_to_string(ws.join(".claude/settings.json")).unwrap();
+        let b_pos = settings.find("\"b\"").unwrap();
+        let a_pos = settings.find("\"a\"").unwrap();
+        let c_pos = settings.find("\"c\"").unwrap();
+        assert!(b_pos < a_pos && a_pos < c_pos, "settings: {settings}");
+
+        // CLAUDE.md is merged between the markers; the prose is kept.
+        let claude_md = fs::read_to_string(ws.join("CLAUDE.md")).unwrap();
+        assert!(claude_md.starts_with("# Notes\n\nprose\n"), "{claude_md}");
+        assert!(
+            claude_md
+                .contains("<!-- willie:begin -->\nnew\n<!-- willie:end -->"),
+            "{claude_md}"
+        );
+
+        // The rule file was overwritten with the fragment's content.
+        let rule =
+            fs::read_to_string(ws.join(".claude/rules/no-force-push.md"))
+                .unwrap();
+        assert_eq!(rule, "new rule\n");
+
+        // A backup was made of every prior file, under the workspace.
+        let backup_path = resp["backup_path"].as_str().unwrap();
+        let backup_dir = PathBuf::from(backup_path);
+        assert!(backup_dir.starts_with(&ws), "{backup_path}");
+        assert_eq!(
+            fs::read_to_string(backup_dir.join(".claude/settings.json"))
+                .unwrap(),
+            "{\"b\": 1, \"a\": 2}\n"
+        );
+        assert_eq!(
+            fs::read_to_string(backup_dir.join("CLAUDE.md")).unwrap(),
+            "# Notes\n\nprose\n"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                backup_dir.join(".claude/rules/no-force-push.md")
+            )
+            .unwrap(),
+            "old rule\n"
+        );
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn a_second_apply_is_idempotent_where_the_fragment_already_merged() {
+        let dir = scratch_dir("apply-twice");
+        let ws = workspace_dir("apply-twice-ws");
+        let ctx = PluginCtx::new(&dir, &noop_emit);
+        let mut plugin = ProfilesPlugin;
+        plugin
+            .handle(&ctx, req("profile.create", json!({"name": "x"})))
+            .unwrap();
+        plugin
+            .handle(
+                &ctx,
+                req(
+                    "profile.write_fragment",
+                    json!({
+                        "name": "x",
+                        "fragment": "instructions",
+                        "content": "new"
+                    }),
+                ),
+            )
+            .unwrap();
+
+        let params = json!({"name": "x", "_workspace": ws.to_string_lossy()});
+        plugin
+            .handle(&ctx, req("profile.apply", params.clone()))
+            .unwrap();
+        let first = fs::read_to_string(ws.join("CLAUDE.md")).unwrap();
+
+        plugin.handle(&ctx, req("profile.apply", params)).unwrap();
+        let second = fs::read_to_string(ws.join("CLAUDE.md")).unwrap();
+
+        assert_eq!(first, second);
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn an_invalid_fragment_refuses_check_and_apply_before_any_write() {
+        let dir = scratch_dir("invalid");
+        let ws = workspace_dir("invalid-ws");
+        let ctx = PluginCtx::new(&dir, &noop_emit);
+        let mut plugin = ProfilesPlugin;
+        plugin
+            .handle(&ctx, req("profile.create", json!({"name": "x"})))
+            .unwrap();
+        plugin
+            .handle(
+                &ctx,
+                req(
+                    "profile.write_fragment",
+                    json!({
+                        "name": "x",
+                        "fragment": "settings",
+                        "content": "not json"
+                    }),
+                ),
+            )
+            .unwrap();
+        let params = json!({"name": "x", "_workspace": ws.to_string_lossy()});
+
+        let err = plugin
+            .handle(&ctx, req("profile.check", params.clone()))
+            .unwrap_err();
+        assert_eq!(err.code(), "profile_fragment_invalid");
+
+        let err = plugin
+            .handle(&ctx, req("profile.apply", params))
+            .unwrap_err();
+        assert_eq!(err.code(), "profile_fragment_invalid");
+
+        // Neither call wrote anything to the workspace.
+        assert!(!ws.join(".claude").exists());
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&ws);
+    }
+
+    #[test]
+    fn a_missing_workspace_is_profile_target_missing_for_check_and_apply() {
+        let dir = scratch_dir("missing-ws");
+        let ctx = PluginCtx::new(&dir, &noop_emit);
+        let mut plugin = ProfilesPlugin;
+        plugin
+            .handle(&ctx, req("profile.create", json!({"name": "x"})))
+            .unwrap();
+
+        let ghost_ws = std::env::temp_dir()
+            .join(format!("willie-profiles-ghost-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&ghost_ws);
+        let params =
+            json!({"name": "x", "_workspace": ghost_ws.to_string_lossy()});
+
+        let err = plugin
+            .handle(&ctx, req("profile.check", params.clone()))
+            .unwrap_err();
+        assert_eq!(err.code(), "profile_target_missing");
+
+        let err = plugin
+            .handle(&ctx, req("profile.apply", params))
+            .unwrap_err();
+        assert_eq!(err.code(), "profile_target_missing");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_global_scoped_settings_fragment_also_applies_to_the_harness_settings()
+    {
+        let dir = scratch_dir("global-scope");
+        let ws = workspace_dir("global-scope-ws");
+        let harness_dir = workspace_dir("global-scope-harness");
+        let harness_settings = harness_dir.join("settings.json");
+        fs::write(&harness_settings, "{\"z\": 9}\n").unwrap();
+
+        let ctx = PluginCtx::new(&dir, &noop_emit);
+        let mut plugin = ProfilesPlugin;
+        plugin
+            .handle(&ctx, req("profile.create", json!({"name": "x"})))
+            .unwrap();
+        plugin
+            .handle(
+                &ctx,
+                req(
+                    "profile.write_fragment",
+                    json!({
+                        "name": "x",
+                        "fragment": "settings",
+                        "content": "{\"theme\": \"dark\"}"
+                    }),
+                ),
+            )
+            .unwrap();
+        // Mark the settings fragment global-scoped directly, as the app's
+        // profile editor would.
+        let toml_path = dir.join("x/profile.toml");
+        let mut profile: Profile =
+            toml::from_str(&fs::read_to_string(&toml_path).unwrap()).unwrap();
+        profile.fragments.settings_scope = SettingsScope::Global;
+        fs::write(&toml_path, toml::to_string_pretty(&profile).unwrap())
+            .unwrap();
+
+        let resp = ok_value(plugin.handle(
+            &ctx,
+            req(
+                "profile.apply",
+                json!({
+                    "name": "x",
+                    "_workspace": ws.to_string_lossy(),
+                    "_harness_settings": harness_settings.to_string_lossy(),
+                }),
+            ),
+        ));
+
+        let changes = resp["changes"].as_array().unwrap();
+        assert_eq!(changes.len(), 2, "{changes:?}");
+
+        let harness_written = fs::read_to_string(&harness_settings).unwrap();
+        let value: Value = serde_json::from_str(&harness_written).unwrap();
+        assert_eq!(value["theme"], "dark");
+        assert_eq!(value["z"], 9);
+
+        // The harness settings' prior content was also backed up, under
+        // the workspace's own backup directory.
+        let backup_path = resp["backup_path"].as_str().unwrap();
+        let backed_up = fs::read_to_string(
+            PathBuf::from(backup_path).join("harness-settings.json"),
+        )
+        .unwrap();
+        assert_eq!(backed_up, "{\"z\": 9}\n");
+
+        let project_written =
+            fs::read_to_string(ws.join(".claude/settings.json")).unwrap();
+        let value: Value = serde_json::from_str(&project_written).unwrap();
+        assert_eq!(value["theme"], "dark");
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&ws);
+        let _ = fs::remove_dir_all(&harness_dir);
+    }
+
+    #[test]
+    fn a_project_scoped_settings_fragment_never_touches_the_harness_settings() {
+        // The default: even when the daemon supplies `_harness_settings`
+        // (it always resolves both paths), a `settings` fragment left at
+        // its default `Project` scope must not write there.
+        let dir = scratch_dir("project-scope");
+        let ws = workspace_dir("project-scope-ws");
+        let harness_dir = workspace_dir("project-scope-harness");
+        let harness_settings = harness_dir.join("settings.json");
+
+        let ctx = PluginCtx::new(&dir, &noop_emit);
+        let mut plugin = ProfilesPlugin;
+        plugin
+            .handle(&ctx, req("profile.create", json!({"name": "x"})))
+            .unwrap();
+        plugin
+            .handle(
+                &ctx,
+                req(
+                    "profile.write_fragment",
+                    json!({
+                        "name": "x",
+                        "fragment": "settings",
+                        "content": "{\"theme\": \"dark\"}"
+                    }),
+                ),
+            )
+            .unwrap();
+
+        let resp = ok_value(plugin.handle(
+            &ctx,
+            req(
+                "profile.apply",
+                json!({
+                    "name": "x",
+                    "_workspace": ws.to_string_lossy(),
+                    "_harness_settings": harness_settings.to_string_lossy(),
+                }),
+            ),
+        ));
+
+        let changes = resp["changes"].as_array().unwrap();
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        assert!(!harness_settings.exists());
+
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&ws);
+        let _ = fs::remove_dir_all(&harness_dir);
     }
 }

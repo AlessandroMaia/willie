@@ -156,10 +156,18 @@ impl Server {
                 handlers::state_snapshot(&self.ops, &self.state, &self.host)
             }
             // A plugin's own methods (e.g. `profile.list`) carry no
-            // top-level dispatch arm: the host splits `<id>.<method>` and
-            // routes them itself.
+            // top-level dispatch arm: `profile_handle` resolves a
+            // `project_id` in the params to the project's workspace and
+            // the harness settings path (the daemon-fills-targets seam),
+            // then the host splits `<id>.<method>` and routes to the
+            // plugin itself.
             other if other.starts_with(PLUGIN_METHOD_PREFIX) => {
-                handlers::plugin_handle(&self.host, other, req.params)
+                handlers::profile_handle(
+                    &self.state,
+                    &self.host,
+                    other,
+                    req.params,
+                )
             }
             other => Err(RpcError::new(
                 "method_not_found",
@@ -639,6 +647,56 @@ mod tests {
     /// than falling through to `method_not_found`.
     #[test]
     fn a_profile_call_while_disabled_is_plugin_disabled_not_method_not_found() {
+        let (_, resp) = roundtrip(&line("profile.list", serde_json::json!({})));
+        assert_eq!(
+            resp[0].clone().into_result().unwrap_err().code,
+            "plugin_disabled"
+        );
+    }
+
+    /// `profile.apply`'s `project_id` is resolved *before* the plugin ever
+    /// runs (the daemon-fills-targets seam, `handlers::profile_handle`): an
+    /// unknown project id is `project_not_found`, not `plugin_disabled` —
+    /// the profiles plugin is not even enabled in this test, so a
+    /// `plugin_disabled` answer would mean the call reached the host
+    /// first, which the seam must prevent.
+    #[test]
+    fn profile_apply_for_an_unknown_project_is_project_not_found_before_the_plugin_runs()
+     {
+        let (_, resp) = roundtrip(&line(
+            "profile.apply",
+            serde_json::json!({
+                "name": "x",
+                "project_id": "proj_00000000000000000000000000",
+            }),
+        ));
+        assert_eq!(
+            resp[0].clone().into_result().unwrap_err().code,
+            "project_not_found"
+        );
+    }
+
+    /// A `profile.*` call with a `project_id` field that is not a
+    /// well-formed id (rather than merely unknown) is `invalid_params`,
+    /// also before the plugin runs.
+    #[test]
+    fn profile_apply_with_a_malformed_project_id_is_invalid_params() {
+        let (_, resp) = roundtrip(&line(
+            "profile.apply",
+            serde_json::json!({"name": "x", "project_id": "not-an-id"}),
+        ));
+        assert_eq!(
+            resp[0].clone().into_result().unwrap_err().code,
+            "invalid_params"
+        );
+    }
+
+    /// A `profile.*` method that carries no `project_id` at all (e.g.
+    /// `profile.list`) is untouched by the seam and reaches the host
+    /// exactly as before — still `plugin_disabled` here, not some new
+    /// resolution error.
+    #[test]
+    fn a_profile_method_with_no_project_id_is_not_touched_by_the_seam() {
         let (_, resp) = roundtrip(&line("profile.list", serde_json::json!({})));
         assert_eq!(
             resp[0].clone().into_result().unwrap_err().code,

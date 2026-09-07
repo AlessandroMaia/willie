@@ -14,6 +14,12 @@ use serde::{Deserialize, Serialize};
 pub struct Fragments {
     #[serde(default)]
     pub settings: bool,
+    /// Where the `settings` fragment applies once active: the project's
+    /// own workspace (`Project`, the default — applying never surprises
+    /// every other project's sessions), or also the harness state every
+    /// session reads (`Global`). Read only when `settings` is active.
+    #[serde(default)]
+    pub settings_scope: SettingsScope,
     #[serde(default)]
     pub instructions: bool,
     #[serde(default)]
@@ -22,6 +28,23 @@ pub struct Fragments {
     pub hooks: Vec<String>,
     #[serde(default)]
     pub mcp: bool,
+}
+
+/// Where a `settings` fragment applies (`profile.toml`'s
+/// `fragments.settings_scope`). Kept as its own field rather than folded
+/// into the `settings` boolean: "on" and "instead of vs. also the harness
+/// state" are two different questions, and a plain flag would leave that
+/// ambiguous. Defaults to `Project` — applying a profile never changes
+/// every project's sessions as a surprise; a person opts into `Global`
+/// explicitly.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SettingsScope {
+    #[default]
+    Project,
+    Global,
 }
 
 impl Fragments {
@@ -197,11 +220,39 @@ mod tests {
     }
 
     #[test]
+    fn a_scaffolded_profile_defaults_its_settings_scope_to_project() {
+        let profile = Profile::scaffold("funcef-auth");
+        assert_eq!(profile.fragments.settings_scope, SettingsScope::Project);
+    }
+
+    #[test]
+    fn a_profile_toml_with_no_settings_scope_defaults_to_project() {
+        let back: Profile =
+            toml::from_str("name = \"x\"\n[fragments]\nsettings = true\n")
+                .unwrap();
+        assert_eq!(back.fragments.settings_scope, SettingsScope::Project);
+    }
+
+    #[test]
+    fn settings_scope_round_trips_through_toml() {
+        let mut profile = Profile::scaffold("x");
+        profile.fragments.settings = true;
+        profile.fragments.settings_scope = SettingsScope::Global;
+
+        let text = toml::to_string_pretty(&profile).unwrap();
+        let back: Profile = toml::from_str(&text).unwrap();
+
+        assert_eq!(back.fragments.settings_scope, SettingsScope::Global);
+        assert!(text.contains("settings_scope = \"global\""), "{text}");
+    }
+
+    #[test]
     fn profile_toml_round_trips_through_toml() {
         let profile = Profile {
             name: "funcef-auth".to_owned(),
             fragments: Fragments {
                 settings: true,
+                settings_scope: SettingsScope::Project,
                 instructions: true,
                 rules: vec!["no-force-push.md".to_owned()],
                 hooks: vec![],
@@ -225,6 +276,7 @@ mod tests {
     fn active_names_lines_up_with_the_fragment_grammar() {
         let fragments = Fragments {
             settings: true,
+            settings_scope: SettingsScope::Project,
             instructions: false,
             rules: vec!["a.md".to_owned(), "b.md".to_owned()],
             hooks: vec!["pre-commit".to_owned()],

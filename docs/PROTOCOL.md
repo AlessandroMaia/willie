@@ -248,6 +248,8 @@ with the plugin codes there, not the ones below. A profile is
 | `profile.create` | `{ name }` | `ProfileSummary` |
 | `profile.read_fragment` | `{ name, fragment }` | `{ content }` |
 | `profile.write_fragment` | `{ name, fragment, content }` | `{ content }` |
+| `profile.check` | `{ name, project_id }` | `{ changes: [Change] }` |
+| `profile.apply` | `{ name, project_id }` | `{ changes: [Change], backup_path }` |
 
 `fragment` is one of `settings`, `instructions`, `mcp` (booleans in
 `profile.toml`'s `[fragments]` table), or `rules/<file>` / `hooks/<file>`
@@ -261,9 +263,34 @@ returns `{ content: "" }` rather than refusing. Turning a fragment back
 off is done by editing `profile.toml` directly (the supported path,
 per the design) — there is no Phase-1 method for it.
 
-Phase 2 (`profile.check`/`profile.apply`, the format-preserving merge
-into a project) and Phase 3 (`profile.set_remote`/`push`/`pull`, the
-minimal sync) are later slices of this same plugin and not yet built.
+`profile.check`/`profile.apply` (Phase 2, the format-preserving merge
+into a project) never resolve `project_id` themselves: before either
+reaches the plugin, the daemon's `profile.*` route looks the project up
+and injects the resolved ext4 `workspace` path and the harness-state
+settings path into the request as `_workspace`/`_harness_settings` — a
+caller only ever sends `name`/`project_id`, and an unknown `project_id`
+is refused `project_not_found` at this resolution step, before the
+plugin runs at all (so it is never masked by `plugin_disabled`, even if
+the plugin also happens to be disabled). `profile.check` plans every
+active fragment's change — a JSON merge into `.claude/settings.json`
+(`settings`, `mcp`), a Markdown merge into `CLAUDE.md` between the
+`willie` markers (`instructions`), or a file copy into `.claude/rules/`
+/ `.claude/hooks/` — against the project's current files, without
+writing. `profile.apply` performs the same plan, first backing up every
+file it will change into `<workspace>/.willie-bak/<nanosecond
+timestamp>/` at its relative path (a `Change` that only creates a file
+has nothing to back up), then writes; `backup_path` names the backup
+directory even when nothing needed copying. A `settings` fragment
+marked `settings_scope = "global"` in `profile.toml`'s `[fragments]`
+table (default: `"project"`) plans and applies a *second* change,
+merged independently into the harness state's own `settings.json` (an
+absolute path in `Change.path`, distinguishing it from the project's
+workspace-relative ones) — every other project's sessions read that
+file, so a profile opts into touching it explicitly rather than by
+surprise.
+
+Phase 3 (`profile.set_remote`/`push`/`pull`, the minimal sync) is a
+later slice of this same plugin and not yet built.
 
 ## `state.*`
 | Method | Params | Result |
@@ -353,7 +380,7 @@ to the same add/relocate flow as the codes around it.
 | `source_detached_head` | `project.add`'s fast validation reads the source's current branch and finds `HEAD` itself, no branch checked out | the source is on a branch that later turns out to differ from the workspace's — that is `windows_branch_mismatch`, only seen at sync time | check out a branch in the Windows checkout, then add again |
 | `project_exists` | `project.add`'s source matches an already-registered project's source, compared case-insensitively with a trailing separator ignored | the *workspace directory* for the derived slug already exists but no project references it — that is `workspace_exists` | this checkout is already registered; use its existing row instead of adding it again |
 | `workspace_exists` | `project.add` derives a slug for the workspace and a directory of that name already exists under `/home/willie/projects/` | the same checkout is already a registered project — that is `project_exists`, checked first | delete the kept workspace directory the message names (`rm -rf` inside the distribution), moving it aside first if it still holds work you want, then add the checkout again |
-| `project_not_found` | any `project.*` method (`remove`, `sync_to_windows`, `update_from_windows`, `relocate`, `rename`, `set_sandbox`), or `session.create`/`sandbox.explain`, names an id no longer in the daemon's state | the id is valid but a job is already running for it — that is `project_busy` | check the project id and try again; a stale UI should re-snapshot first |
+| `project_not_found` | any `project.*` method (`remove`, `sync_to_windows`, `update_from_windows`, `relocate`, `rename`, `set_sandbox`), `session.create`/`sandbox.explain`, or a `profile.check`/`profile.apply` whose `project_id` the daemon's `profile.*` route cannot resolve (before the profiles plugin ever runs), names an id no longer in the daemon's state | the id is valid but a job is already running for it — that is `project_busy` | check the project id and try again; a stale UI should re-snapshot first |
 | `project_busy` | a `project.*` operation that starts a job is called while that project already has one job running — one job per project at a time | the daemon's 3-job pool is full but this project is idle — that job is queued, not refused; `project_busy` is per project | wait for the current job to finish, or cancel it with `job.cancel` |
 | `sessions_running` | `project.remove` is called while the project has at least one session in `running` or `stopping` | no session of the project is live — the remove job is submitted as usual | stop the project's sessions first |
 | `source_missing` | `sync_to_windows` or `update_from_windows` runs and the project's Windows source is gone — the directory no longer exists, or it exists but its `.git` does not (the same `source_present` check the project row uses) | the source exists but is dirty or on the wrong branch — that is `windows_tree_dirty`/`windows_branch_mismatch`, only checked once the source is confirmed present | relocate the project to a checkout that still exists |
@@ -436,7 +463,11 @@ above); none of them mark the plugin `degraded` — each is a legitimate
 | `profile_exists` | `profile.create` names a profile that already has a directory under `store_dir` | pick a different name, or edit the existing profile |
 | `profile_not_found` | `profile.read_fragment`/`write_fragment` names a **valid-shaped** profile name with no `profile.toml` under it | check `profile.list` for the available profile names |
 | `profile_fragment_unknown` | `profile.read_fragment`/`write_fragment`'s `fragment` is not `settings`, `instructions`, `mcp`, or a `rules/<file>`/`hooks/<file>` naming a single, safe file name | use one of `settings`, `instructions`, `mcp`, `rules/<file>`, `hooks/<file>` |
-| `profile_name_invalid` | any of the four methods' `name` is empty, contains a path separator, is `.`/`..`, or opens with a Windows drive-letter pattern (`C:foo`, `a:bar`) — checked before any path is built from it, and re-checked after joining it onto `store_dir` in case the join itself produced something outside it (belt and suspenders, since this crate has no `cfg(target_os = "linux")` of its own and so also builds and runs under Windows path semantics) | use a name with no path separators, not `.` or `..`, and not shaped like a drive letter |
+| `profile_name_invalid` | any of the methods' `name` is empty, contains a path separator, is `.`/`..`, or opens with a Windows drive-letter pattern (`C:foo`, `a:bar`) — checked before any path is built from it, and re-checked after joining it onto `store_dir` in case the join itself produced something outside it (belt and suspenders, since this crate has no `cfg(target_os = "linux")` of its own and so also builds and runs under Windows path semantics) | use a name with no path separators, not `.` or `..`, and not shaped like a drive letter |
+| `profile_target_missing` | `profile.check`/`profile.apply` against a project whose ext4 `workspace` directory does not exist on disk — checked first, before any fragment is read | re-add the project (its ext4 clone is gone) before checking or applying a profile |
+| `profile_fragment_invalid` | an active `settings`/`mcp` fragment, or the project's own existing `.claude/settings.json` (or the harness state's), is not valid JSON — from the pure merge in `apply.rs`, surfaced before any write | fix the fragment's or the target's content so it parses as JSON, then check or apply again |
+| `profile_markers_malformed` | the project's existing `CLAUDE.md` has a `<!-- willie:begin -->` marker with no matching `<!-- willie:end -->` after it — refused rather than appending a second block that would never converge on a later apply | fix or remove the stray `<!-- willie:begin -->` marker in `CLAUDE.md`, then apply again |
+| `profile_fragment_missing` | an internal wiring fault: an active fragment for which `check`/`apply` did not supply target content to the pure planner — not expected to occur, since every active fragment's target is always read before planning | check the daemon log; this is a bug in Willie, not something to fix in the profile |
 
 ## Engine problem codes
 

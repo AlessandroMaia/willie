@@ -9,7 +9,7 @@ use std::{
 };
 
 use serde_json::Value;
-use willie_core::id::JobId;
+use willie_core::id::{JobId, ProjectId};
 use willie_harness::Harness;
 use willie_proto::{
     PROTOCOL_VERSION,
@@ -309,6 +309,59 @@ pub fn plugin_handle(
     p: Value,
 ) -> Result<Value, RpcError> {
     lock_host(host).handle(method, p).map_err(op_error)
+}
+
+/// The daemon-fills-targets seam (designs/plugins-and-profiles.md, "the
+/// project is looked up through the daemon"): every `profile.*` call is
+/// routed through here rather than straight to `plugin_handle`. A
+/// `project_id` in the params is resolved to the project's ext4
+/// `workspace` and the harness-state settings path *before* the plugin
+/// ever runs, injected as `_workspace`/`_harness_settings` — the profiles
+/// plugin reads those two fields and never reaches into daemon state
+/// itself. Params carrying no `project_id` (`profile.list`,
+/// `profile.create`, `profile.read_fragment`, `profile.write_fragment`)
+/// pass through unchanged: not every `profile.*` method targets a
+/// project. An unknown `project_id` answers `project_not_found` here,
+/// before `plugin_handle` is reached at all, so it is never masked by a
+/// `plugin_disabled` the plugin host would otherwise answer first.
+pub fn profile_handle(
+    state: &Mutex<State>,
+    host: &Mutex<PluginHost>,
+    method: &str,
+    p: Value,
+) -> Result<Value, RpcError> {
+    let p = resolve_profile_targets(state, p)?;
+    plugin_handle(host, method, p)
+}
+
+/// Looks up `params.project_id` (when present) in `state` and injects the
+/// project's `workspace` and the harness-state settings path as
+/// `_workspace`/`_harness_settings`. `params` with no `project_id` field
+/// is returned untouched.
+fn resolve_profile_targets(
+    state: &Mutex<State>,
+    mut params: Value,
+) -> Result<Value, RpcError> {
+    let Some(raw_id) = params.get("project_id").and_then(Value::as_str) else {
+        return Ok(params);
+    };
+    let project_id: ProjectId = raw_id.parse().map_err(invalid_params)?;
+    let project = lock(state)
+        .projects
+        .get(&project_id)
+        .cloned()
+        .ok_or_else(|| op_error(crate::projects::not_found_err(project_id)))?;
+
+    let harness_settings = crate::harness::home()
+        .join(".willie/agent-state/claude/dot-claude/settings.json");
+    if let Value::Object(map) = &mut params {
+        map.insert("_workspace".to_owned(), Value::String(project.workspace));
+        map.insert(
+            "_harness_settings".to_owned(),
+            Value::String(harness_settings.to_string_lossy().into_owned()),
+        );
+    }
+    Ok(params)
 }
 
 /// Recomputes each project's `source_present` from the filesystem, then
