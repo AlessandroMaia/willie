@@ -9,6 +9,7 @@ import type {
   SandboxProfile,
   Session,
   Snapshot,
+  ToolList,
 } from "./proto";
 
 /* Mirrors of crates/willie-engine (EngineStatus) and willie-proto. */
@@ -136,6 +137,8 @@ export const onSessionOutput = (
 
 export const tools = {
   install: (harness: string) => invoke("tool_install", { harness }),
+  update: (tool: string) => invoke("tool_update", { tool }),
+  list: () => invoke<ToolList>("tool_list"),
 };
 
 /* Static domain data (`willie_core::sandbox::Capability`), not a

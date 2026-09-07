@@ -20,11 +20,10 @@ import {
   offersLogonFix,
 } from "@/features/health/logon-fix-action";
 import { healthFor, overallHealth, type Part } from "@/lib/domain/health";
-import { latestInstallJob } from "@/lib/domain/jobs";
+import { lastLogLine, latestInstallJob } from "@/lib/domain/jobs";
 import type { EngineStatus, Problem } from "@/lib/ipc";
 import { engine, tools } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
-import type { Job } from "@/lib/proto";
 import { useEngineStatus } from "@/store/use-engine-status";
 import { useSnapshot } from "@/store/use-snapshot";
 
@@ -240,17 +239,6 @@ export function DashboardScreen() {
       )}
     </div>
   );
-}
-
-/* `log_tail` is a multi-line buffer the daemon keeps appending to as
- * the job runs, often with trailing blank lines; only the last real
- * line is worth showing beside the check. */
-function lastLogLine(job: Job): string {
-  const lines = job.log_tail.split("\n");
-  while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") {
-    lines.pop();
-  }
-  return lines[lines.length - 1] ?? "";
 }
 
 function describe(part: Part, s: EngineStatus): string {

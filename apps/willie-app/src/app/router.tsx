@@ -11,6 +11,7 @@ import { Shell } from "@/app/shell/shell";
 import { DashboardScreen } from "@/features/health/dashboard-screen";
 import { ProjectsScreen } from "@/features/projects/projects-screen";
 import { SessionsScreen } from "@/features/sessions/sessions-screen";
+import { ToolsScreen } from "@/features/tools/tools-screen";
 
 /* A stale hash (an old bookmark, a screen that no longer exists) never
  * shows a blank: it lands on the Dashboard like a fresh start. */
@@ -49,11 +50,18 @@ const sessionsRoute = createRoute({
   component: SessionsScreen,
 });
 
+const toolsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tools",
+  component: ToolsScreen,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   dashboardRoute,
   projectsRoute,
   sessionsRoute,
+  toolsRoute,
 ]);
 
 /** Hash history by default: it survives a dev-server reload and needs

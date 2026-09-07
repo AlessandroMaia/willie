@@ -86,7 +86,8 @@ export type JobKind =
   | "sync_to_windows"
   | "update_from_windows"
   | "relocate"
-  | "install_harness";
+  | "install_harness"
+  | "update_harness";
 export type JobState =
   | { state: "running" }
   | { state: "done" }
@@ -150,4 +151,22 @@ export type Event = { seq: number } & EventKind;
 export interface Candidate {
   path: string;
   name: string;
+}
+
+/* Mirrors `willie_proto::tool::ToolStatus`. `version` is the live
+ * detection, absent exactly when `installed` is false. `recorded_version`
+ * is what the daemon's manifest last recorded installing — absent when
+ * Willie has never itself installed or updated the tool, even if it is
+ * present (detected some other way). Rust omits both keys rather than
+ * writing null, same convention as `Job.finished_at`. */
+export interface ToolStatus {
+  id: string;
+  name: string;
+  installed: boolean;
+  version?: string;
+  recorded_version?: string;
+}
+
+export interface ToolList {
+  tools: ToolStatus[];
 }

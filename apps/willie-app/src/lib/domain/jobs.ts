@@ -32,3 +32,28 @@ export function latestInstallJob(jobs: Job[]): Job | undefined {
   }
   return latest;
 }
+
+/* The Tools screen tracks both kinds a tool action can start
+ * (`install_harness` for a missing tool, `update_harness` for one
+ * already present) as a single lineage: only one can ever be running
+ * at a time (the daemon refuses a second tool job outright), so the
+ * newest of either kind is always the one worth showing. */
+export function latestToolJob(jobs: Job[]): Job | undefined {
+  let latest: Job | undefined;
+  for (const j of jobs) {
+    if (j.kind !== "install_harness" && j.kind !== "update_harness") continue;
+    if (!latest || isNewer(j, latest)) latest = j;
+  }
+  return latest;
+}
+
+/* `log_tail` is a multi-line buffer the daemon keeps appending to as
+ * the job runs, often with trailing blank lines; only the last real
+ * line is worth showing beside a check or a tool row. */
+export function lastLogLine(job: Job): string {
+  const lines = job.log_tail.split("\n");
+  while (lines.length > 0 && lines[lines.length - 1]?.trim() === "") {
+    lines.pop();
+  }
+  return lines[lines.length - 1] ?? "";
+}

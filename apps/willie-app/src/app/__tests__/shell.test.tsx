@@ -76,7 +76,11 @@ const ipc = vi.hoisted(() => ({
     resize: vi.fn(),
     close: vi.fn(),
   },
-  tools: { install: vi.fn() },
+  tools: {
+    install: vi.fn(),
+    update: vi.fn(),
+    list: vi.fn(async () => ({ tools: [] })),
+  },
   sandbox: { catalogue: vi.fn(async () => []) },
   dialogs: { pickFolder: vi.fn(async () => null) },
   onDaemonEvent: vi.fn(async () => () => {}),
@@ -164,11 +168,12 @@ describe("the shell", () => {
     renderApp();
     await screen.findByRole("link", { name: /Dashboard/ });
 
-    for (const label of ["Tools", "Plugins", "Settings"]) {
+    for (const label of ["Plugins", "Settings"]) {
       const button = screen.getByRole("button", { name: new RegExp(label) });
       expect((button as HTMLButtonElement).disabled).toBe(true);
     }
-    expect(screen.queryByRole("link", { name: /Tools/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Tools/ })).toBeNull();
+    expect(screen.getByRole("link", { name: /Tools/ })).toBeDefined();
   });
 
   it("shows a tooltip on hover for a planned entry", async () => {
@@ -176,7 +181,7 @@ describe("the shell", () => {
     renderApp();
     await screen.findByRole("link", { name: /Dashboard/ });
 
-    const wrapper = screen.getByRole("button", { name: /Tools/ })
+    const wrapper = screen.getByRole("button", { name: /Plugins/ })
       .parentElement as HTMLElement;
     await user.hover(wrapper);
 
@@ -192,7 +197,7 @@ describe("the shell", () => {
   });
 
   it("sends a stale hash to the Dashboard", async () => {
-    const router = renderApp("/tools");
+    const router = renderApp("/plugins");
 
     await vi.waitFor(() =>
       expect(router.state.location.pathname).toBe("/dashboard"),
