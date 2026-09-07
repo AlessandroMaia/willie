@@ -81,6 +81,11 @@ const ipc = vi.hoisted(() => ({
     update: vi.fn(),
     list: vi.fn(async () => ({ tools: [] })),
   },
+  plugins: {
+    list: vi.fn(async () => []),
+    enable: vi.fn(),
+    disable: vi.fn(),
+  },
   sandbox: { catalogue: vi.fn(async () => []) },
   dialogs: { pickFolder: vi.fn(async () => null) },
   onDaemonEvent: vi.fn(async () => () => {}),
@@ -168,12 +173,27 @@ describe("the shell", () => {
     renderApp();
     await screen.findByRole("link", { name: /Dashboard/ });
 
-    for (const label of ["Plugins", "Settings"]) {
-      const button = screen.getByRole("button", { name: new RegExp(label) });
-      expect((button as HTMLButtonElement).disabled).toBe(true);
-    }
+    const settingsButton = screen.getByRole("button", { name: /Settings/ });
+    expect((settingsButton as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("button", { name: /Tools/ })).toBeNull();
     expect(screen.getByRole("link", { name: /Tools/ })).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Plugins/ })).toBeNull();
+    expect(screen.getByRole("link", { name: /Plugins/ })).toBeDefined();
+  });
+
+  it("navigates to Plugins with Mod+5", async () => {
+    const user = userEvent.setup();
+    const router = renderApp();
+    await screen.findByRole("link", { name: /Dashboard/ });
+
+    await user.keyboard("{Control>}5{/Control}");
+
+    await vi.waitFor(() =>
+      expect(router.state.location.pathname).toBe("/plugins"),
+    );
+    expect(
+      await screen.findByRole("heading", { name: "Plugins" }),
+    ).toBeDefined();
   });
 
   it("shows a tooltip on hover for a planned entry", async () => {
@@ -181,7 +201,7 @@ describe("the shell", () => {
     renderApp();
     await screen.findByRole("link", { name: /Dashboard/ });
 
-    const wrapper = screen.getByRole("button", { name: /Plugins/ })
+    const wrapper = screen.getByRole("button", { name: /Settings/ })
       .parentElement as HTMLElement;
     await user.hover(wrapper);
 
@@ -197,7 +217,7 @@ describe("the shell", () => {
   });
 
   it("sends a stale hash to the Dashboard", async () => {
-    const router = renderApp("/plugins");
+    const router = renderApp("/settings");
 
     await vi.waitFor(() =>
       expect(router.state.location.pathname).toBe("/dashboard"),

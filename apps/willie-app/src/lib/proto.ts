@@ -136,11 +136,28 @@ export interface Session {
   resumed_from?: string | null;
   sandbox?: SandboxState;
 }
+/* Mirrors `willie_proto::plugin::{Scope, Enablement, PluginStatus}`.
+ * `Enablement` is externally tagged exactly like `ProjectState`/`JobState`
+ * above: `{ global: bool }` for a `Global`-scoped plugin, or
+ * `{ per_project: [projectId] }` for a `PerProject` one. */
+export type Scope = "global" | "per_project";
+export type Enablement = { global: boolean } | { per_project: string[] };
+export interface PluginStatus {
+  id: string;
+  name: string;
+  scope: Scope;
+  enabled: Enablement;
+  degraded: boolean;
+}
+
 export interface Snapshot {
   seq: number;
   projects: Project[];
   jobs: Job[];
   sessions: Session[];
+  /* Optional: `#[serde(default)]` on the Rust side, and every existing
+   * test snapshot in this app predates the field. */
+  plugins?: PluginStatus[];
 }
 export type EventKind =
   | { kind: "project_changed"; project: Project }

@@ -19,6 +19,7 @@ use willie_engine::error::EngineError;
 use willie_engine::{Engine, EngineStatus, Problem, SessionOpened};
 use willie_harness::{ClaudeCode, Harness};
 use willie_proto::daemon::DoctorReport;
+use willie_proto::plugin::PluginStatus;
 use willie_proto::project::{AddResult, JobRef, ProjectList};
 use willie_proto::sandbox::CapabilityInfo;
 use willie_proto::state::Snapshot;
@@ -398,6 +399,41 @@ fn tool_update(
 }
 
 #[tauri::command(async)]
+fn plugin_list(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+) -> Result<Vec<PluginStatus>, Problem> {
+    daemon_command(&app, &state, &pump, Engine::plugin_list)
+}
+
+#[tauri::command(async)]
+fn plugin_enable(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: String,
+    project_id: Option<ProjectId>,
+) -> Result<PluginStatus, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.plugin_enable(id, project_id)
+    })
+}
+
+#[tauri::command(async)]
+fn plugin_disable(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: String,
+    project_id: Option<ProjectId>,
+) -> Result<PluginStatus, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.plugin_disable(id, project_id)
+    })
+}
+
+#[tauri::command(async)]
 fn session_terminal_open(
     app: AppHandle,
     state: State<'_, EngineState>,
@@ -615,6 +651,9 @@ pub fn run() {
             tool_install,
             tool_list,
             tool_update,
+            plugin_list,
+            plugin_enable,
+            plugin_disable,
             session_terminal_open,
             session_terminal_input,
             session_terminal_resize,

@@ -5,6 +5,7 @@ import type {
   Candidate,
   CapabilityInfo,
   Event,
+  PluginStatus,
   Project,
   SandboxProfile,
   Session,
@@ -139,6 +140,20 @@ export const tools = {
   install: (harness: string) => invoke("tool_install", { harness }),
   update: (tool: string) => invoke("tool_update", { tool }),
   list: () => invoke<ToolList>("tool_list"),
+};
+
+/* A plugin's own state (enabled/disabled, degraded) is also carried on
+ * every `Snapshot` (`snapshot.plugins`), but that copy only ever
+ * refreshes on a full resnapshot or a `PluginChanged` event — and the
+ * daemon does not emit that event yet. `enable`/`disable` return the
+ * plugin's fresh status directly, so the Plugins screen refetches with
+ * `list()` after either rather than trusting the snapshot to catch up. */
+export const plugins = {
+  list: () => invoke<PluginStatus[]>("plugin_list"),
+  enable: (id: string, projectId?: string) =>
+    invoke<PluginStatus>("plugin_enable", { id, projectId }),
+  disable: (id: string, projectId?: string) =>
+    invoke<PluginStatus>("plugin_disable", { id, projectId }),
 };
 
 /* Static domain data (`willie_core::sandbox::Capability`), not a

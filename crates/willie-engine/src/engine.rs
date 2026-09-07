@@ -21,6 +21,7 @@ use willie_proto::tool::{
 use willie_proto::{
     daemon::DoctorReport,
     job::method as job,
+    plugin::{EnableParams, PluginStatus, method as plugin},
     project::{
         AddParams, AddResult, IdParams, JobRef, ProjectList, RelocateParams,
         RemoveParams, RenameParams, SetSandboxParams, method as project,
@@ -388,6 +389,29 @@ impl Engine {
 
     pub fn job_cancel(&mut self, id: JobId) -> Result<(), EngineError> {
         self.daemon_call(job::CANCEL, serde_json::json!({ "id": id }))
+    }
+
+    pub fn plugin_list(&mut self) -> Result<Vec<PluginStatus>, EngineError> {
+        self.daemon_call(plugin::LIST, serde_json::json!({}))
+    }
+
+    /// `project_id: None` enables the plugin globally; `Some` enables it
+    /// for that project only. Only meaningful for a `PerProject`-scoped
+    /// plugin — the daemon refuses the scope mismatch otherwise.
+    pub fn plugin_enable(
+        &mut self,
+        id: String,
+        project_id: Option<ProjectId>,
+    ) -> Result<PluginStatus, EngineError> {
+        self.daemon_call(plugin::ENABLE, EnableParams { id, project_id })
+    }
+
+    pub fn plugin_disable(
+        &mut self,
+        id: String,
+        project_id: Option<ProjectId>,
+    ) -> Result<PluginStatus, EngineError> {
+        self.daemon_call(plugin::DISABLE, EnableParams { id, project_id })
     }
 
     pub fn state_snapshot(&mut self) -> Result<Snapshot, EngineError> {
