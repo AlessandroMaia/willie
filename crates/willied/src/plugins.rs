@@ -700,10 +700,11 @@ mod tests {
         host.enable(per_project("profile", ProjectId::new()))
             .unwrap();
 
-        // The placeholder plugin answers every call with its own coded
-        // not-implemented error, which is enough to prove the routing.
-        let err = host.handle("profile.list", Value::Null).unwrap_err();
-        assert_eq!(err.code, "profile_not_implemented");
+        // The profiles plugin answers `profile.list` with an empty array
+        // when nothing has been created yet — enough to prove the call
+        // reached its own `handle`, not a host-level stub.
+        let result = host.handle("profile.list", Value::Null).unwrap();
+        assert_eq!(result, Value::Array(vec![]));
     }
 
     #[test]

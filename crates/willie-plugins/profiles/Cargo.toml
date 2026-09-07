@@ -10,6 +10,11 @@ publish.workspace = true
 willie-core = { workspace = true }
 willie-harness = { workspace = true }
 willie-plugin-api = { workspace = true }
+# profile.toml (name + [fragments]) and the JSON payloads read_fragment/
+# write_fragment carry over the wire.
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
 
 [lints]
 workspace = true

@@ -626,9 +626,11 @@ mod tests {
         let call = line("profile.list", serde_json::json!({}));
         let (_, resp) = roundtrip(&format!("{enable}\n{call}\n"));
         assert!(resp[0].clone().into_result().is_ok(), "enable failed");
+        // The profiles plugin's own `handle` answered, not a host stub:
+        // an empty list, since nothing has been created yet.
         assert_eq!(
-            resp[1].clone().into_result().unwrap_err().code,
-            "profile_not_implemented"
+            resp[1].clone().into_result().unwrap(),
+            serde_json::json!([])
         );
     }
 

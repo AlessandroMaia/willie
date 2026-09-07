@@ -234,6 +234,37 @@ enable/disable returns the new `PluginStatus` synchronously and a client
 sees the change on its next `state.snapshot` (whose `plugins` field the host
 fills). Forwarding live plugin changes and emissions is a follow-up.
 
+## `profile.*`
+
+The configuration-profiles plugin (id `profile`, scope `per_project`).
+Routed through `plugin.*` above: disabled or an unknown method answers
+with the plugin codes there, not the ones below. A profile is
+`<store_dir>/<name>/`, a git repository the plugin manages with its own
+`git` (never the daemon's); every write is its own commit.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `profile.list` | `{}` | `[ProfileSummary { name, fragments_active }]` |
+| `profile.create` | `{ name }` | `ProfileSummary` |
+| `profile.read_fragment` | `{ name, fragment }` | `{ content }` |
+| `profile.write_fragment` | `{ name, fragment, content }` | `{ content }` |
+
+`fragment` is one of `settings`, `instructions`, `mcp` (booleans in
+`profile.toml`'s `[fragments]` table), or `rules/<file>` / `hooks/<file>`
+(a specific file, active once its name is in that family's list — the
+list is the on/off switch, there is no separate flag). `profile.create`
+scaffolds `profile.toml`, an empty `settings.json` and `CLAUDE.md`, `git
+init`s the directory and commits the scaffold. `profile.write_fragment`
+writes the fragment file, marks it active in `profile.toml`, and commits
+both in one commit; `profile.read_fragment` on a fragment never written
+returns `{ content: "" }` rather than refusing. Turning a fragment back
+off is done by editing `profile.toml` directly (the supported path,
+per the design) — there is no Phase-1 method for it.
+
+Phase 2 (`profile.check`/`profile.apply`, the format-preserving merge
+into a project) and Phase 3 (`profile.set_remote`/`push`/`pull`, the
+minimal sync) are later slices of this same plugin and not yet built.
+
 ## `state.*`
 | Method | Params | Result |
 | --- | --- | --- |
@@ -382,9 +413,9 @@ a profile the UI edits.
 ## Plugin codes
 
 These come back as the `error` of a `plugin.*` call, or of a plugin-routed
-`profile.*` call. A plugin's own coded failures (e.g. the placeholder's
-`profile_not_implemented`) travel through unchanged, carrying the plugin's
-own code and remediation.
+`profile.*` call. A plugin's own coded failures (e.g. `profile_exists`
+below) travel through unchanged, carrying the plugin's own code and
+remediation.
 
 | Code | When | When not | Remediation |
 | --- | --- | --- | --- |
@@ -393,6 +424,19 @@ own code and remediation.
 | `plugin_scope_mismatch` | `plugin.enable`/`disable` in a scope the manifest forbids: a global scope (no `project_id`) for a per-project plugin, or a per-project scope (a `project_id`) for a global plugin | the scope matches the manifest — the enable/disable proceeds | enable it in the scope its manifest declares (a `project_id` for a per-project plugin, none for a global one) |
 | `plugin_panicked` | a plugin's `on_enable`/`on_disable`/`handle` panicked; the panic is caught at the host boundary and the plugin is marked `degraded`, the daemon lives | the plugin returned an ordinary coded refusal — that carries the plugin's own code and does not degrade it; only a panic or an internal fault (`plugin_internal`) does | check the daemon log; the plugin stays degraded until a later call succeeds or it is re-enabled |
 | `plugin_internal` | a plugin returned `PluginError::Internal` — a genuine fault (not a `Coded` refusal it can name); the plugin is marked `degraded` | the plugin returned a coded refusal (e.g. `profile_exists`) — a legitimate "no" that carries its own code and leaves the plugin healthy | retry; if it repeats, check the daemon log — the plugin stays degraded until a later call succeeds or it is re-enabled |
+
+## Profile codes
+
+The configuration-profiles plugin's own coded refusals (see `profile.*`
+above); none of them mark the plugin `degraded` — each is a legitimate
+"no" the caller can act on, not a fault.
+
+| Code | When | Remediation |
+| --- | --- | --- |
+| `profile_exists` | `profile.create` names a profile that already has a directory under `store_dir` | pick a different name, or edit the existing profile |
+| `profile_not_found` | `profile.read_fragment`/`write_fragment` names a profile with no `profile.toml` — including a name that could never be valid (a path separator, `.`/`..`), which is refused the same way rather than distinguished | check `profile.list` for the available profile names |
+| `profile_fragment_unknown` | `profile.read_fragment`/`write_fragment`'s `fragment` is not `settings`, `instructions`, `mcp`, or a `rules/<file>`/`hooks/<file>` naming a single, safe file name | use one of `settings`, `instructions`, `mcp`, `rules/<file>`, `hooks/<file>` |
+| `profile_name_invalid` | `profile.create`'s `name` is empty, contains a path separator, or is `.`/`..` | use a name with no path separators, and not `.` or `..` |
 
 ## Engine problem codes
 
