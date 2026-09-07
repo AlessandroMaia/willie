@@ -161,6 +161,20 @@ pub trait Harness: std::fmt::Debug {
         None
     }
 
+    /// Where this harness keeps its session transcripts under `home`, if
+    /// it keeps any. `None` means a harness with no logs to find.
+    fn session_logs_dir(&self, home: &Path) -> Option<PathBuf> {
+        let _ = home;
+        None
+    }
+
+    /// How this harness turns a workspace path into the name it stores
+    /// logs under. The default is Claude Code's scheme, replacing `/`
+    /// with `-`; a harness that names workspaces differently overrides.
+    fn escape_workspace(&self, workspace: &str) -> String {
+        workspace.replace('/', "-")
+    }
+
     /// The version in the binary's `--version` output: the first
     /// whitespace-separated token shaped `N.N.N`.
     fn parse_version(&self, output: &str) -> Option<String> {
@@ -328,6 +342,15 @@ impl Harness for ClaudeCode {
                 },
             ],
         })
+    }
+
+    /// Session transcripts live under the same state directory as the
+    /// login, one level below the `dot-claude` link: Claude Code keeps
+    /// them at `~/.claude/projects/<escaped-workspace>/*.jsonl`, which
+    /// in the image is `.willie/agent-state/claude/dot-claude/projects`.
+    fn session_logs_dir(&self, home: &Path) -> Option<PathBuf> {
+        const STATE: &str = ".willie/agent-state/claude";
+        Some(under(home, &format!("{STATE}/dot-claude/projects")))
     }
 
     /// Without its state directory the CLI cannot log in, so the
@@ -576,6 +599,28 @@ mod tests {
     #[test]
     fn a_harness_that_says_nothing_has_no_login_to_bind() {
         assert!(Quiet.agent_state(Path::new("/home/willie")).is_none());
+    }
+
+    /// Session transcripts live one level under the login directory, at
+    /// the same `dot-claude` link the image already provisions.
+    #[test]
+    fn claude_code_finds_its_session_logs_under_the_willie_state_dir() {
+        assert_eq!(
+            ClaudeCode.session_logs_dir(Path::new("/home/willie")),
+            Some(PathBuf::from(
+                "/home/willie/.willie/agent-state/claude/dot-claude/projects"
+            ))
+        );
+    }
+
+    /// Claude Code names a workspace's log directory by replacing every
+    /// `/` with `-`; `ClaudeCode` inherits the trait's default scheme.
+    #[test]
+    fn claude_code_escapes_a_workspace_path_by_replacing_slashes_with_dashes() {
+        assert_eq!(
+            ClaudeCode.escape_workspace("/home/willie/projects/x"),
+            "-home-willie-projects-x".to_owned()
+        );
     }
 
     /// Where managed tools land today: the user-local tree the official

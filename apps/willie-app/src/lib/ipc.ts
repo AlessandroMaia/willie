@@ -13,6 +13,7 @@ import type {
   Session,
   Snapshot,
   ToolList,
+  UsageSnapshot,
 } from "./proto";
 
 /* Mirrors of crates/willie-engine (EngineStatus) and willie-proto. */
@@ -216,3 +217,10 @@ export const dialogs = {
 
 export const onDaemonEvent = (cb: (ev: Event) => void): Promise<UnlistenFn> =>
   listen<Event>(DAEMON_EVENT, (event) => cb(event.payload));
+
+/* Empty params: the daemon fills in the current sessions and projects
+ * itself (see `Engine::usage_snapshot`), the bridge only relays the
+ * request. */
+export const usage = {
+  snapshot: () => invoke<UsageSnapshot>("usage_snapshot"),
+};

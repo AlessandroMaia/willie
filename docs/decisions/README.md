@@ -56,3 +56,4 @@ Things deliberately left open or explicitly rejected for now, and why.
 | 0022 | the managed-tool model: the harness registry is the catalogue, the manifest records installs |
 | 0023 | the plugin host: a compiled-in registry, file-based enablement, isolated failure |
 | 0024 | profiles apply with a format-preserving merge, a differential backup, and project-only settings by default |
+| 0025 | usage reads the harness's own session log; the provider endpoint, the tray and push delivery wait |

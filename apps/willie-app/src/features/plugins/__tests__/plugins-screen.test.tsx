@@ -15,6 +15,7 @@ const emptySnapshot = (): Snapshot => ({
  * fake (see shell.test.tsx, tools-screen.test.tsx). */
 const ipc = vi.hoisted(() => ({
   plugins: { list: vi.fn(), enable: vi.fn(), disable: vi.fn() },
+  usage: { snapshot: vi.fn() },
   profiles: {
     list: vi.fn(async () => []),
     create: vi.fn(),
@@ -42,6 +43,12 @@ beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
   ipc.projects.snapshot.mockResolvedValue(emptySnapshot());
+  ipc.usage.snapshot.mockResolvedValue({
+    providers: [],
+    sessions: [],
+    projects: [],
+    fetched_at: "",
+  });
   ({ PluginsScreen } = await import("@/features/plugins/plugins-screen"));
 });
 

@@ -492,7 +492,6 @@ trait Harness {
     fn default_capabilities(&self) -> CapabilitySet;
     fn state_paths(&self) -> Vec<StatePath>;               // ~/.claude, ~/.claude.json
     fn settings_paths(&self) -> SettingsPaths;             // user + project (profiles plugin)
-    fn usage_sources(&self) -> UsageSources;               // OAuth credentials, JSONL glob (usage plugin)
     fn resume_args(&self, harness_session_id: &str) -> Vec<String>;
 }
 ```
@@ -501,6 +500,17 @@ trait Harness {
 headless_stream, hooks, settings_format, mcp_config_format }` is **data**,
 validated by a mini-bench (`willie dev bench-harness`) against the
 installed binary. No consumer branches on the harness id.
+
+A `usage_sources` method was sketched here when this trait was first
+designed, for a usage plugin that would read both a provider's OAuth
+credentials and a JSONL glob through one call. It was never built: the
+usage plugin's as-built read path (§4.3) needs only two methods the trait
+already carries for other reasons — `session_logs_dir(home)`, where a
+harness keeps its session transcripts, and `escape_workspace`, how it
+names a workspace's own log directory — so no usage-specific trait member
+exists. A method for source 1 (the OAuth-backed usage endpoint, still
+deferred) would be added to the trait when that source is built, not
+before.
 
 Known particulars of `ClaudeCode`: `DISABLE_AUTOUPDATER=1` in the session
 environment (the binary is read-only under `tools.ro`; updates belong to
@@ -577,23 +587,53 @@ sync conflict beyond surfacing `profile_sync_conflict`'s own remediation
 
 ### 4.3 `usage`
 
-Sources (Anthropic first; one **enum variant per provider**, a common
-projection only at the output):
-1. OAuth credentials in the harness state → the usage endpoint with the
-   CLI's `User-Agent` — a **fragile** source: 60 s cache, `stale`
-   flagged, backoff on 429, never a visible failure;
-2. the harness's session JSONL (`state_paths()` → host path under the
-   agent-state directory) → tokens per session/project and context
-   percentage (`input + cache_creation + cache_read`), reading bounded
-   tails, skipping sidechains and corrupt records;
-3. Willie's `events.jsonl` to match a Willie session with a harness
-   session (cwd + time window).
+**Partially delivered.** Of the design's three sources, two are built:
+2. the harness's own session JSONL → tokens per session and a context
+   percentage; 3. matching a Willie session to that log by workspace and
+   time window. Source 1 — a provider's OAuth-backed usage endpoint
+   (credits, limit windows) — is **not built**, and neither is the tray or
+   any notification; see "Not built" below.
 
-Output `usage.snapshot` (**additive** JSON):
-`{ providers: [{ id, windows: [{ kind: "5h"|"7d", pct, resets_at }], credits?, stale, fetched_at }], sessions: [{ id, tokens, context_pct }] }`
-plus notification `usage.updated`. Configurable thresholds emit
-`usage.alert` → engine → Windows notification; the **tray** shows the main
-window's percentage.
+`usage.snapshot` (the `usage` plugin, global scope) is recomputed on
+every call, never scheduled: the daemon's `usage.*` route
+(`willied::handlers::usage_handle`/`enrich_usage_targets`) fills the
+plugin's params with every session it already knows — `_sessions: [{ id,
+project_id, workspace, window }]`, a still-live session's window left
+open — and `_home`, the distro home directory, the same daemon-fills-
+targets seam `profile.*` uses (decision 0024) so the plugin stays
+daemon-ignorant. For each session the plugin resolves the first
+registry harness that keeps logs under `_home`
+(`Harness::session_logs_dir`), turns the session's `workspace` into that
+harness's log directory name (`Harness::escape_workspace`), lists its
+`*.jsonl` files, and picks the one whose modified time falls inside the
+session's window — this *is* sources 2 and 3 together: the daemon's own
+session index already carries the workspace and time window a separate
+`events.jsonl` match would otherwise have to recover. A bounded tail (64
+KiB) of the picked file is read; the newest line carrying a usage block
+(top-level `usage`, or `message.usage` for an assistant turn; a
+`isSidechain: true` record skipped) sums `input + cache_creation_input +
+cache_read_input + output` into that session's token count, and a small
+model-prefix table turns the input-side fields into `context_pct` —
+`None` rather than a guessed denominator when the model is unrecognised.
+Every step degrades to "no usage data" instead of a fault: no matching
+harness, no log directory, an empty listing, no file overlapping the
+window, or a line that fails to parse are all the same zero-token outcome,
+never a panic and never a call failure. Storage is the harness's own
+files plus this in-memory projection, recomputed fresh each call; no
+SQLite index and no scheduler back it. `on_event` emits the plugin's own
+`usage.updated` on every `SessionStarted`/`SessionExited` (§4.1), but the
+host does not yet forward plugin emissions to clients (see `plugin.*`
+there and `docs/PROTOCOL.md`'s `usage.*` section) — the Usage panel polls
+`usage.snapshot` instead of reacting to a push. `providers` is present
+and always empty this cut, keeping source 1 additive whenever it lands.
+
+**Not built:** source 1 (a provider's OAuth credentials in the harness
+state → its usage endpoint — a fragile source needing its own cache,
+staleness flag and backoff, deliberately kept out of this cut so
+`usage.snapshot` never makes a network call); the tray icon showing a
+percentage; a configurable-threshold notification; and forwarding
+`usage.updated` to clients in real time (poll-only this cut). See
+decision 0025.
 
 ### 4.4 Persistence
 
@@ -630,7 +670,7 @@ window's percentage.
 - Namespaces: `daemon.*` (hello, health, doctor, shutdown) · `project.*`
   (list, add, remove, update) · `session.*` (create, stop, list, get,
   attach_info) · `tool.*` (list, install, update) · `profile.*` (list,
-  check, apply) · `usage.*` (snapshot, config) · `plugin.*` (list, enable,
+  check, apply) · `usage.*` (snapshot) · `plugin.*` (list, enable,
   disable).
 - Errors: `{ code, message, remediation }` — actionable message, named
   remediation.

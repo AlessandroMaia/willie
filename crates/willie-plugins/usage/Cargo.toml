@@ -10,6 +10,15 @@ publish.workspace = true
 willie-core = { workspace = true }
 willie-harness = { workspace = true }
 willie-plugin-api = { workspace = true }
+# The `usage.*` wire types (UsageSnapshot, SessionUsage, ProjectUsage)
+# this plugin builds and returns from `usage.snapshot`.
+willie-proto = { workspace = true }
+# lib.rs parses the daemon-filled `_sessions`/`_home` request params into
+# typed structs (Deserialize).
+serde = { workspace = true }
+# read.rs parses a harness session's JSONL tail (arbitrary per-line
+# objects with a nested or top-level `usage` block) into token counts.
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

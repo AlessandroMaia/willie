@@ -28,6 +28,7 @@ use willie_proto::{
     },
     rpc::Notification,
     state::{Snapshot, method as state},
+    usage::{UsageSnapshot, method as usage},
 };
 
 use crate::{
@@ -398,6 +399,12 @@ impl Engine {
 
     pub fn plugin_list(&mut self) -> Result<Vec<PluginStatus>, EngineError> {
         self.daemon_call(plugin::LIST, serde_json::json!({}))
+    }
+
+    /// Sends empty params — the daemon fills in the current sessions and
+    /// projects itself, the engine only relays the request.
+    pub fn usage_snapshot(&mut self) -> Result<UsageSnapshot, EngineError> {
+        self.daemon_call(usage::SNAPSHOT, serde_json::json!({}))
     }
 
     /// `project_id: None` enables the plugin globally; `Some` enables it

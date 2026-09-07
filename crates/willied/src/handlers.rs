@@ -372,6 +372,66 @@ fn resolve_profile_targets(
     Ok(params)
 }
 
+/// The daemon-fills-targets seam for `usage.*` (mirrors
+/// `profile_handle`/`resolve_profile_targets`, with its own enrichment):
+/// every call is routed through here rather than straight to
+/// `plugin_handle`, so the usage plugin never reaches into daemon state
+/// itself — it only ever sees what `enrich_usage_targets` injects.
+pub fn usage_handle(
+    state: &Mutex<State>,
+    host: &Mutex<PluginHost>,
+    method: &str,
+    p: Value,
+) -> Result<Value, RpcError> {
+    let p = enrich_usage_targets(state, p);
+    plugin_handle(host, method, p)
+}
+
+/// Strips any caller-supplied `_sessions`/`_home` (fail-closed, like
+/// `resolve_profile_targets`: only the daemon fills those two fields),
+/// then injects the daemon's own view of them: every session in `State`
+/// as `{ id, project_id, workspace, window: [start, end|null] }` (session
+/// timestamps are epoch-second strings; a still-live session's `end` is
+/// `null`), and `_home` as the distro home directory. Best-effort: a
+/// timestamp that fails to parse becomes a `0` start rather than dropping
+/// the session.
+fn enrich_usage_targets(state: &Mutex<State>, mut params: Value) -> Value {
+    if !params.is_object() {
+        params = Value::Object(serde_json::Map::new());
+    }
+    if let Value::Object(map) = &mut params {
+        map.remove("_sessions");
+        map.remove("_home");
+    }
+
+    let sessions: Vec<Value> = lock(state)
+        .sessions
+        .values()
+        .map(|s| {
+            let start = s.created_at.parse::<u64>().unwrap_or(0);
+            let end =
+                s.finished_at.as_deref().and_then(|t| t.parse::<u64>().ok());
+            serde_json::json!({
+                "id": s.id,
+                "project_id": s.project_id,
+                "workspace": s.workspace,
+                "window": [start, end],
+            })
+        })
+        .collect();
+
+    if let Value::Object(map) = &mut params {
+        map.insert("_sessions".to_owned(), Value::Array(sessions));
+        map.insert(
+            "_home".to_owned(),
+            Value::String(
+                crate::harness::home().to_string_lossy().into_owned(),
+            ),
+        );
+    }
+    params
+}
+
 /// Recomputes each project's `source_present` from the filesystem, then
 /// answers with the fresh snapshot, its `plugins` field filled from the
 /// host's live `list()`.
@@ -482,5 +542,147 @@ mod tests {
             Some(workspace.as_str())
         );
         assert!(resolved.get("_harness_settings").is_some());
+    }
+
+    use willie_core::{
+        id::SessionId,
+        session::{Session, SessionState},
+    };
+
+    fn session(
+        id: SessionId,
+        project_id: ProjectId,
+        created_at: &str,
+    ) -> Session {
+        Session {
+            id,
+            project_id,
+            harness: "claude-code".into(),
+            workspace: "/w".into(),
+            state: SessionState::Running,
+            created_at: created_at.into(),
+            started_at: None,
+            finished_at: None,
+            pid: None,
+            clients: 0,
+            resumed_from: None,
+            sandbox: Default::default(),
+        }
+    }
+
+    /// A host with the usage plugin enabled globally, its state under a
+    /// scratch dir private to the caller (so no test's `enabled.toml`
+    /// leaks into another's, the same reasoning `server.rs`'s
+    /// `test_server` gives).
+    fn usage_enabled_host() -> (Mutex<PluginHost>, std::path::PathBuf) {
+        let dir = std::env::temp_dir()
+            .join("willie-handlers-test-plugins")
+            .join(ProjectId::new().to_string());
+        let mut host = PluginHost::new(&dir);
+        host.enable(willie_proto::plugin::EnableParams {
+            id: "usage".into(),
+            project_id: None,
+        })
+        .unwrap();
+        (Mutex::new(host), dir)
+    }
+
+    /// A caller-supplied `_sessions`/`_home` must never reach the plugin:
+    /// only the daemon fills those two fields, mirroring
+    /// `resolve_profile_targets_strips_a_caller_supplied_workspace_without_project_id`.
+    /// The real session in `State` is what comes back, not the smuggled one.
+    #[test]
+    fn enrich_usage_targets_strips_caller_supplied_sessions_and_home() {
+        let state = Mutex::new(State::default());
+        let sid = SessionId::new();
+        let pid = ProjectId::new();
+        state
+            .lock()
+            .unwrap()
+            .sessions
+            .insert(sid, session(sid, pid, "100"));
+
+        let params = serde_json::json!({
+            "_sessions": [{"id": "smuggled"}],
+            "_home": "/some/smuggled/path",
+        });
+
+        let enriched = enrich_usage_targets(&state, params);
+
+        let sessions =
+            enriched.get("_sessions").and_then(Value::as_array).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(
+            sessions[0].get("id").and_then(Value::as_str),
+            Some(sid.to_string().as_str())
+        );
+        assert_eq!(
+            enriched.get("_home").and_then(Value::as_str),
+            Some(
+                crate::harness::home()
+                    .to_string_lossy()
+                    .into_owned()
+                    .as_str()
+            )
+        );
+    }
+
+    /// A still-live session (`finished_at: None`) enriches to a `window`
+    /// whose end is JSON `null`, and its `created_at` epoch-seconds string
+    /// parses into the start.
+    #[test]
+    fn enrich_usage_targets_reports_an_open_window_for_a_live_session() {
+        let state = Mutex::new(State::default());
+        let sid = SessionId::new();
+        let pid = ProjectId::new();
+        state
+            .lock()
+            .unwrap()
+            .sessions
+            .insert(sid, session(sid, pid, "42"));
+
+        let enriched = enrich_usage_targets(&state, Value::Null);
+
+        let entry = &enriched.get("_sessions").unwrap().as_array().unwrap()[0];
+        assert_eq!(entry["project_id"], serde_json::json!(pid));
+        assert_eq!(entry["window"], serde_json::json!([42, null]));
+    }
+
+    /// `usage.snapshot`, routed through `usage_handle` with two known
+    /// sessions in `State`, comes back naming both — proof the routing and
+    /// enrichment reach the plugin (no real JSONL log is planted; each
+    /// session is simply present with zero tokens, same as the plugin's own
+    /// "missing log dir" case).
+    #[test]
+    fn usage_snapshot_names_every_known_session() {
+        let state = Mutex::new(State::default());
+        let (id1, id2) = (SessionId::new(), SessionId::new());
+        {
+            let mut guard = state.lock().unwrap();
+            guard
+                .sessions
+                .insert(id1, session(id1, ProjectId::new(), "10"));
+            guard
+                .sessions
+                .insert(id2, session(id2, ProjectId::new(), "20"));
+        }
+        let (host, dir) = usage_enabled_host();
+
+        let result = usage_handle(
+            &state,
+            &host,
+            willie_proto::usage::method::SNAPSHOT,
+            Value::Null,
+        )
+        .unwrap();
+        let snapshot: willie_proto::usage::UsageSnapshot =
+            serde_json::from_value(result).unwrap();
+
+        let ids: Vec<SessionId> =
+            snapshot.sessions.iter().map(|s| s.id).collect();
+        assert!(ids.contains(&id1), "{ids:?}");
+        assert!(ids.contains(&id2), "{ids:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

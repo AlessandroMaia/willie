@@ -16,12 +16,18 @@ import { plugins } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
 import type { PluginStatus } from "@/lib/proto";
 import { ProfilesPanel } from "@/plugins/profiles/profiles-panel";
+import { UsagePanel } from "@/plugins/usage/usage-panel";
 import { useSnapshot } from "@/store/use-snapshot";
 
 /** The profiles plugin's real id (singular — `manifest().id` in
  * `crates/willie-plugins/profiles`), never "profiles": the panel mounts
  * strictly on this literal. */
 const PROFILES_PLUGIN_ID = "profile";
+
+/** The usage plugin's real id (`manifest().id` in
+ * `crates/willie-plugins/usage`): the panel mounts strictly on this
+ * literal. */
+const USAGE_PLUGIN_ID = "usage";
 
 function scopeLabel(status: PluginStatus): string {
   return status.scope === "global" ? "Global" : "Per-project";
@@ -63,6 +69,7 @@ export function PluginsScreen() {
   }, [load]);
 
   const profilesPlugin = list.find((p) => p.id === PROFILES_PLUGIN_ID);
+  const usagePlugin = list.find((p) => p.id === USAGE_PLUGIN_ID);
 
   async function toggle(status: PluginStatus, next: boolean) {
     setBusyId(status.id);
@@ -126,6 +133,9 @@ export function PluginsScreen() {
       </ItemGroup>
 
       {profilesPlugin && !profilesPlugin.degraded && <ProfilesPanel />}
+      {usagePlugin &&
+        isGloballyEnabled(usagePlugin) &&
+        !usagePlugin.degraded && <UsagePanel />}
     </div>
   );
 }

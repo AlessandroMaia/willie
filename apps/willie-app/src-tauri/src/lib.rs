@@ -24,6 +24,7 @@ use willie_proto::project::{AddResult, JobRef, ProjectList};
 use willie_proto::sandbox::CapabilityInfo;
 use willie_proto::state::Snapshot;
 use willie_proto::tool::ToolList;
+use willie_proto::usage::UsageSnapshot;
 
 use crate::events::EventPump;
 use crate::state::{EngineState, image_candidates, workspace_root};
@@ -408,6 +409,15 @@ fn plugin_list(
 }
 
 #[tauri::command(async)]
+fn usage_snapshot(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+) -> Result<UsageSnapshot, Problem> {
+    daemon_command(&app, &state, &pump, Engine::usage_snapshot)
+}
+
+#[tauri::command(async)]
 fn plugin_enable(
     app: AppHandle,
     state: State<'_, EngineState>,
@@ -668,6 +678,7 @@ pub fn run() {
             tool_list,
             tool_update,
             plugin_list,
+            usage_snapshot,
             plugin_enable,
             plugin_disable,
             plugin_call,

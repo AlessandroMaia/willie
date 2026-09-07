@@ -24,6 +24,12 @@
 //! repositories the daemon manages for real inside the distribution, and
 //! this is what proves the same code against the distribution's own
 //! `git`, not a Windows stand-in.
+//!
+//! `willie-plugin-usage` is included for the same reason: `usage.snapshot`
+//! reads a harness's real session log directory (a Windows host proves
+//! only that forward slashes also work as path separators there), so
+//! this is what proves the plugin's reads against the distribution's own
+//! filesystem.
 
 use std::{env, path::Path, process::Command};
 
@@ -35,6 +41,7 @@ const CRATES: &[&str] = &[
     "willie-cli",
     "willie-sess",
     "willie-plugin-profiles",
+    "willie-plugin-usage",
 ];
 
 /// Where the binaries are copied to inside the distribution. On the
