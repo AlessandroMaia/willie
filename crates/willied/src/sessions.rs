@@ -16,8 +16,8 @@ use willie_core::{
     project::ProjectState,
     sandbox::{CapabilitySet, SandboxProfile},
     session::{
-        Session, SessionEvent, SessionEventKind, SessionSpec, apply_event,
-        from_log,
+        Session, SessionEvent, SessionEventKind, SessionKind, SessionSpec,
+        apply_event, from_log,
     },
 };
 use willie_harness::{Harness, LaunchMode, Resume};
@@ -187,6 +187,7 @@ impl SessionOps {
             created_at: (self.clock)(),
             willie_version: willie_core::VERSION.to_owned(),
             resumed_from,
+            kind: SessionKind::Agent,
             capabilities,
         };
         let dir =
@@ -554,6 +555,7 @@ fn placeholder(id: SessionId) -> Session {
         project_id: willie_core::id::ProjectId::nil(),
         harness: String::new(),
         workspace: String::new(),
+        kind: SessionKind::Agent,
         state: willie_core::session::SessionState::Running,
         created_at: String::new(),
         started_at: None,
@@ -561,6 +563,8 @@ fn placeholder(id: SessionId) -> Session {
         pid: None,
         clients: 0,
         resumed_from: None,
+        label: None,
+        title: None,
         sandbox: Default::default(),
     }
 }
@@ -758,6 +762,7 @@ mod create_tests {
         id::ProjectId,
         project::{Project, ProjectState},
         sandbox::SandboxProfile,
+        session::SessionKind,
     };
     use willie_proto::{job::JobKind, session::CreateParams};
 
@@ -826,6 +831,8 @@ mod create_tests {
                 project_id: pid,
                 git_identity: None,
                 resume: false,
+                resume_from: None,
+                kind: SessionKind::Agent,
             })
             .unwrap_err();
         assert_eq!(err.code, "project_busy");
@@ -842,7 +849,7 @@ mod create_tests {
     fn create_refuses_a_resume_while_a_session_is_already_live() {
         use willie_core::{
             id::SessionId,
-            session::{Session, SessionState},
+            session::{Session, SessionKind, SessionState},
         };
 
         let state = Arc::new(Mutex::new(State::default()));
@@ -857,6 +864,7 @@ mod create_tests {
             project_id: pid,
             harness: "claude-code".into(),
             workspace: "/w".into(),
+            kind: SessionKind::Agent,
             state: SessionState::Running,
             created_at: clock(),
             started_at: None,
@@ -864,6 +872,8 @@ mod create_tests {
             pid: Some(1),
             clients: 0,
             resumed_from: None,
+            label: None,
+            title: None,
             sandbox: Default::default(),
         };
         crate::lock(&state).sessions.insert(live.id, live);
@@ -882,6 +892,8 @@ mod create_tests {
                 project_id: pid,
                 git_identity: None,
                 resume: true,
+                resume_from: None,
+                kind: SessionKind::Agent,
             })
             .unwrap_err();
         assert_eq!(err.code, "session_already_live");
@@ -924,6 +936,8 @@ mod create_tests {
                 project_id: pid,
                 git_identity: None,
                 resume: false,
+                resume_from: None,
+                kind: SessionKind::Agent,
             })
             .unwrap_err();
 
@@ -968,6 +982,8 @@ mod create_tests {
                 project_id: pid,
                 git_identity: None,
                 resume: false,
+                resume_from: None,
+                kind: SessionKind::Agent,
             })
             .unwrap_err();
 

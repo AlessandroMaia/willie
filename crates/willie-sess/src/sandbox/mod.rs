@@ -787,7 +787,7 @@ mod tests {
     use willie_core::{
         id::{ProjectId, SessionId},
         sandbox::CapabilitySet,
-        session::SessionSpec,
+        session::{SessionKind, SessionSpec},
     };
 
     use super::*;
@@ -835,6 +835,7 @@ mod tests {
             created_at: "1".into(),
             willie_version: "0".into(),
             resumed_from: None,
+            kind: SessionKind::Agent,
             capabilities: CapabilitySet {
                 caches_rw: true,
                 ..CapabilitySet::default()

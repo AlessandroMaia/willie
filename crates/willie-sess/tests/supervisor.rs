@@ -15,7 +15,7 @@ use std::{
 
 use willie_core::{
     id::{ProjectId, SessionId},
-    session::{SessionEvent, SessionEventKind, SessionSpec},
+    session::{SessionEvent, SessionEventKind, SessionKind, SessionSpec},
 };
 
 pub fn sess_bin() -> String {
@@ -68,6 +68,7 @@ pub fn write_spec(root: &Path, argv: &[&str], workspace: &Path) -> PathBuf {
         created_at: "1".into(),
         willie_version: willie_core::VERSION.into(),
         resumed_from: None,
+        kind: SessionKind::Agent,
         capabilities: willie_core::sandbox::CapabilitySet::default(),
     };
     let path = dir.join("spec.json");

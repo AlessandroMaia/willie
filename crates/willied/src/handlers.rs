@@ -546,7 +546,7 @@ mod tests {
 
     use willie_core::{
         id::SessionId,
-        session::{Session, SessionState},
+        session::{Session, SessionKind, SessionState},
     };
 
     fn session(
@@ -559,6 +559,7 @@ mod tests {
             project_id,
             harness: "claude-code".into(),
             workspace: "/w".into(),
+            kind: SessionKind::Agent,
             state: SessionState::Running,
             created_at: created_at.into(),
             started_at: None,
@@ -566,6 +567,8 @@ mod tests {
             pid: None,
             clients: 0,
             resumed_from: None,
+            label: None,
+            title: None,
             sandbox: Default::default(),
         }
     }

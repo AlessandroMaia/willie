@@ -9,7 +9,7 @@ use willie_core::{
     id::{JobId, ProjectId, SessionId},
     project::Project,
     sandbox::SandboxProfile,
-    session::Session,
+    session::{Session, SessionKind},
 };
 use willie_proto::session::{
     CreateParams, CreateResult, GitIdentity, IdParams as SessionIdParams,
@@ -285,6 +285,8 @@ impl Engine {
                 project_id,
                 git_identity,
                 resume,
+                resume_from: None,
+                kind: SessionKind::Agent,
             },
         )
     }
