@@ -15,7 +15,9 @@ use willie_proto::session::{
     CreateParams, CreateResult, GitIdentity, IdParams as SessionIdParams,
     SessionList, method as session,
 };
-use willie_proto::tool::{InstallParams, method as tool};
+use willie_proto::tool::{
+    InstallParams, ToolList, UpdateParams, method as tool,
+};
 use willie_proto::{
     daemon::DoctorReport,
     job::method as job,
@@ -367,6 +369,19 @@ impl Engine {
             tool::INSTALL,
             InstallParams {
                 harness: harness.to_owned(),
+            },
+        )
+    }
+
+    pub fn tool_list(&mut self) -> Result<ToolList, EngineError> {
+        self.daemon_call(tool::LIST, serde_json::json!({}))
+    }
+
+    pub fn tool_update(&mut self, tool: &str) -> Result<JobRef, EngineError> {
+        self.daemon_call(
+            tool::UPDATE,
+            UpdateParams {
+                tool: tool.to_owned(),
             },
         )
     }
