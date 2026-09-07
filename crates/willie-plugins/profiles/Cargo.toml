@@ -11,7 +11,9 @@ willie-core = { workspace = true }
 willie-harness = { workspace = true }
 willie-plugin-api = { workspace = true }
 # profile.toml (name + [fragments]) and the JSON payloads read_fragment/
-# write_fragment carry over the wire.
+# write_fragment carry over the wire. serde_json's workspace-wide
+# `preserve_order` feature is what lets apply.rs's merge keep a target
+# file's existing key order (see the workspace Cargo.toml's comment).
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

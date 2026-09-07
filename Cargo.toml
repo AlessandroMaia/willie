@@ -37,7 +37,15 @@ willie-engine = { path = "crates/willie-engine" }
 # External crates. Adding one requires a justification in the PR/commit
 # message; prefer std when it is enough.
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order`: the profiles plugin's format-preserving merge
+# (crates/willie-plugins/profiles/src/apply.rs) must keep a target JSON
+# file's existing key order and only append new keys after them: without
+# this feature `serde_json::Value::Object` is a `BTreeMap`, which
+# silently re-sorts every key alphabetically on re-serialisation.
+# Workspace-wide because it is the same `serde_json` build everywhere;
+# every other consumer serialises typed structs, not arbitrary maps, so
+# their output is unaffected (verified by the full `just check`).
+serde_json = { version = "1", features = ["preserve_order"] }
 toml = "0.9"
 thiserror = "2"
 ulid = "1"

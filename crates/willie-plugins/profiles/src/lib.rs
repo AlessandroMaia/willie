@@ -6,10 +6,12 @@
 //!
 //! Phase 1 (this crate's `handle`) only creates a profile and lets its
 //! fragments be read and written, each edit its own git commit inside the
-//! profile's own repository at `<store_dir>/<name>/`. The format-preserving
-//! merge into a project (`profile.check`/`profile.apply`) and the minimal
-//! sync (`profile.push`/`pull`) are later phases of this slice.
+//! profile's own repository at `<store_dir>/<name>/`. [`apply`] carries
+//! Phase 2's format-preserving merge, pure over its inputs; `handle` does
+//! not yet route to it — that, and the minimal sync
+//! (`profile.push`/`pull`), are later phases of this slice.
 
+pub mod apply;
 mod git;
 mod model;
 
