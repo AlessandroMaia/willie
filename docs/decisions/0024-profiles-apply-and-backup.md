@@ -77,11 +77,23 @@ the writer tells the two destinations apart.
 
 ## Not decided
 
-- **The minimal git sync** (`profile.set_remote`/`push`/`pull`) — a later
-  phase of this same plugin.
-- **Per-project enablement UI and the Apply flow's confirmation step** —
-  Phase 4, the UI.
+- **Token cost of an MCP server.** No accounting is implemented: the
+  `mcp` fragment merges its JSON into `mcpServers` verbatim, and nothing
+  estimates what an added server costs against a session's context
+  budget.
+- **A conflict-resolution UI for `profile_sync_conflict`.** The panel
+  surfaces the code's own remediation text through a failure chip;
+  nothing in the app opens a terminal or helps reconcile the divergent
+  history itself.
 - **A conflict between two applies racing on the same workspace.** Nothing
   locks a workspace across a `check`/`apply` pair or two concurrent
   applies; the daemon's one-request-at-a-time dispatch makes this unlikely
   in practice, but nothing enforces it structurally.
+
+Two items originally listed here as not decided have since landed in
+later tasks of the same plugin, without a new architectural choice
+beyond what the design already called for: the minimal git sync
+(`profile.set_remote`/`push`/`pull`, `git pull --ff-only`) and the
+per-project enablement UI with the Apply flow's confirmation step (the
+Plugins screen and profiles panel). See `docs/PROTOCOL.md`'s `profile.*`
+section and `releases/v0.1.0.md`.

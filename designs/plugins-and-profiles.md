@@ -305,7 +305,7 @@ Host (`cargo test`):
   outside prose; a file fragment copies; the backup captures each changed
   file; an invalid JSON fragment is refused. Pure, host-run.
 - profiles `profile.create`/`write_fragment`: scaffold and commit
-  (the daemon's git helper, run inside the distribution for the git parts).
+  (the profiles plugin's own git wrapper, run inside the distribution for the git parts).
 
 Distribution (`just test-linux`): `profile.create` + a real `git init`/commit;
 `profile.apply` into a scratch workspace repo; `profile.push`/`pull`

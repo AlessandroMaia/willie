@@ -523,34 +523,57 @@ trait Plugin {
 }
 ```
 
-`PluginCtx` provides: private storage (`plugin_kv` namespace or
-`/var/lib/willie/plugins/<id>/`), the harness registry, the user's
-filesystem (**outside** the sandbox — plugins run in the daemon), a
-scheduler, an HTTP client already configured with proxy/CA, and
-`emit(PluginEvent)`.
+**Built for the first cut** (the plugin host, decision 0023): the trait
+above matches what ships, `on_enable`/`on_disable`/`on_event` defaulting
+to no-ops so a plugin with nothing to do there (`profile`, and the
+`usage` stub) implements only `manifest` and `handle`. `PluginCtx` today
+carries only what this cut needs — `store_dir()`, a private tree of
+plain files under `/var/lib/willie/plugins/<id>/` (not a SQLite
+`plugin_kv` table; see §4.4), and `emit()`, which the host currently
+swallows rather than forwarding (`plugin.emitted` is reserved on the
+wire but not yet sent, see §4.5). The harness registry, a scheduler and
+an HTTP client already configured with proxy/CA are documented seams
+`usage` (F5) grows next, deliberately not built here.
 
 Rules: plugins never touch daemon internals; never run inside a session;
-a plugin error ⇒ that plugin is `degraded`, the daemon continues. In the
-UI each plugin is a statically registered React module under
-`apps/willie-app/src/plugins/<id>/` that only uses core RPC/events.
-**Not plugins:** sessions, sandbox, managed tools, WT profile, corporate
-network.
+a plugin error ⇒ that plugin is `degraded`, the daemon continues — except
+a plugin's own coded refusal (e.g. `profile_exists`), which is a
+legitimate "no" and leaves it healthy. In the UI each plugin is a
+statically registered React module under `apps/willie-app/src/plugins/<id>/`
+that only uses core RPC/events. **Not plugins:** sessions, sandbox,
+managed tools, WT profile, corporate network.
 
 ### 4.2 `profiles`
 
-A profile is a **git-versioned** directory in
-`/var/lib/willie/profiles/<name>/`: `profile.toml` (metadata; lists
-`mcp.enabled`, `hooks.enabled`, `rules.enabled`) and fragments
-`settings.json`, `CLAUDE.md`, `rules/*.md`, `hooks/*`, `mcp.json`.
-`profile.check` shows the diff; `profile.apply` writes into the repository
-(`.claude/settings.json`, `CLAUDE.md`, `.claude/rules/`, hooks) and into
-the harness state (`~/.claude/settings.json`) with a **format-preserving
-merge**: JSON with key order kept, TOML edited in place, Markdown only
-between `<!-- willie:begin --> … <!-- willie:end -->`; differential backup
-in `.willie-bak/<timestamp>/`. Toggling an MCP/hook/rule = re-apply. Token
-cost of an MCP server (best effort): `tools/list` over stdio JSON-RPC,
-estimated at characters/4. Being git, profiles can sync between the two
-machines through a private remote (later slice).
+**Built for the first cut** (decisions 0023, 0024): a profile is a
+**git-versioned** directory at `/var/lib/willie/plugins/profile/<name>/`
+— the profiles plugin's own store under §4.1's per-plugin tree, not a
+bespoke top-level `profiles/` directory — holding `profile.toml`
+(metadata: `settings`/`instructions`/`mcp` booleans plus `rules`/`hooks`
+as lists of active file names, not flat per-family booleans) and
+fragments `settings.json`, `CLAUDE.md`, `rules/*`, `hooks/*`, `mcp.json`.
+`profile.check` plans without writing; `profile.apply` writes into the
+project's workspace (`.claude/settings.json`, `CLAUDE.md`,
+`.claude/rules/`, `.claude/hooks/`) and, only when a `settings` fragment
+opts in (`settings_scope = "global"` in `profile.toml`), also into the
+harness state (`~/.claude/settings.json`) that every project's sessions
+read — a **format-preserving merge** for the JSON and Markdown
+fragments (key order kept; Markdown only between `<!-- willie:begin -->
+… <!-- willie:end -->`) and a plain file copy for `rules`/`hooks`;
+differential backup of everything about to change into
+`<workspace>/.willie-bak/<nanosecond timestamp>/`. Toggling a fragment on
+is `profile.write_fragment` then a re-apply; turning one off is done by
+editing `profile.toml` directly (no Phase-1 method for it).
+`profile.set_remote`/`push`/`pull` carry a profile between the user's two
+machines over the plugin's own `git` wrapper (never `willied`'s) — `git
+push -u origin HEAD`, `git pull --ff-only` refusing a divergent history
+as `profile_sync_conflict` rather than attempting a merge inside the
+profile's own tracked files. **Not built:** MCP server token-cost
+estimation (the design's `tools/list`-over-stdio, characters/4 estimate)
+— the `mcp` fragment merges its JSON into `mcpServers` verbatim, nothing
+sizes what it costs a session's context budget — and any UI to resolve a
+sync conflict beyond surfacing `profile_sync_conflict`'s own remediation
+(open a terminal inside the distribution).
 
 ### 4.3 `usage`
 
@@ -574,13 +597,20 @@ window's percentage.
 
 ### 4.4 Persistence
 
-- **Daemon:** SQLite `/var/lib/willie/willie.db` (WAL, ext4), **one
-  writer actor** + read pool, versioned migrations. Tables `projects`,
-  `sessions` (index), `tools`, `profiles_applied`, `plugin_kv`,
-  `schema_version`.
+- **Daemon (planned):** SQLite `/var/lib/willie/willie.db` (WAL, ext4),
+  **one writer actor** + read pool, versioned migrations. Tables
+  `projects`, `sessions` (index), `tools`, `profiles_applied`,
+  `plugin_kv`, `schema_version`. **Still deferred** (§3.2): today the
+  daemon has no SQLite at all. Project and tool records are TOML files
+  under `/var/lib/willie/`, the session index lives in memory and is
+  rebuilt from each session's own directory on every start, and a
+  plugin's persistence — enablement (`plugins/enabled.toml`) and its
+  private store (`plugins/<id>/`, profiles' own profiles among them,
+  §4.1–4.2) — is plain files, not a `plugin_kv` table. `willie reindex`
+  and the SQLite tables above land together, in a later slice.
 - **Files are the truth** where they must survive without the daemon:
-  `sessions/<id>/events.jsonl` (supervisor) and profiles in git.
-  `willie reindex` rebuilds SQLite.
+  `sessions/<id>/events.jsonl` (supervisor) and profiles in git — true
+  today exactly as planned, ahead of SQLite existing at all.
 - **Engine:** `engine.toml` only.
 
 ### 4.5 Protocol (`willie-proto`)
