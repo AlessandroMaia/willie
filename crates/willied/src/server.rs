@@ -131,6 +131,8 @@ impl Server {
             job::GET => handlers::job_get(&self.state, req.params),
             job::CANCEL => handlers::job_cancel(&self.ops, req.params),
             tool::INSTALL => handlers::tool_install(&self.ops, req.params),
+            tool::LIST => handlers::tool_list(&self.ops),
+            tool::UPDATE => handlers::tool_update(&self.ops, req.params),
             session::CREATE => {
                 handlers::session_create(&self.sessions, req.params)
             }
@@ -506,6 +508,34 @@ mod tests {
         assert_eq!(
             resp[0].clone().into_result().unwrap_err().code,
             "project_not_found"
+        );
+    }
+
+    /// `tool.list` is dispatched and answers a `ToolList` naming the
+    /// catalogue's one entry today; live detection in this test's host
+    /// (no planted binary) is beside the point, only that it deserialises
+    /// and the entry is there.
+    #[test]
+    fn tool_list_answers_a_tool_list_including_claude_code() {
+        let (_, resp) = roundtrip(&line(tool::LIST, serde_json::json!({})));
+        let list: willie_proto::tool::ToolList =
+            serde_json::from_value(resp[0].clone().into_result().unwrap())
+                .unwrap();
+        assert!(list.tools.iter().any(|t| t.id == "claude-code"));
+    }
+
+    /// `tool.update` is dispatched and refuses an unknown tool id with
+    /// `invalid_params`, the same way an unknown harness does for
+    /// `tool.install`.
+    #[test]
+    fn tool_update_of_an_unknown_id_is_invalid_params() {
+        let (_, resp) = roundtrip(&line(
+            tool::UPDATE,
+            serde_json::json!({ "tool": "not-a-tool" }),
+        ));
+        assert_eq!(
+            resp[0].clone().into_result().unwrap_err().code,
+            "invalid_params"
         );
     }
 }

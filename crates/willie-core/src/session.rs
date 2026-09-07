@@ -350,6 +350,7 @@ pub fn remediation_for(code: &str) -> &'static str {
         "sessions_running" => "stop the project's sessions first",
         "supervisor_lost" => "open a new session",
         "harness_already_installed" => "nothing to install",
+        "tool_not_installed" => "install it first, then update",
         "tool_busy" => "wait for the running install to finish",
         "install_failed" => {
             "read the installer output, check the network, then try again"
@@ -803,6 +804,7 @@ mod tests {
             "sessions_running",
             "supervisor_lost",
             "harness_already_installed",
+            "tool_not_installed",
             "tool_busy",
             "install_failed",
         ] {

@@ -21,7 +21,7 @@ use willie_proto::{
     },
     rpc::RpcError,
     state::Snapshot,
-    tool::InstallParams,
+    tool::{InstallParams, UpdateParams},
 };
 
 use crate::{projects::Ops, sessions::SessionOps, state::State};
@@ -185,6 +185,17 @@ pub fn tool_install(ops: &Ops, p: Value) -> Result<Value, RpcError> {
     let InstallParams { harness } =
         serde_json::from_value(p).map_err(invalid_params)?;
     let res = ops.install_tool(&harness).map_err(op_error)?;
+    serde_json::to_value(res).map_err(internal)
+}
+
+pub fn tool_list(ops: &Ops) -> Result<Value, RpcError> {
+    serde_json::to_value(ops.list_tools()).map_err(internal)
+}
+
+pub fn tool_update(ops: &Ops, p: Value) -> Result<Value, RpcError> {
+    let UpdateParams { tool } =
+        serde_json::from_value(p).map_err(invalid_params)?;
+    let res = ops.update_tool(&tool).map_err(op_error)?;
     serde_json::to_value(res).map_err(internal)
 }
 

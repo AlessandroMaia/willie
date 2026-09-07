@@ -10,9 +10,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-// Read and written by `tools::list`/`update` (Task 3); allow until then
-// so the plain (non-test) binary still builds clean.
-#[allow(dead_code)]
+/// One tool the daemon has installed or updated: the version it detected
+/// right after, when, and the command line it ran.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolRecord {
     pub version: String,
@@ -20,7 +19,6 @@ pub struct ToolRecord {
     pub installer: String,
 }
 
-#[allow(dead_code)]
 fn manifest_path(state_dir: &Path) -> PathBuf {
     state_dir.join("tools.toml")
 }
@@ -28,8 +26,6 @@ fn manifest_path(state_dir: &Path) -> PathBuf {
 /// Every installed tool the daemon has recorded, keyed by tool id. Empty
 /// when the file is missing or unreadable — the screen falls back to live
 /// detection, so a lost manifest degrades to a re-detect, never an error.
-// Called from `tools::list` (Task 3); allow until then.
-#[allow(dead_code)]
 pub fn load(state_dir: &Path) -> BTreeMap<String, ToolRecord> {
     std::fs::read_to_string(manifest_path(state_dir))
         .ok()
@@ -40,8 +36,6 @@ pub fn load(state_dir: &Path) -> BTreeMap<String, ToolRecord> {
 /// Merge one tool's record, keeping the rest. A write failure is logged,
 /// not surfaced: the install it records already succeeded, and the next
 /// install rewrites the file anyway.
-// Called from `tools::update` and install (Task 3); allow until then.
-#[allow(dead_code)]
 pub fn record(state_dir: &Path, id: &str, rec: &ToolRecord) {
     let mut all = load(state_dir);
     all.insert(id.to_owned(), rec.clone());

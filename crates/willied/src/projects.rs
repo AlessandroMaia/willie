@@ -21,6 +21,7 @@ use willie_proto::{
         AddParams, AddResult, JobRef, RelocateParams, RenameParams,
         SetSandboxParams,
     },
+    tool::ToolList,
 };
 
 use crate::{
@@ -610,8 +611,32 @@ impl Ops {
     /// Install `name` (the harness id) as a project-less job, reached only
     /// through the `tool.install` RPC -- the user's explicit action.
     pub fn install_tool(&self, name: &str) -> Result<JobRef, OpError> {
-        let job_id =
-            crate::tools::install(&self.runner, crate::harness::home(), name)?;
+        let job_id = crate::tools::install(
+            &self.runner,
+            crate::harness::home(),
+            self.state_dir.clone(),
+            name,
+        )?;
+        Ok(JobRef { job_id })
+    }
+
+    /// Every catalogue tool, live-detected and merged onto the manifest.
+    #[must_use]
+    pub fn list_tools(&self) -> ToolList {
+        ToolList {
+            tools: crate::tools::list(&crate::harness::home(), &self.state_dir),
+        }
+    }
+
+    /// Re-run `id`'s installer as a project-less job, reached only through
+    /// the `tool.update` RPC -- the user's explicit action.
+    pub fn update_tool(&self, id: &str) -> Result<JobRef, OpError> {
+        let job_id = crate::tools::update(
+            &self.runner,
+            crate::harness::home(),
+            self.state_dir.clone(),
+            id,
+        )?;
         Ok(JobRef { job_id })
     }
 
