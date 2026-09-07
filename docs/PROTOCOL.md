@@ -308,6 +308,58 @@ other lacks, so no fast-forward exists — is refused as
 attempt a merge that could conflict inside the profile's own tracked
 files.
 
+## `usage.*`
+
+The usage plugin (id `usage`, scope `global`). Routed through `plugin.*`
+above: disabled or an unknown method answers with the plugin codes there;
+usage adds no error code of its own.
+
+| Method | Params | Result |
+| --- | --- | --- |
+| `usage.snapshot` | `{}` | `UsageSnapshot` |
+
+A caller sends no params of its own: the daemon's `usage.*` route
+(`willied::handlers::usage_handle`, mirroring `profile.*`'s
+`_workspace`/`_harness_settings` injection) strips any caller-supplied
+`_sessions`/`_home` and fills its own — `_sessions`, every session the
+daemon knows as `{ id, project_id, workspace, window: [start, end] }`
+(`end` is `null` for a still-live session), and `_home`, the distro home
+directory — before the plugin ever runs. The plugin never resolves a
+session, a project or a harness path itself; it only sees what the
+daemon hands it, the same seam `profile.*` uses.
+
+`UsageSnapshot` is `{ providers: [ProviderUsage], sessions: [SessionUsage],
+projects: [ProjectUsage], fetched_at }`.
+
+- `ProviderUsage { id, windows: [String] }` — present in the shape but
+  **always empty this cut**: nothing reads a provider's own usage endpoint
+  yet (the design's source 1, see `docs/ARCHITECTURE.md` §4.3), and an
+  empty array today is what keeps adding that source additive rather than
+  a breaking change later.
+- `SessionUsage { id, tokens, context_pct? }` — `tokens` is summed from
+  the harness's own session log for that session's workspace and time
+  window (`input + cache_creation_input + cache_read_input + output`,
+  saturating); `context_pct` covers only the input-side fields against a
+  small model-prefix table and is omitted when the model is unrecognised,
+  never shown against a guessed denominator. A session with no log found
+  for it is still present, at `tokens: 0` with no `context_pct` — "no
+  usage data yet", never omitted and never a failure.
+- `ProjectUsage { id, tokens }` — that project's sessions' tokens summed.
+- `fetched_at` is a decimal whole-seconds-since-epoch string, computed
+  fresh on every call — nothing is cached or scheduled.
+
+`usage.snapshot` while the plugin is disabled answers `plugin_disabled`,
+the same as a disabled `profile.*` call.
+
+`usage.updated` is **reserved, not delivered this cut**: the plugin's
+`on_event` calls `ctx.emit("usage.updated", {})` on every
+`SessionStarted`/`SessionExited`, but the host swallows every plugin
+emission today (see `plugin.*` above — forwarding one as a
+`plugin.emitted` notification is the same open follow-up) so no client
+ever receives it. Until that forwarding lands, the Usage panel learns of
+a change by polling `usage.snapshot` itself rather than reacting to a
+push.
+
 ## `state.*`
 | Method | Params | Result |
 | --- | --- | --- |
@@ -456,14 +508,14 @@ a profile the UI edits.
 ## Plugin codes
 
 These come back as the `error` of a `plugin.*` call, or of a plugin-routed
-`profile.*` call. A plugin's own coded failures (e.g. `profile_exists`
-below) travel through unchanged, carrying the plugin's own code and
-remediation.
+`profile.*` or `usage.*` call. A plugin's own coded failures (e.g.
+`profile_exists` below) travel through unchanged, carrying the plugin's
+own code and remediation.
 
 | Code | When | When not | Remediation |
 | --- | --- | --- | --- |
-| `plugin_not_found` | `plugin.enable`/`disable`, or a `profile.*` call, names a plugin id no plugin in the registry answers to | the id is known but disabled — that is `plugin_disabled` | check `plugin.list` for the available plugin ids |
-| `plugin_disabled` | a `profile.*` (plugin-routed) call while the plugin is not enabled — a global plugin whose flag is off, or a per-project plugin enabled in no project | the plugin is enabled — the call reaches it and returns the plugin's own result or coded error | enable it with `plugin.enable` before calling its methods |
+| `plugin_not_found` | `plugin.enable`/`disable`, or a `profile.*`/`usage.*` call, names a plugin id no plugin in the registry answers to | the id is known but disabled — that is `plugin_disabled` | check `plugin.list` for the available plugin ids |
+| `plugin_disabled` | a `profile.*`/`usage.*` (plugin-routed) call while the plugin is not enabled — a global plugin whose flag is off, or a per-project plugin enabled in no project | the plugin is enabled — the call reaches it and returns the plugin's own result or coded error | enable it with `plugin.enable` before calling its methods |
 | `plugin_scope_mismatch` | `plugin.enable`/`disable` in a scope the manifest forbids: a global scope (no `project_id`) for a per-project plugin, or a per-project scope (a `project_id`) for a global plugin | the scope matches the manifest — the enable/disable proceeds | enable it in the scope its manifest declares (a `project_id` for a per-project plugin, none for a global one) |
 | `plugin_panicked` | a plugin's `on_enable`/`on_disable`/`handle` panicked; the panic is caught at the host boundary and the plugin is marked `degraded`, the daemon lives | the plugin returned an ordinary coded refusal — that carries the plugin's own code and does not degrade it; only a panic or an internal fault (`plugin_internal`) does | check the daemon log; the plugin stays degraded until a later call succeeds or it is re-enabled |
 | `plugin_internal` | a plugin returned `PluginError::Internal` — a genuine fault (not a `Coded` refusal it can name); the plugin is marked `degraded` | the plugin returned a coded refusal (e.g. `profile_exists`) — a legitimate "no" that carries its own code and leaves the plugin healthy | retry; if it repeats, check the daemon log — the plugin stays degraded until a later call succeeds or it is re-enabled |
