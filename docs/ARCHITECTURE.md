@@ -606,7 +606,7 @@ window's percentage.
 | Screen        | Contents                                                                                                   |
 | ------------- | ---------------------------------------------------------------------------------------------------------- |
 | Dashboard     | engine/distro/daemon traffic light with expandable `doctor`; active sessions; usage summary                |
-| Projects      | add from a root (discover) or a path; ext4 workspace; send/update to the Windows checkout; relocate a moved source |
+| Projects      | add from a root (discover) or a path; ext4 workspace; send/update to the Windows checkout; relocate a moved source; open the workspace in Explorer or in VS Code (Remote-WSL, when installed) |
 | Sessions      | active/history (state, project, duration); *stop*; *open in Windows Terminal* (re-attach); *explain sandbox* |
 | Tools         | detected in the distribution, version; install/update from the official source with confirmation and log  |
 | Plugins       | enable/disable globally and per project; **Usage** and **Profiles** panels                                 |

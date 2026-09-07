@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Toaster } from "@/components/ui/toast";
@@ -12,7 +12,7 @@ const SNAPSHOT: Snapshot = {
       id: "proj_1",
       name: "willie",
       slug: "willie",
-      source: "C:githubwillie",
+      source: "C:\\github\\willie",
       workspace: "/home/willie/projects/willie",
       branch: "main",
       state: { state: "ready" },
@@ -25,15 +25,15 @@ const SNAPSHOT: Snapshot = {
   sessions: [],
 };
 
-const BUSY = {
-  code: "project_busy",
-  message: "A job is already running",
-  remediation: "Wait for it",
+const LAUNCH_FAILED = {
+  code: "editor_launch_failed",
+  message: "the OS refused to start VS Code",
+  remediation: "try opening the workspace from VS Code directly",
 };
 
-/* The bridge is the only I/O in the frontend and the only module a
- * test fakes. Every function this screen may call on mount is here;
- * the rest are inert. */
+/* The bridge is the only I/O in the frontend and the only module a test
+ * fakes. Every function this screen may call on mount is here; the rest
+ * are inert. */
 const ipc = vi.hoisted(() => ({
   engine: {
     status: vi.fn(),
@@ -78,42 +78,71 @@ vi.mock("@/lib/ipc", () => ipc);
 
 let ProjectsScreen: typeof import("@/features/projects/projects-screen").ProjectsScreen;
 
-/* `useSnapshot` backs onto a module-level singleton store, so a
- * snapshot left behind by one render would still be there for the
- * next test's first synchronous render. Reset the module graph and
- * re-import the screen fresh for every case. */
+/* `useSnapshot` backs onto a module-level singleton store, so a snapshot
+ * left behind by one render would still be there for the next test's
+ * first synchronous render. Reset the module graph and re-import the
+ * screen fresh for every case. */
 beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
   ipc.projects.snapshot.mockResolvedValue(SNAPSHOT);
-  ipc.projects.remove.mockRejectedValue(BUSY);
+  ipc.editorAvailable.mockResolvedValue(true);
+  ipc.projects.openInEditor.mockResolvedValue(undefined);
   ({ ProjectsScreen } = await import("@/features/projects/projects-screen"));
 });
 
-describe("removing a project", () => {
-  it("keeps the dialog open and shows a synchronous refusal inside it", async () => {
+function renderScreen() {
+  render(
+    <TooltipProvider>
+      <Toaster>
+        <ProjectsScreen />
+      </Toaster>
+    </TooltipProvider>,
+  );
+}
+
+describe("opening a project in VS Code", () => {
+  it("calls the bridge with the project's workspace", async () => {
     const user = userEvent.setup();
-    render(
-      <TooltipProvider>
-        <Toaster>
-          <ProjectsScreen />
-        </Toaster>
-      </TooltipProvider>,
-    );
+    renderScreen();
     await screen.findByText("willie");
 
     await user.click(screen.getByRole("button", { name: /More actions/ }));
-    await user.click(await screen.findByRole("menuitem", { name: "Remove…" }));
-    const dialog = await screen.findByRole("alertdialog");
-    await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open in VS Code" }),
+    );
+
+    expect(ipc.projects.openInEditor).toHaveBeenCalledWith(
+      "/home/willie/projects/willie",
+    );
+  });
+
+  it("disables the menu item when the host reports no editor", async () => {
+    ipc.editorAvailable.mockResolvedValue(false);
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByText("willie");
+
+    await user.click(screen.getByRole("button", { name: /More actions/ }));
+    const item = await screen.findByRole("menuitem", {
+      name: "Open in VS Code",
+    });
+
+    expect(item.hasAttribute("data-disabled")).toBe(true);
+  });
+
+  it("sets the row problem when the launch is rejected", async () => {
+    ipc.projects.openInEditor.mockRejectedValue(LAUNCH_FAILED);
+    const user = userEvent.setup();
+    renderScreen();
+    await screen.findByText("willie");
+
+    await user.click(screen.getByRole("button", { name: /More actions/ }));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Open in VS Code" }),
+    );
 
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain("project_busy");
-    /* The popup stays mounted through an exit transition that never
-     * runs in jsdom, so being in the document does not say the dialog
-     * is still open — `data-open` does. */
-    const stillOpen = screen.getByRole("alertdialog");
-    expect(stillOpen.hasAttribute("data-open")).toBe(true);
-    expect(stillOpen.contains(alert)).toBe(true);
+    expect(alert.textContent).toContain("editor_launch_failed");
   });
 });
