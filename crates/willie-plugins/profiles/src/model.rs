@@ -152,14 +152,29 @@ fn push_once(list: &mut Vec<String>, item: &str) {
     }
 }
 
-/// A safe single-path-segment file name: non-empty, no path separator, and
-/// not a `.`/`..` component.
+/// A safe single-path-segment file name: non-empty, no path separator,
+/// not a `.`/`..` component, and not a Windows drive-letter prefix
+/// (`C:foo`, `a:bar`). The drive-letter check matters even though `willied`
+/// only ever runs on Linux: this crate carries no `cfg(target_os =
+/// "linux")` of its own, so `cargo test --workspace` on a Windows
+/// development machine builds and runs it under real Windows path
+/// semantics, where `Path::join` treats a drive-prefixed argument as an
+/// absolute replacement of the base rather than a child of it.
 fn is_safe_file_name(f: &str) -> bool {
     !f.is_empty()
         && !f.contains('/')
         && !f.contains('\\')
         && f != "."
         && f != ".."
+        && !starts_with_drive_letter(f)
+}
+
+/// Whether `s` opens with a Windows drive-letter pattern: an ASCII letter
+/// immediately followed by `:`.
+fn starts_with_drive_letter(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.next() == Some(':')
 }
 
 /// Whether `name` is a safe profile directory name: non-empty, no path
@@ -312,5 +327,21 @@ mod tests {
         assert!(!is_valid_profile_name("a/b"));
         assert!(!is_valid_profile_name("a\\b"));
         assert!(!is_valid_profile_name("../escape"));
+    }
+
+    #[test]
+    fn profile_names_reject_a_windows_drive_letter_prefix() {
+        // `Path::join` on Windows treats a drive-prefixed argument as an
+        // absolute replacement of the base, not a child of it (`C:foo` and
+        // even the unusual-but-valid `a:bar` both qualify) — refused
+        // before any path is ever built from the name.
+        assert!(!is_valid_profile_name("C:foo"));
+        assert!(!is_valid_profile_name("c:foo"));
+        assert!(!is_valid_profile_name("a:bar"));
+        assert!(!is_valid_profile_name("Z:\\escape"));
+        // A bare colon with nothing recognisable as a drive letter first
+        // is not this pattern, but still fails on its own merits
+        // elsewhere; not a false positive to worry about here.
+        assert!(is_valid_profile_name("safe-name"));
     }
 }

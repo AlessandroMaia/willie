@@ -434,9 +434,9 @@ above); none of them mark the plugin `degraded` — each is a legitimate
 | Code | When | Remediation |
 | --- | --- | --- |
 | `profile_exists` | `profile.create` names a profile that already has a directory under `store_dir` | pick a different name, or edit the existing profile |
-| `profile_not_found` | `profile.read_fragment`/`write_fragment` names a profile with no `profile.toml` — including a name that could never be valid (a path separator, `.`/`..`), which is refused the same way rather than distinguished | check `profile.list` for the available profile names |
+| `profile_not_found` | `profile.read_fragment`/`write_fragment` names a **valid-shaped** profile name with no `profile.toml` under it | check `profile.list` for the available profile names |
 | `profile_fragment_unknown` | `profile.read_fragment`/`write_fragment`'s `fragment` is not `settings`, `instructions`, `mcp`, or a `rules/<file>`/`hooks/<file>` naming a single, safe file name | use one of `settings`, `instructions`, `mcp`, `rules/<file>`, `hooks/<file>` |
-| `profile_name_invalid` | `profile.create`'s `name` is empty, contains a path separator, or is `.`/`..` | use a name with no path separators, and not `.` or `..` |
+| `profile_name_invalid` | any of the four methods' `name` is empty, contains a path separator, is `.`/`..`, or opens with a Windows drive-letter pattern (`C:foo`, `a:bar`) — checked before any path is built from it, and re-checked after joining it onto `store_dir` in case the join itself produced something outside it (belt and suspenders, since this crate has no `cfg(target_os = "linux")` of its own and so also builds and runs under Windows path semantics) | use a name with no path separators, not `.` or `..`, and not shaped like a drive letter |
 
 ## Engine problem codes
 

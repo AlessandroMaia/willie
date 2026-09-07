@@ -144,11 +144,7 @@ fn create(
     params: Value,
 ) -> Result<PluginResponse, PluginError> {
     let CreateParams { name } = parse_params(params)?;
-    if !is_valid_profile_name(&name) {
-        return Err(invalid_name(&name));
-    }
-
-    let dir = profile_dir(ctx, &name);
+    let dir = profile_dir(ctx, &name)?;
     if dir.exists() {
         return Err(PluginError::coded(
             "profile_exists",
@@ -225,23 +221,49 @@ fn write_fragment(
 
 // --------------------------------------------------------------- helpers
 
-/// `<store_dir>/<name>/`, not necessarily existing yet.
-fn profile_dir(ctx: &PluginCtx<'_>, name: &str) -> PathBuf {
-    ctx.store_dir().join(name)
-}
-
-/// Resolves `name` to an existing profile's directory, refusing an
-/// invalid name or one with no `profile.toml` as `profile_not_found` — the
-/// two are indistinguishable to the caller (a name that could never be
-/// valid never corresponds to a real profile either).
-fn existing_profile_dir(
+/// `<store_dir>/<name>/`, not necessarily existing yet. Refuses
+/// `profile_name_invalid` for a name the grammar rejects (see
+/// `is_valid_profile_name`) *before* building any path from it, and — as
+/// a second, independent line of defense — refuses the same code if the
+/// joined path is somehow not actually a descendant of `store_dir`
+/// anyway. The second check exists because a name-level rule can only
+/// reject shapes it was written to anticipate; `Path::join` itself can
+/// behave in ways that quietly step outside the base (a Windows
+/// drive-letter argument replaces the base outright rather than
+/// nesting under it), so the result is verified after the fact rather
+/// than trusted.
+fn profile_dir(
     ctx: &PluginCtx<'_>,
     name: &str,
 ) -> Result<PathBuf, PluginError> {
     if !is_valid_profile_name(name) {
-        return Err(not_found(name));
+        return Err(invalid_name(name));
     }
-    let dir = profile_dir(ctx, name);
+    let store = ctx.store_dir();
+    let dir = store.join(name);
+    if !is_contained(store, &dir) {
+        return Err(invalid_name(name));
+    }
+    Ok(dir)
+}
+
+/// Whether `dir` is still a descendant of `store` — the containment
+/// check `profile_dir` runs after joining, independent of whatever the
+/// name grammar already ruled out.
+fn is_contained(store: &Path, dir: &Path) -> bool {
+    dir.strip_prefix(store).is_ok()
+}
+
+/// Resolves `name` to an existing profile's directory. `profile_dir`
+/// already answers `profile_name_invalid` for a name that could never be
+/// valid or whose joined path would escape `store_dir`; what is left
+/// here is a *valid* name with no `profile.toml` there, which is
+/// `profile_not_found`.
+fn existing_profile_dir(
+    ctx: &PluginCtx<'_>,
+    name: &str,
+) -> Result<PathBuf, PluginError> {
+    let dir = profile_dir(ctx, name)?;
     if !dir.join("profile.toml").is_file() {
         return Err(not_found(name));
     }
@@ -418,6 +440,52 @@ mod tests {
         assert_eq!(err.code(), "profile_name_invalid");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn create_refuses_a_windows_drive_letter_name_and_touches_nothing() {
+        // On Windows, `PathBuf::join` with a drive-prefixed argument
+        // replaces the base path outright rather than nesting under it —
+        // `store_dir().join("C:foo")` would land outside `store_dir`
+        // entirely. This crate carries no `cfg(target_os = "linux")` of
+        // its own, so `cargo test --workspace` runs it under real
+        // Windows path semantics on a Windows development machine; the
+        // name must be refused before any path is built from it, and
+        // nothing under the store dir (the only place this test is
+        // allowed to touch) may appear as a side effect.
+        let dir = scratch_dir("drive-letter");
+        let ctx = PluginCtx::new(&dir, &noop_emit);
+        let mut plugin = ProfilesPlugin;
+
+        for name in ["C:foo", "a:bar"] {
+            let err = plugin
+                .handle(&ctx, req("profile.create", json!({"name": name})))
+                .unwrap_err();
+            assert_eq!(err.code(), "profile_name_invalid", "name `{name}`");
+        }
+
+        // Nothing was created under the store dir either.
+        let entries: Vec<_> = fs::read_dir(&dir).unwrap().collect();
+        assert!(entries.is_empty(), "store dir gained an entry: {entries:?}");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_containment_escape_is_refused_even_past_the_name_grammar() {
+        // Independent of `is_valid_profile_name`: even a `dir` that a
+        // join produced outside `store_dir` by some mechanism the name
+        // grammar did not anticipate must still be refused, never
+        // silently used. Exercises the containment check directly with
+        // synthesised paths, portable to every OS this crate's tests run
+        // on (a real Windows-only drive-letter join is covered end to
+        // end above, on Windows).
+        let store = Path::new("/store/profile/x");
+        let escaped = Path::new("C:foo");
+        assert!(!is_contained(store, escaped));
+
+        let contained = store.join("settings.json");
+        assert!(is_contained(store, &contained));
     }
 
     #[test]
@@ -611,7 +679,11 @@ mod tests {
     }
 
     #[test]
-    fn a_path_traversal_name_is_not_found_not_a_fault() {
+    fn a_path_traversal_name_is_refused_as_invalid_not_a_fault() {
+        // `profile_dir` (shared by `create` and `existing_profile_dir`)
+        // rejects a name the grammar could never accept before it ever
+        // resolves to a path, so this is `profile_name_invalid`, distinct
+        // from `profile_not_found` (a valid name with no profile there).
         let dir = scratch_dir("traversal");
         let ctx = PluginCtx::new(&dir, &noop_emit);
         let err = ProfilesPlugin
@@ -623,7 +695,7 @@ mod tests {
                 ),
             )
             .unwrap_err();
-        assert_eq!(err.code(), "profile_not_found");
+        assert_eq!(err.code(), "profile_name_invalid");
         let _ = fs::remove_dir_all(&dir);
     }
 
