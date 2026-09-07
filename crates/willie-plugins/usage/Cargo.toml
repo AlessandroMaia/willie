@@ -10,6 +10,9 @@ publish.workspace = true
 willie-core = { workspace = true }
 willie-harness = { workspace = true }
 willie-plugin-api = { workspace = true }
+# read.rs parses a harness session's JSONL tail (arbitrary per-line
+# objects with a nested or top-level `usage` block) into token counts.
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

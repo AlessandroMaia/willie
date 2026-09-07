@@ -4177,6 +4177,7 @@ dependencies = [
 name = "willie-plugin-usage"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "willie-core",
  "willie-harness",
  "willie-plugin-api",

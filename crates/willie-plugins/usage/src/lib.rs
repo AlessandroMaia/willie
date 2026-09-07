@@ -8,6 +8,8 @@ use willie_plugin_api::{
     PluginResponse, Scope,
 };
 
+pub mod read;
+
 /// The usage plugin.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct UsagePlugin;
