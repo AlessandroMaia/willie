@@ -201,3 +201,28 @@ export interface ToolStatus {
 export interface ToolList {
   tools: ToolStatus[];
 }
+
+/* Mirrors `willie_proto::usage::{ProviderUsage, SessionUsage,
+ * ProjectUsage, UsageSnapshot}`. `context_pct` is omitted (Rust's
+ * `skip_serializing_if`) whenever the harness has not reported one yet —
+ * always the case this cut, so the panel treats a missing value as "no
+ * usage yet" rather than a 0% meter. */
+export interface ProviderUsage {
+  id: string;
+  windows: string[];
+}
+export interface SessionUsage {
+  id: string;
+  tokens: number;
+  context_pct?: number | null;
+}
+export interface ProjectUsage {
+  id: string;
+  tokens: number;
+}
+export interface UsageSnapshot {
+  providers: ProviderUsage[];
+  sessions: SessionUsage[];
+  projects: ProjectUsage[];
+  fetched_at: string;
+}
