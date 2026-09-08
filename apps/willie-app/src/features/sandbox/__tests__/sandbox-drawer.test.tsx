@@ -1,14 +1,14 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { SandboxDialog } from "@/features/projects/sandbox-dialog";
+import { SandboxDrawer } from "@/features/sandbox/sandbox-drawer";
 import type { CapabilityInfo, Project, SandboxProfile } from "@/lib/proto";
 
 /* Nothing overridden: every capability comes from the harness. */
 const inherited: SandboxProfile = { extra_paths: [] };
 
 /* The catalogue the Rust side owns, trimmed to what these tests read.
- * The dialog takes it as a prop, so no module is faked here. */
+ * The drawer takes it as a prop, so no module is faked here. */
 const catalogue = (): CapabilityInfo[] => [
   {
     capability: "project_rw",
@@ -35,7 +35,7 @@ const catalogue = (): CapabilityInfo[] => [
 
 /* A harness that leaves the credential off, which is what the `Harness`
  * trait's own default does: Claude Code is the only implementation that
- * turns `agent.state` on, so the dialog may not assume it. */
+ * turns `agent.state` on, so the drawer may not assume it. */
 const credentialOffByDefault = (): CapabilityInfo[] =>
   catalogue().map((c) =>
     c.capability === "agent_state" ? { ...c, default_enabled: false } : c,
@@ -56,10 +56,10 @@ const project = (): Project => ({
   sandbox: inherited,
 });
 
-describe("SandboxDialog", () => {
+describe("SandboxDrawer", () => {
   it("shows each capability with the sentence that says what it costs", () => {
     render(
-      <SandboxDialog
+      <SandboxDrawer
         project={project()}
         catalogue={catalogue()}
         problem={null}
@@ -75,7 +75,7 @@ describe("SandboxDialog", () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
     render(
-      <SandboxDialog
+      <SandboxDrawer
         project={project()}
         catalogue={catalogue()}
         problem={null}
@@ -97,7 +97,7 @@ describe("SandboxDialog", () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
     render(
-      <SandboxDialog
+      <SandboxDrawer
         project={project()}
         catalogue={catalogue()}
         problem={null}
@@ -125,7 +125,7 @@ describe("SandboxDialog", () => {
       c.capability === "ssh" ? { ...c, implemented: true } : c,
     );
     render(
-      <SandboxDialog
+      <SandboxDrawer
         project={project()}
         catalogue={implementedNow}
         problem={null}
@@ -147,7 +147,7 @@ describe("SandboxDialog", () => {
 
   it("seeds a row the profile says nothing about from the harness default", () => {
     render(
-      <SandboxDialog
+      <SandboxDrawer
         project={project()}
         catalogue={credentialOffByDefault()}
         problem={null}
@@ -162,7 +162,7 @@ describe("SandboxDialog", () => {
 
   it("shows an override that turns a default-off capability on", () => {
     render(
-      <SandboxDialog
+      <SandboxDrawer
         project={{ ...project(), sandbox: { agent_state: true } }}
         catalogue={credentialOffByDefault()}
         problem={null}
@@ -175,9 +175,9 @@ describe("SandboxDialog", () => {
     expect(credential.hasAttribute("data-checked")).toBe(true);
   });
 
-  it("keeps a refusal visible inside the dialog", () => {
+  it("keeps a refusal visible inside the drawer", () => {
     render(
-      <SandboxDialog
+      <SandboxDrawer
         project={project()}
         problem={{
           code: "sandbox_profile_invalid",
@@ -189,22 +189,20 @@ describe("SandboxDialog", () => {
       />,
     );
 
-    const dialog = screen.getByRole("dialog");
+    const drawer = screen.getByRole("dialog");
     const alert = screen.getByRole("alert");
 
-    expect(dialog.contains(alert)).toBe(true);
+    expect(drawer.contains(alert)).toBe(true);
     expect(alert.textContent).toContain("sandbox_profile_invalid");
   });
 
   /* Ten capabilities, each with the sentence that says what it costs,
-   * are taller than a small window. A dialog that grows with them puts
-   * Save past the bottom edge, where no amount of scrolling reaches it,
-   * because the popup is centred rather than scrolled. So the rows
-   * scroll inside a frame the dialog holds fixed, and the footer sits
-   * outside that frame. */
+   * are taller than a small window. The sheet is held to the viewport
+   * rather than growing with its content, so the rows scroll inside a
+   * frame it holds fixed and the footer sits outside that frame. */
   it("scrolls the capability rows and leaves the footer outside", () => {
     render(
-      <SandboxDialog
+      <SandboxDrawer
         project={project()}
         catalogue={catalogue()}
         problem={null}
@@ -213,8 +211,8 @@ describe("SandboxDialog", () => {
       />,
     );
 
-    const dialog = screen.getByRole("dialog");
-    const rows = dialog.querySelector('[data-slot="scroll-area"]');
+    const drawer = screen.getByRole("dialog");
+    const rows = drawer.querySelector('[data-slot="scroll-area"]');
     const save = screen.getByRole("button", { name: "Save" });
 
     expect(rows).not.toBeNull();
@@ -223,17 +221,17 @@ describe("SandboxDialog", () => {
   });
 
   /* A `sandbox_problem` is a load failure, not a rejected save: it comes
-   * from the project itself, is present the instant the dialog opens,
+   * from the project itself, is present the instant the drawer opens,
    * and stays even though `problem` (the save-rejection prop) is null. */
   it("shows an alert when the project's sandbox table could not be read", () => {
     render(
-      <SandboxDialog
+      <SandboxDrawer
         project={{
           ...project(),
           sandbox_problem: {
             code: "sandbox_table_invalid",
             message: "the [sandbox] table could not be read",
-            remediation: "open the Sandbox dialog and save to replace it",
+            remediation: "open the Sandbox drawer and save to replace it",
           },
         }}
         catalogue={catalogue()}
@@ -251,11 +249,11 @@ describe("SandboxDialog", () => {
 
   /* `local` must start from `{}`, not from `project.sandbox` (the
    * default profile the daemon substituted): every row falls back to
-   * the harness's own default, proving the dialog never treats that
+   * the harness's own default, proving the drawer never treats that
    * substitute as a saved override. */
   it("starts from the harness defaults, not the substituted profile, when the sandbox table could not be read", () => {
     render(
-      <SandboxDialog
+      <SandboxDrawer
         project={{
           ...project(),
           /* What the daemon loads a project with while the table can't
@@ -267,7 +265,7 @@ describe("SandboxDialog", () => {
           sandbox_problem: {
             code: "sandbox_table_invalid",
             message: "the [sandbox] table could not be read",
-            remediation: "open the Sandbox dialog and save to replace it",
+            remediation: "open the Sandbox drawer and save to replace it",
           },
         }}
         catalogue={catalogue()}
@@ -286,7 +284,7 @@ describe("SandboxDialog", () => {
    * sight at the moment it appears. */
   it("keeps a refusal out of the scrolling rows", () => {
     render(
-      <SandboxDialog
+      <SandboxDrawer
         project={project()}
         catalogue={catalogue()}
         problem={{
@@ -299,10 +297,41 @@ describe("SandboxDialog", () => {
       />,
     );
 
-    const dialog = screen.getByRole("dialog");
-    const rows = dialog.querySelector('[data-slot="scroll-area"]');
+    const drawer = screen.getByRole("dialog");
+    const rows = drawer.querySelector('[data-slot="scroll-area"]');
     const alert = screen.getByRole("alert");
 
     expect(rows?.contains(alert)).toBe(false);
+  });
+
+  /* Sandbox capabilities are monotonic (docs/decisions/0007): a
+   * repository's own configuration can only tighten this profile,
+   * never open something it leaves off — the drawer says so up front. */
+  it("shows the monotonic note about repository configuration", () => {
+    render(
+      <SandboxDrawer
+        project={project()}
+        catalogue={catalogue()}
+        problem={null}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(/can only tighten/)).toBeDefined();
+  });
+
+  it("never offers an allow action from this drawer", () => {
+    render(
+      <SandboxDrawer
+        project={project()}
+        catalogue={catalogue()}
+        problem={null}
+        onSave={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /allow/i })).toBeNull();
   });
 });

@@ -187,9 +187,11 @@ describe("the shell", () => {
     await vi.waitFor(() =>
       expect(router.state.location.pathname).toBe("/sandbox"),
     );
-    expect(
-      await screen.findByRole("heading", { name: "Sandbox" }),
-    ).toBeDefined();
+    /* This suite's snapshot has no projects, so the real Sandbox screen
+     * (Task 15) shows its own "no system yet" empty state rather than a
+     * system header — proof enough that the route actually resolved to
+     * the screen, not a stale placeholder. */
+    expect(await screen.findByText("No system yet")).toBeDefined();
   });
 
   it("navigates with Mod+2", async () => {

@@ -13,6 +13,7 @@ import { PluginsScreen } from "@/features/plugins/plugins-screen";
 import { ProfileStoreScreen } from "@/features/profile-store/profile-store-screen";
 import { ProfilesScreen } from "@/features/profiles/profiles-screen";
 import { ProjectsScreen } from "@/features/projects/projects-screen";
+import { SandboxScreen } from "@/features/sandbox/sandbox-screen";
 import { SessionScreen } from "@/features/session/session-screen";
 import { SettingsScreen } from "@/features/settings/settings-screen";
 import { ToolsScreen } from "@/features/tools/tools-screen";
@@ -22,21 +23,6 @@ import { UsageScreen } from "@/features/usage/usage-screen";
  * Session screen, the app's new home. */
 function NotFound() {
   return <Navigate to="/session" replace />;
-}
-
-/** What Task 15 replaces: a screen this task only gives an address to,
- * not a route that does not resolve. */
-function ScreenPlaceholder({ title }: { title: string }) {
-  return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-2">
-      <h1 className="font-semibold text-lg">{title}</h1>
-      <p className="text-muted-foreground text-sm">Coming soon.</p>
-    </div>
-  );
-}
-
-function SandboxScreen() {
-  return <ScreenPlaceholder title="Sandbox" />;
 }
 
 const rootRoute = createRootRoute({
@@ -62,8 +48,8 @@ const sandboxRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sandbox",
   component: SandboxScreen,
-  /* Read by Task 15's system aggregate; the footer's governance
-   * segment (Task 11) links here with `?session=<id>` today. */
+  /* Read by the Sandbox screen to preselect its session filter; the
+   * footer's governance segment links here with `?session=<id>`. */
   validateSearch: (search: Record<string, unknown>): { session?: string } => ({
     session: typeof search.session === "string" ? search.session : undefined,
   }),

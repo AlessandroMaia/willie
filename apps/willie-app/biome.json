@@ -266,6 +266,41 @@
       }
     },
     {
+      "includes": ["src/features/sandbox/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/features/projects/*",
+                      "@/features/sessions/*",
+                      "@/features/session/*",
+                      "@/features/health/*",
+                      "**/app/**",
+                      "../projects/**",
+                      "../sessions/**",
+                      "../session/**",
+                      "../health/**",
+                      "**/features/projects/**",
+                      "**/features/sessions/**",
+                      "**/features/session/**",
+                      "**/features/health/**"
+                    ],
+                    "message": "features/sandbox never imports app/ or another feature (projects, sessions, session, health). What sandbox and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["src/plugins/**"],
       "linter": {
         "rules": {

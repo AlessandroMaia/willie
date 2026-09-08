@@ -290,6 +290,71 @@ describe("the footer's governance segment", () => {
   });
 });
 
+describe("the footer's system aggregate", () => {
+  it("the_footer_shows_the_systems_posture_on_the_sandbox_screen", async () => {
+    ipc.projects.snapshot.mockResolvedValue({
+      seq: 1,
+      projects: [
+        {
+          id: "proj_1",
+          name: "willie",
+          slug: "willie",
+          source: "C:\\github\\willie",
+          workspace: "/home/willie/projects/willie",
+          branch: "main",
+          state: { state: "ready" },
+          source_present: true,
+          created_at: "1",
+          sandbox: {},
+        },
+      ],
+      jobs: [],
+      sessions: [AGENT_SESSION, SHELL_SESSION],
+    });
+
+    await renderApp("/sandbox");
+
+    const link = await screen.findByRole("link", { name: /^sandbox:/ });
+    expect(link.textContent).toContain("seccomp · namespaces · 6 denied");
+    expect(link.getAttribute("href")).toBe("/sandbox");
+    expect(screen.queryByText(/tokens/)).toBeNull();
+    expect(ipc.usage.snapshot).not.toHaveBeenCalled();
+  });
+
+  it("shows nothing on the sandbox screen before a system exists", async () => {
+    await renderApp("/sandbox");
+
+    expect(screen.queryByText(/^sandbox:/)).toBeNull();
+  });
+
+  it("the_footer_says_no_sandbox_report_for_a_system_without_sessions", async () => {
+    ipc.projects.snapshot.mockResolvedValue({
+      seq: 1,
+      projects: [
+        {
+          id: "proj_1",
+          name: "willie",
+          slug: "willie",
+          source: "C:\\github\\willie",
+          workspace: "/home/willie/projects/willie",
+          branch: "main",
+          state: { state: "ready" },
+          source_present: true,
+          created_at: "1",
+          sandbox: {},
+        },
+      ],
+      jobs: [],
+      sessions: [],
+    });
+
+    await renderApp("/sandbox");
+
+    expect(await screen.findByText("sandbox: no sandbox report")).toBeDefined();
+    expect(screen.queryByText(/denied/)).toBeNull();
+  });
+});
+
 describe("the footer's usage poll", () => {
   it("the_footer_polls_usage_every_four_seconds_while_an_agent_session_is_focused", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });

@@ -3,12 +3,13 @@ import { useEffect, useState } from "react";
 import { StatusDot } from "@/components/status-dot";
 import { TONE_DOT, type Tone, toneForHealth } from "@/components/tone";
 import { summarize } from "@/lib/domain/engine-status";
-import { deniedCount, postureLine } from "@/lib/domain/sandbox";
+import { deniedCount, posture, postureLine } from "@/lib/domain/sandbox";
 import { liveSessions, sandboxOf, sandboxPosture } from "@/lib/domain/sessions";
 import { contextTone } from "@/lib/domain/usage";
 import { usage } from "@/lib/ipc";
 import type { Session, SessionUsage, UsageSnapshot } from "@/lib/proto";
 import { cn } from "@/lib/utils";
+import { useCurrentSystem } from "@/store/use-current-system";
 import { useEngineStatus } from "@/store/use-engine-status";
 import { useFocusedSession } from "@/store/use-focused-session";
 import { useSnapshot } from "@/store/use-snapshot";
@@ -19,10 +20,14 @@ import { useSnapshot } from "@/store/use-snapshot";
 const POLL_INTERVAL_MS = 4000;
 
 interface GovernanceSegmentProps {
-  session: Session;
+  /** The Session screen's focused session, or `null` for the Sandbox
+   * screen's system-wide aggregate below — which has no one session to
+   * scope the link or the usage meter to. */
+  session: Session | null;
   usageRow: SessionUsage | undefined;
-  /** Task 15's system aggregate (shown on `/sandbox`) overrides the
-   * focused session's own posture line with the system-wide one. */
+  /** The system aggregate (shown on `/sandbox`) overrides the
+   * per-session posture line with the system-wide mechanisms and
+   * denied count, unioned across every one of the system's sessions. */
   posture?: string;
 }
 
@@ -30,24 +35,25 @@ interface GovernanceSegmentProps {
  * and the token count when usage has a row for this session — never a
  * fake 0% meter when it does not. A session that has not reported any
  * mechanism yet (`sandboxPosture` is "unknown" — still `creating`, or
- * recorded before sandbox reporting existed) shows the same "no sandbox
- * report" line `features/sessions/sandbox-line.tsx` already uses,
+ * recorded before sandbox reporting existed) shows "no sandbox report",
+ * the same convention `sandboxPosture`'s "unknown" case itself carries,
  * with neither a denied count nor a meter — never built by
- * concatenating through an empty `postureLine`. Always a link to the
- * Sandbox screen filtered to this session. */
+ * concatenating through an empty `postureLine`. Links to the Sandbox
+ * screen, filtered to this session when there is one. */
 function GovernanceSegment({
   session,
   usageRow,
   posture,
 }: GovernanceSegmentProps) {
-  const noReport = !posture && sandboxPosture(session) === "unknown";
-  const sandbox = sandboxOf(session);
+  const noReport =
+    !posture && session !== null && sandboxPosture(session) === "unknown";
+  const sandbox = session ? sandboxOf(session) : null;
   const line =
     posture ??
-    (noReport
+    (noReport || !sandbox
       ? "no sandbox report"
       : `${postureLine(sandbox)} · ${deniedCount(sandbox)} denied`);
-  const showUsage = !noReport;
+  const showUsage = !noReport && session !== null;
   const pct = usageRow?.context_pct ?? null;
   const tone: Tone = contextTone(pct);
   const clampedPct = pct === null ? null : Math.min(100, Math.max(0, pct));
@@ -55,7 +61,7 @@ function GovernanceSegment({
   return (
     <Link
       to="/sandbox"
-      search={{ session: session.id }}
+      search={session ? { session: session.id } : {}}
       className="flex min-w-0 items-center gap-2 hover:text-foreground"
     >
       <span className="truncate">sandbox: {line}</span>
@@ -83,10 +89,10 @@ function GovernanceSegment({
 /**
  * The always-visible line under the screen: engine health, the first
  * thing wrong or "Engine running", the daemon version, live sessions,
- * and — while a session is focused on the Session screen — its
- * sandbox posture and context. The dot and the headline link to the
- * Engine setup screen, which holds the details; the version and the
- * count are plain text.
+ * and — while a session is focused on the Session screen, or while the
+ * Sandbox screen itself is open — its sandbox posture and context. The
+ * dot and the headline link to the Engine setup screen, which holds
+ * the details; the version and the count are plain text.
  */
 export function StatusBar() {
   const { status, problem } = useEngineStatus();
@@ -96,12 +102,35 @@ export function StatusBar() {
    * demand, and the status bar must never be what starts Willie. */
   const snapshot = useSnapshot(daemonRunning).snapshot;
   const { session } = useFocusedSession();
+  const { system: currentSystem } = useCurrentSystem();
   const pathname = useLocation({ select: (location) => location.pathname });
 
   const showGovernance =
     pathname === "/session" &&
     session !== null &&
     (session.kind ?? "agent") === "agent";
+
+  const showSystemAggregate = pathname === "/sandbox" && currentSystem !== null;
+
+  /* The system's whole life, not only its live sessions — a finished
+   * session keeps its place in the aggregate the same way it keeps its
+   * place in the Sandbox screen's own denial history. */
+  const systemSessions =
+    showSystemAggregate && currentSystem && snapshot
+      ? snapshot.sessions.filter((s) => s.project_id === currentSystem.id)
+      : [];
+  const systemDenied = systemSessions.reduce(
+    (sum, s) => sum + deniedCount(sandboxOf(s)),
+    0,
+  );
+  const systemApplied = posture(systemSessions).applied;
+  /* Same convention as the per-session branch above: a system with no
+   * sessions, or none that has reported a mechanism yet, says so
+   * plainly rather than rendering "· 0 denied" with nothing before it. */
+  const systemPosture =
+    systemApplied.length === 0
+      ? "no sandbox report"
+      : `${systemApplied.join(" · ")} · ${systemDenied} denied`;
 
   const [usageSnapshot, setUsageSnapshot] = useState<UsageSnapshot | null>(
     null,
@@ -166,6 +195,14 @@ export function StatusBar() {
         <GovernanceSegment
           session={session}
           usageRow={usageSnapshot?.sessions.find((s) => s.id === session.id)}
+        />
+      )}
+
+      {showSystemAggregate && (
+        <GovernanceSegment
+          session={null}
+          usageRow={undefined}
+          posture={systemPosture}
         />
       )}
 

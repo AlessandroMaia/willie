@@ -5,14 +5,6 @@ import { StatusBadge } from "@/components/status-badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Field,
   FieldContent,
   FieldDescription,
@@ -21,6 +13,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Item, ItemContent, ItemGroup } from "@/components/ui/item";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import {
   Tooltip,
   TooltipContent,
@@ -34,7 +34,7 @@ import type {
   SandboxProfile,
 } from "@/lib/proto";
 
-interface SandboxDialogProps {
+interface SandboxDrawerProps {
   project: Project | null;
   catalogue?: CapabilityInfo[];
   problem: Problem | null;
@@ -58,13 +58,20 @@ type BooleanCapability = Exclude<CapabilityInfo["capability"], "extra_paths">;
 // biome-ignore lint/a11y/noNoninteractiveTabindex: see comment above
 const deferredRowTrigger = <div className="block" tabIndex={0} />;
 
-export function SandboxDialog({
+/**
+ * The capability editor, re-housed from a centred dialog into a sheet
+ * from the right: the same catalogue, switches, extra paths and Save
+ * flow, now reached from the Sandbox screen's "Edit capabilities"
+ * button instead of a project row's menu. Capability changes live only
+ * here — no denial row anywhere offers a one-click "allow".
+ */
+export function SandboxDrawer({
   project,
   catalogue = [],
   problem,
   onSave,
   onCancel,
-}: SandboxDialogProps) {
+}: SandboxDrawerProps) {
   /* `project.sandbox` is the default profile the daemon substituted
    * while its `[sandbox]` table could not be read (see
    * `sandbox_problem` below) — never a saved override, so it must not
@@ -100,40 +107,47 @@ export function SandboxDialog({
   }
 
   return (
-    <Dialog
+    <Sheet
       open={project !== null}
       onOpenChange={(open) => {
         if (!open) onCancel();
       }}
     >
       {/* One row per capability in the catalogue, each with the sentence
-       * that says what it costs, is taller than a small window. The
-       * popup is centred, not scrolled, so a dialog that grows with its
-       * content pushes Save past the bottom edge where nothing reaches
-       * it: the dialog is held to the window instead and the rows
-       * scroll inside it. The width is the extra-path row's, which
-       * carries a path, a mode and a remove button on one line. */}
-      <DialogContent className="max-h-[calc(100dvh-4rem)] grid-rows-[auto_minmax(0,1fr)_auto] sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Sandbox for “{project?.name}”</DialogTitle>
-          <DialogDescription>
+       * that says what it costs, is taller than the sheet. The sheet's
+       * own height stays fixed to the viewport, so the rows scroll
+       * inside it and the footer stays pinned below them. */}
+      <SheetContent className="flex h-full w-full flex-col gap-0 sm:max-w-lg">
+        <SheetHeader>
+          <SheetTitle>Sandbox for “{project?.name}”</SheetTitle>
+          <SheetDescription>
             What this project's sessions may reach beyond the project itself. A
             session records the policy it ran under.
-          </DialogDescription>
-        </DialogHeader>
+          </SheetDescription>
+        </SheetHeader>
+
+        {/* Sandbox capabilities are monotonic: a repository's own
+         * configuration (`docs/decisions/0007`) can only tighten what
+         * this profile allows, never open something it leaves off. */}
+        <p className="px-4 text-muted-foreground text-xs">
+          Repository configuration can only tighten what this profile allows —
+          never open a capability it leaves off.
+        </p>
 
         {/* A load problem, not a rejected save: it comes from the project
-         * itself and is present the instant the dialog opens, so it is
+         * itself and is present the instant the drawer opens, so it is
          * rendered straight off `project.sandbox_problem` — distinct from
          * `problem` below, which only ever answers a Save. Its
          * remediation already says that saving here replaces the
          * unreadable table (see `store::load_all`). */}
         {project?.sandbox_problem && (
-          <ProblemAlert problem={project.sandbox_problem} />
+          <div className="px-4">
+            <ProblemAlert problem={project.sandbox_problem} />
+          </div>
         )}
 
-        <ScrollArea className="min-h-0">
-          <div className="flex flex-col gap-3 pr-3">
+        <ScrollArea className="min-h-0 flex-1 px-4">
+          <div className="flex flex-col gap-3 py-3 pr-3">
             {catalogue.map((info) => {
               if (info.capability === "extra_paths") {
                 return (
@@ -260,15 +274,19 @@ export function SandboxDialog({
           </div>
         </ScrollArea>
 
-        {problem && <ProblemAlert problem={problem} />}
+        {problem && (
+          <div className="px-4">
+            <ProblemAlert problem={problem} />
+          </div>
+        )}
 
-        <DialogFooter>
+        <SheetFooter className="flex-row justify-end border-t bg-muted/50">
           <Button variant="ghost" onClick={onCancel}>
             Cancel
           </Button>
           <Button onClick={() => onSave(local)}>Save</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
   );
 }
