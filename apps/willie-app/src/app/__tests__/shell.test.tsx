@@ -95,6 +95,20 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/lib/ipc", () => ipc);
 
+/* The header's window controls talk to this module directly (Task 8),
+ * not through the ipc bridge above; every test here renders the full
+ * shell, so it needs a stub too, even though none of these tests
+ * assert on it (header.test.tsx does). */
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({
+    minimize: vi.fn(),
+    toggleMaximize: vi.fn(),
+    close: vi.fn(),
+    isMaximized: vi.fn(async () => false),
+    onResized: vi.fn(async () => () => {}),
+  }),
+}));
+
 let App: typeof import("@/app/app").App;
 let createAppRouter: typeof import("@/app/router").createAppRouter;
 
