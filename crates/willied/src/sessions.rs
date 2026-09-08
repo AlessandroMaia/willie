@@ -3,6 +3,7 @@
 //! spawns the supervisor; the supervisor owns the PTY and outlives it.
 
 use std::{
+    collections::HashSet,
     io::{BufRead, BufReader},
     path::PathBuf,
     process::{Command, Stdio},
@@ -44,6 +45,11 @@ pub struct SessionOps {
     // tests that build session ops without one; the real daemon wires it so
     // a session's start and exit reach the plugins as `CoreEvent`s.
     plugin_host: Option<Arc<Mutex<PluginHost>>>,
+    // Finished sessions whose first prompt could not be read. Their logs
+    // can no longer change, so one failed read is final and the title
+    // scan never looks at them again -- otherwise every snapshot pays
+    // for every session that will never have a title.
+    untitled: Mutex<HashSet<SessionId>>,
 }
 
 impl std::fmt::Debug for SessionOps {
@@ -72,6 +78,7 @@ impl SessionOps {
             clock,
             runner,
             plugin_host: None,
+            untitled: Mutex::new(HashSet::new()),
         }
     }
 
@@ -198,7 +205,7 @@ impl SessionOps {
                     std::path::Path::new(&project.workspace),
                     &self.home,
                 );
-                (launch, "zsh".to_owned())
+                (launch, willie_core::session::SHELL_HARNESS.to_owned())
             }
         };
 
@@ -469,7 +476,12 @@ impl SessionOps {
     /// `state` and a `session_changed` is emitted; a later call sees
     /// `title.is_some()` and does nothing more for that session.
     pub fn title_untitled_agent_sessions(&self) {
-        let candidates: Vec<(SessionId, String, u64)> =
+        let given_up = self
+            .untitled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let candidates: Vec<(SessionId, String, u64, bool)> =
             crate::lock(&self.state)
                 .sessions
                 .values()
@@ -477,6 +489,7 @@ impl SessionOps {
                     s.kind == SessionKind::Agent
                         && s.title.is_none()
                         && (s.state.is_live() || s.state.is_terminal())
+                        && !given_up.contains(&s.id)
                 })
                 .map(|s| {
                     let started_at_secs = s
@@ -485,16 +498,27 @@ impl SessionOps {
                         .or(Some(s.created_at.as_str()))
                         .and_then(|t| t.parse::<u64>().ok())
                         .unwrap_or(0);
-                    (s.id, s.workspace.clone(), started_at_secs)
+                    (
+                        s.id,
+                        s.workspace.clone(),
+                        started_at_secs,
+                        s.state.is_terminal(),
+                    )
                 })
                 .collect();
 
-        for (id, workspace, started_at_secs) in candidates {
+        for (id, workspace, started_at_secs, finished) in candidates {
             let Some(title) = session_title::first_prompt_for(
                 &self.home,
                 &workspace,
                 started_at_secs,
             ) else {
+                if finished {
+                    self.untitled
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(id);
+                }
                 continue;
             };
             state::emit(&self.state, &self.out, |s| {
@@ -525,11 +549,11 @@ impl SessionOps {
         if let Some(l) = &label
             && l.chars().count() > 120
         {
-            return Err(OpError {
-                code: "invalid_params".to_owned(),
-                message: "the label is longer than 120 characters".to_owned(),
-                remediation: "shorten the name".to_owned(),
-            });
+            return Err(OpError::new(
+                "invalid_params",
+                "the label is longer than 120 characters",
+                "shorten the name",
+            ));
         }
         let mut session = crate::lock(&self.state)
             .sessions
@@ -543,12 +567,13 @@ impl SessionOps {
             kind: SessionEventKind::Renamed { label },
         };
         session_store::append_event(&self.state_dir, &id.to_string(), &event)
-            .map_err(|e| OpError {
-            code: "state_write_failed".to_owned(),
-            message: e.to_string(),
-            remediation: "check the daemon's state directory \
-                              permissions and try again"
-                .to_owned(),
+            .map_err(|e| {
+            OpError::new(
+                "state_write_failed",
+                e.to_string(),
+                "check the daemon's state directory permissions and \
+                     try again",
+            )
         })?;
         apply_event(&mut session, &event);
         state::emit(&self.state, &self.out, |s| {
@@ -608,10 +633,9 @@ fn notify_plugin_host(host: &Option<Arc<Mutex<PluginHost>>>, ev: CoreEvent) {
     }
 }
 
-/// What a `create` names as its resume target, resolved under the same
-/// lock acquisition as the project lookup so the target's state is read
-/// from the same snapshot. Several live sessions per project are allowed
-/// now, so this replaces a single project-wide "already live" guard.
+/// What a `create` names as its resume target, read under the same lock
+/// acquisition as the project lookup so the target's state comes from
+/// one snapshot.
 enum ResumeTarget {
     /// `resume` is false: nothing is being resumed.
     None,
@@ -626,15 +650,11 @@ enum ResumeTarget {
     },
 }
 
-/// The resume guard and mode decision, pulled out of `create` as a pure
-/// function so it is unit-testable without a harness/state fixture: a
-/// fresh request always launches `Fresh` with no lineage, regardless of
-/// other live sessions of the project. A resume request is refused
-/// fail-closed when the harness cannot continue a conversation, when its
-/// named target does not exist (`resume_target_not_found`), or when that
-/// target is still live (`resume_target_live` — it is already a tab).
-/// Otherwise it launches `Continue` linked to the target, or to the
-/// project's most recent terminal session when none was named.
+/// The resume guard and mode decision, pure so it is unit-testable
+/// without a harness or state fixture. Fail-closed: a resume whose
+/// harness cannot continue, whose named target is unknown, or whose
+/// target is still live is refused rather than launched fresh. The case
+/// table is in `designs/system-scoped-shell.md`.
 fn resume_decision(
     resume: bool,
     harness_resume: Resume,
@@ -650,17 +670,17 @@ fn resume_decision(
         ));
     }
     match target {
-        ResumeTarget::Named { state: None, .. } => Err(OpError {
-            code: "resume_target_not_found".to_owned(),
-            message: "no such session".to_owned(),
-            remediation: "choose a session from the Sessions panel".to_owned(),
-        }),
+        ResumeTarget::Named { state: None, .. } => Err(OpError::new(
+            "resume_target_not_found",
+            "no such session",
+            "choose a session from the Sessions panel",
+        )),
         ResumeTarget::Named { state: Some(s), .. } if s.is_live() => {
-            Err(OpError {
-                code: "resume_target_live".to_owned(),
-                message: "that session is already open".to_owned(),
-                remediation: "it is already open; switch to its tab".to_owned(),
-            })
+            Err(OpError::new(
+                "resume_target_live",
+                "that session is already open",
+                "it is already open; switch to its tab",
+            ))
         }
         ResumeTarget::Named { id, .. } => Ok((LaunchMode::Continue, Some(id))),
         ResumeTarget::Latest(id) => Ok((LaunchMode::Continue, id)),
@@ -668,12 +688,12 @@ fn resume_decision(
     }
 }
 
-/// The zsh binary path, overridable via `WILLIE_ZSH_BIN` -- the real
-/// distro always has `/usr/bin/zsh` once it carries this feature, so a
-/// test that wants to see `shell_unavailable` points this at a path that
-/// never exists instead, mirroring `WILLIE_HARNESS_BIN`/`WILLIE_SESS_BIN`.
+/// Where the presence check below looks for zsh. `WILLIE_ZSH_CHECK`
+/// moves ONLY that check -- never the argv, which is always
+/// `shell::ZSH_PATH` inside the sandbox -- so a test can see
+/// `shell_unavailable` by pointing it at a path that cannot exist.
 fn zsh_path() -> PathBuf {
-    std::env::var_os("WILLIE_ZSH_BIN")
+    std::env::var_os("WILLIE_ZSH_CHECK")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(shell::ZSH_PATH))
 }
@@ -1253,6 +1273,67 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&home);
     }
+
+    /// A finished session whose first prompt cannot be read is given up
+    /// on after one attempt: its log can no longer change, so rescanning
+    /// it on every snapshot for the rest of the daemon's life buys
+    /// nothing -- and a log that appears afterwards is a later session's,
+    /// never this one's title.
+    #[test]
+    fn a_finished_session_without_a_title_is_never_scanned_again() {
+        let home = std::env::temp_dir().join("willie-sess-give-up-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+
+        fn clock() -> String {
+            "1".to_owned()
+        }
+
+        let workspace = "/home/willie/projects/q";
+        let started_at_secs = 1_700_000_000u64;
+
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+
+        let id = SessionId::new();
+        let mut session = placeholder(id);
+        session.workspace = workspace.to_owned();
+        session.created_at = started_at_secs.to_string();
+        session.started_at = Some(started_at_secs.to_string());
+        session.state = SessionState::Exited {
+            code: Some(0),
+            signal: None,
+        };
+        crate::lock(&state).sessions.insert(id, session);
+
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            std::env::temp_dir().join("willie-sess-give-up-state"),
+            std::env::temp_dir().join("willie-sess-give-up-run"),
+            home.clone(),
+            clock,
+            runner,
+        );
+
+        // Nothing to read yet: the scan finds no log and gives up.
+        let first = ops.list();
+        assert_eq!(first.iter().find(|s| s.id == id).unwrap().title, None);
+
+        plant_first_prompt_log(
+            &home,
+            workspace,
+            started_at_secs + 5,
+            r#"{"type":"user","message":{"role":"user","content":"a later prompt"}}"#,
+        );
+
+        let second = ops.list();
+        assert_eq!(second.iter().find(|s| s.id == id).unwrap().title, None);
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
 }
 
 #[cfg(test)]
@@ -1561,11 +1642,10 @@ mod create_tests {
     }
 
     /// A shell create is refused fail-closed, before anything is written,
-    /// when the image carries no zsh. `WILLIE_ZSH_BIN` points the check at
-    /// a path that never exists, so this holds regardless of whether the
-    /// distribution this test actually runs in has since been rebuilt
-    /// with zsh -- unlike the real `/usr/bin/zsh`, which this feature
-    /// installs, so the check itself cannot serve as its own absent case.
+    /// when the image carries no zsh. `WILLIE_ZSH_CHECK` points the check
+    /// at a path that never exists, so this holds regardless of whether
+    /// the distribution this test runs in has since been rebuilt with
+    /// zsh -- the real `/usr/bin/zsh` cannot serve as its own absent case.
     #[test]
     fn a_shell_session_is_refused_when_zsh_is_absent() {
         let state = Arc::new(Mutex::new(State::default()));
@@ -1594,7 +1674,7 @@ mod create_tests {
             .join("no-such-zsh");
         // SAFETY: this test does not run concurrently with another test
         // that reads or writes this process-wide variable.
-        unsafe { std::env::set_var("WILLIE_ZSH_BIN", &missing) };
+        unsafe { std::env::set_var("WILLIE_ZSH_CHECK", &missing) };
         let err = ops
             .create(CreateParams {
                 project_id: pid,
@@ -1605,7 +1685,7 @@ mod create_tests {
             })
             .unwrap_err();
         // SAFETY: same single-threaded scope as the set above.
-        unsafe { std::env::remove_var("WILLIE_ZSH_BIN") };
+        unsafe { std::env::remove_var("WILLIE_ZSH_CHECK") };
 
         assert_eq!(err.code, "shell_unavailable");
         assert!(session_store::load_all(&state_dir).is_empty());

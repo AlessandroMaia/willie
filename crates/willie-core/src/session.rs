@@ -100,6 +100,11 @@ pub enum SessionKind {
     Shell,
 }
 
+/// The `harness` a `Shell` session carries. No tool installs it and it
+/// names no entry in the harness registry, so the daemon that writes a
+/// spec and the supervisor that validates one must agree on it here.
+pub const SHELL_HARNESS: &str = "zsh";
+
 /// What the sandbox reported for one session. Empty until the
 /// `sandbox_applied` event is folded; a session from a pre-part-2 log
 /// leaves it default, and a log written before denials were recorded

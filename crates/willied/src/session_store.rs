@@ -53,10 +53,9 @@ pub fn load_all(state_dir: &Path) -> Vec<(SessionSpec, Vec<SessionEvent>)> {
     out
 }
 
-/// Appends one event line to a session's `events.jsonl`. A single
-/// `O_APPEND` write of one short JSON line is atomic against the
-/// supervisor's own appends to the same file, so this is always exactly
-/// one `write_all` call — never split into two.
+/// Appends one event line to a session's `events.jsonl`. One `O_APPEND`
+/// write of one short JSON line is atomic against the supervisor's own
+/// appends, so this must stay a single `write_all`.
 pub fn append_event(
     state_dir: &Path,
     id: &str,

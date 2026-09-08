@@ -153,15 +153,19 @@ pub fn prepare(
     helper: &Path,
     inner_exe: &str,
 ) -> Result<Prepared, PrepareError> {
-    // A shell is not an installable harness -- `spec.harness` ("zsh")
-    // never names an entry in `willie_harness::registry()`, the tool
-    // manager's own list. It still gets "the same sandbox plan" a
-    // conversation would (the design's own words): the one binding the
-    // plan actually consults, the agent's private state directory, so a
-    // shell borrows the one agent harness this build knows for that
-    // lookup only.
+    // A shell is not an installable harness -- `SHELL_HARNESS` never
+    // names an entry in `willie_harness::registry()`, the tool manager's
+    // own list. It still gets "the same sandbox plan" a conversation
+    // would (the design's own words): the one binding the plan actually
+    // consults, the agent's private state directory, so a shell borrows
+    // the one agent harness this build knows for that lookup only. Any
+    // other harness on a `Shell` spec is refused rather than quietly
+    // planned under Claude Code's rules.
     let harness: Box<dyn willie_harness::Harness> = match spec.kind {
         willie_core::session::SessionKind::Shell => {
+            if spec.harness != willie_core::session::SHELL_HARNESS {
+                return Err(PrepareError::HarnessUnknown(spec.harness.clone()));
+            }
             Box::new(willie_harness::ClaudeCode)
         }
         willie_core::session::SessionKind::Agent => willie_harness::registry()
@@ -1073,6 +1077,32 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// A `Shell` spec naming anything but `SHELL_HARNESS` is refused,
+    /// not planned under the agent harness this build borrows for the
+    /// state bind: only zsh is a shell, and a spec that says otherwise
+    /// is one this supervisor does not understand.
+    #[test]
+    fn a_shell_spec_with_another_harness_is_refused() {
+        let root = scratch("shell-wrong-harness");
+        let helper = root.join("bwrap");
+        touch(&helper);
+        let bin = root.join("zsh");
+        touch(&bin);
+        let ws = root.join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        let mut spec =
+            spec_under(&root, &bin.to_string_lossy(), &ws.to_string_lossy());
+        spec.harness = "bash".into();
+        spec.kind = SessionKind::Shell;
+
+        let err = prepare(&spec, &helper, &inner_bin(&root).to_string_lossy())
+            .unwrap_err();
+
+        assert_eq!(err.code(), "spec_invalid");
+        assert!(err.to_string().contains("bash"), "{err}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
     /// A shell session's `harness` ("zsh") never names an entry in the
     /// tool registry, but it must still prepare -- and get the same
     /// agent-state bind an agent session would (the design's "same
@@ -1094,7 +1124,7 @@ mod tests {
         fs::create_dir_all(root.join(".willie/agent-state/claude")).unwrap();
         let mut spec =
             spec_under(&root, &bin.to_string_lossy(), &ws.to_string_lossy());
-        spec.harness = "zsh".into();
+        spec.harness = willie_core::session::SHELL_HARNESS.into();
         spec.kind = SessionKind::Shell;
         spec.capabilities.agent_state = true;
 
