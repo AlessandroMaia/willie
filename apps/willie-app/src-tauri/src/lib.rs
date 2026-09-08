@@ -583,8 +583,11 @@ fn open_in_explorer(path: String) -> Result<(), Problem> {
 
 /// The Remote-WSL arguments that open `workspace` on the willie distro:
 /// VS Code's documented form for a folder in a named WSL distribution.
-/// `file`, when given, opens with that file active in the folder window
-/// (workspace-relative, as the tree and the file preview hand it over).
+/// `file`, when given, opens with that file active in the folder window.
+/// The tree and the preview hand it over workspace-relative, and VS
+/// Code resolves a relative argument against the *launching* process's
+/// directory — a Windows path — so it is joined onto the workspace here
+/// with the distro's own separator and passed absolute.
 fn editor_argv(workspace: &str, file: Option<&str>) -> Vec<String> {
     let mut argv = vec![
         "--remote".to_owned(),
@@ -592,7 +595,11 @@ fn editor_argv(workspace: &str, file: Option<&str>) -> Vec<String> {
         workspace.to_owned(),
     ];
     if let Some(file) = file {
-        argv.push(file.to_owned());
+        argv.push(if file.starts_with('/') {
+            file.to_owned()
+        } else {
+            format!("{}/{}", workspace.trim_end_matches('/'), file)
+        });
     }
     argv
 }
@@ -781,7 +788,9 @@ mod tests {
     }
 
     /// A file argument opens the folder window with that file active,
-    /// for the workspace tree's "Open in VS Code" on a single file.
+    /// for the workspace tree's "Open in VS Code" on a single file. It
+    /// must be absolute in the distro: a relative one would be resolved
+    /// against the Windows-side working directory and name nothing.
     #[test]
     fn editor_argv_appends_the_file_after_the_workspace() {
         assert_eq!(
@@ -790,8 +799,23 @@ mod tests {
                 "--remote".to_owned(),
                 "wsl+willie".to_owned(),
                 "/home/willie/projects/x".to_owned(),
-                "src/main.rs".to_owned(),
+                "/home/willie/projects/x/src/main.rs".to_owned(),
             ]
+        );
+    }
+
+    /// A workspace with a trailing separator, and a file already
+    /// absolute, both still produce exactly one separator and no
+    /// duplicated prefix.
+    #[test]
+    fn editor_argv_joins_the_file_without_doubling_the_separator() {
+        assert_eq!(
+            editor_argv("/home/willie/projects/x/", Some("src/main.rs"))[3],
+            "/home/willie/projects/x/src/main.rs"
+        );
+        assert_eq!(
+            editor_argv("/home/willie/projects/x", Some("/etc/hosts"))[3],
+            "/etc/hosts"
         );
     }
 

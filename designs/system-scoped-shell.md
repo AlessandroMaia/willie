@@ -263,7 +263,10 @@ preview first, then the tree.
 
 `open_in_editor` gains an optional file: the pure `editor_argv(workspace,
 file: Option<&str>)` appends the file after the workspace, which opens the
-folder window with the file active.
+folder window with the file active. The file arrives workspace-relative
+and is joined onto the workspace before it goes on the command line —
+VS Code resolves a relative argument against the launching process's own
+directory, which is on the Windows side and names nothing in the distro.
 
 ### The Session screen — `apps/willie-app/src/features/session/session-screen.tsx`, `sessions-panel.tsx`
 
