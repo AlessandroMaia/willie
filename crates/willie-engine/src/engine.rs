@@ -93,8 +93,19 @@ pub struct Engine {
     distro: DistroManager,
     daemon: DaemonSupervisor,
     last_doctor: Option<DoctorReport>,
+    /// One bridge per live session's embedded terminal: the Session
+    /// screen keeps every tab mounted, so they all stream at once.
     #[cfg(windows)]
-    pub(crate) embedded: Option<crate::embed::imp::Embedded>,
+    pub(crate) embedded: crate::embed::Bridges<crate::embed::imp::Embedded>,
+}
+
+/// Every embedded terminal is a `wsl.exe attach` child of this process;
+/// the engine going away must not leave one running.
+#[cfg(windows)]
+impl Drop for Engine {
+    fn drop(&mut self) {
+        self.close_embedded_terminals();
+    }
 }
 
 impl Engine {
@@ -106,7 +117,7 @@ impl Engine {
             daemon: DaemonSupervisor::new(),
             last_doctor: None,
             #[cfg(windows)]
-            embedded: None,
+            embedded: crate::embed::Bridges::default(),
         }
     }
 
@@ -713,7 +724,7 @@ mod tests {
             daemon: DaemonSupervisor::connected(process, client),
             last_doctor: None,
             #[cfg(windows)]
-            embedded: None,
+            embedded: crate::embed::Bridges::default(),
         };
 
         let project_id = ProjectId::new();

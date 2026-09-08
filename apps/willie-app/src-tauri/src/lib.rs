@@ -543,7 +543,7 @@ fn session_terminal_input(
     id: SessionId,
     data: String,
 ) -> Result<(), Problem> {
-    with_engine(&state, |engine| {
+    query(&state, |engine| {
         engine.session_terminal_input(id, data.as_bytes())
     })
 }
@@ -555,7 +555,7 @@ fn session_terminal_resize(
     rows: u16,
     cols: u16,
 ) -> Result<(), Problem> {
-    with_engine(&state, |engine| {
+    query(&state, |engine| {
         engine.session_terminal_resize(id, rows, cols)
     })
 }

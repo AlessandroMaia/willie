@@ -428,11 +428,20 @@ Session screen also renders inside the Willie window itself — no longer
 an opt-in "Open in app" action on a Sessions row, since every Session-
 screen tab is the embedded terminal: the engine spawns
 `willie attach <id> --host` and bridges its stdio to an `xterm.js`
-terminal (`crates/willie-engine/src/embed.rs`). The bridge writes
-encoded `input`/`resize` frames to the child's stdin (a small
+terminal (`crates/willie-engine/src/embed.rs`). The engine keeps **one
+bridge per session**, keyed by session id
+(`embed::Bridges<Embedded>`), because the screen mounts every live tab
+at once: opening a second session never detaches the first, re-opening
+one replaces only its own child, a tab's unmount closes just that
+bridge, and the engine closes all of them when it drops so quitting
+leaves no `wsl.exe` child behind. Input or resize for a session with no
+bridge is refused as `embedded_terminal_not_open` rather than answered
+`Ok` — a dead tab says so instead of swallowing keystrokes. The bridge
+writes encoded `input`/`resize` frames to the child's stdin (a small
 `willie-proto::hostterm` dialect) and reads raw session output from its
-stdout; `attach --host` re-frames the input for the wire protocol the
-same way the tty-mode client does. This embedded path reuses the same
+stdout, tagged with the session id so each tab renders only its own;
+`attach --host` re-frames the input for the wire protocol the same way
+the tty-mode client does. This embedded path reuses the same
 session socket as the Windows-Terminal-tab path — consistent with
 decision 0014. Shipping it also fixed `terminal::locate_wt`, which used
 to *execute* `wt.exe --version` to detect Windows Terminal and flashed a
