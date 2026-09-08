@@ -292,16 +292,6 @@ fn resume_continues_the_projects_last_conversation() {
     );
     assert_eq!(spec["resumed_from"], first_sid, "{spec}");
 
-    // The resumed session is now live: a second resume is refused so it
-    // never double-drives the same continued conversation.
-    let second_id = d.send(
-        "session.create",
-        json!({ "project_id": pid, "resume": true,
-            "git_identity": { "name": "T", "email": "t@x" } }),
-    );
-    let resp = d.wait_response(second_id, Duration::from_secs(10), |_| {});
-    assert_eq!(resp["error"]["code"], "session_already_live", "{resp}");
-
     let stop_id = d.send("session.stop", json!({ "id": resumed_sid }));
     d.wait_response(stop_id, Duration::from_secs(5), |_| {});
     let _ = std::fs::remove_dir_all(&root);

@@ -347,9 +347,6 @@ pub fn remediation_for(code: &str) -> &'static str {
             "open a fresh session instead; this harness cannot continue \
              a conversation"
         }
-        "session_already_live" => {
-            "use the running session, or stop it first, then resume"
-        }
         "harness_not_installed" => "click Install on the Dashboard",
         "git_identity_missing" => {
             "set `git config --global user.name` and `user.email` on \
@@ -830,7 +827,6 @@ mod tests {
         for code in [
             "project_not_ready",
             "harness_cannot_resume",
-            "session_already_live",
             "harness_not_installed",
             "git_identity_missing",
             "supervisor_spawn_failed",

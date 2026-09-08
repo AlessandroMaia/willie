@@ -17,7 +17,7 @@ use willie_core::{
     sandbox::{CapabilitySet, SandboxProfile},
     session::{
         Session, SessionEvent, SessionEventKind, SessionKind, SessionSpec,
-        apply_event, from_log,
+        SessionState, apply_event, from_log,
     },
 };
 use willie_harness::{Harness, LaunchMode, Resume};
@@ -99,17 +99,15 @@ impl SessionOps {
         &self,
         params: willie_proto::session::CreateParams,
     ) -> Result<Session, OpError> {
-        let (project, live, resumed_from) = {
+        let (project, target) = {
             let s = crate::lock(&self.state);
             let project =
                 s.projects.get(&params.project_id).cloned().ok_or_else(
                     || crate::projects::not_found_err(params.project_id),
                 )?;
-            // Only meaningful when `params.resume`; computed alongside the
+            // The project's most recent TERMINAL session; used only when
+            // `resume` names no target of its own. Computed alongside the
             // project lookup so both read the same lock acquisition.
-            let live = s.sessions.values().any(|se| {
-                se.project_id == params.project_id && se.state.is_live()
-            });
             let resumed_from = s
                 .sessions
                 .values()
@@ -118,7 +116,18 @@ impl SessionOps {
                 })
                 .max_by(|a, b| a.created_at.cmp(&b.created_at))
                 .map(|se| se.id);
-            (project, live, resumed_from)
+            let target = params
+                .resume_from
+                .map(|id| ResumeTarget::Named {
+                    id,
+                    state: s.sessions.get(&id).map(|se| se.state.clone()),
+                })
+                .unwrap_or(if params.resume {
+                    ResumeTarget::Latest(resumed_from)
+                } else {
+                    ResumeTarget::None
+                });
+            (project, target)
         };
         if let Some(problem) = &project.sandbox_problem {
             return Err(OpError::from_problem(problem));
@@ -150,8 +159,7 @@ impl SessionOps {
         let (mode, resumed_from) = resume_decision(
             params.resume,
             harness::claude().capabilities().resume,
-            live,
-            resumed_from,
+            target,
         )?;
         let installed =
             harness::detect_claude(&self.home).ok_or_else(|| {
@@ -484,7 +492,7 @@ impl SessionOps {
             match crate::control::connect(&socket).and_then(|mut c| c.status())
             {
                 Ok(status) => {
-                    session.state = willie_core::session::SessionState::Running;
+                    session.state = SessionState::Running;
                     session.pid = Some(status.pid);
                     session.clients = status.clients;
                     state::emit(&self.state, &self.out, |s| {
@@ -519,17 +527,37 @@ fn notify_plugin_host(host: &Option<Arc<Mutex<PluginHost>>>, ev: CoreEvent) {
     }
 }
 
+/// What a `create` names as its resume target, resolved under the same
+/// lock acquisition as the project lookup so the target's state is read
+/// from the same snapshot. Several live sessions per project are allowed
+/// now, so this replaces a single project-wide "already live" guard.
+enum ResumeTarget {
+    /// `resume` is false: nothing is being resumed.
+    None,
+    /// `resume` with no `resume_from`: the project's most recent
+    /// terminal session, if it has one.
+    Latest(Option<SessionId>),
+    /// `resume_from` names a session; its current state, if the session
+    /// still exists in the store.
+    Named {
+        id: SessionId,
+        state: Option<SessionState>,
+    },
+}
+
 /// The resume guard and mode decision, pulled out of `create` as a pure
 /// function so it is unit-testable without a harness/state fixture: a
-/// fresh request always launches `Fresh` with no lineage; a resume request
-/// is refused fail-closed when the harness cannot continue a conversation
-/// or when the project already has a live session, and otherwise launches
-/// `Continue` linked to the project's most recent terminal session.
+/// fresh request always launches `Fresh` with no lineage, regardless of
+/// other live sessions of the project. A resume request is refused
+/// fail-closed when the harness cannot continue a conversation, when its
+/// named target does not exist (`resume_target_not_found`), or when that
+/// target is still live (`resume_target_live` — it is already a tab).
+/// Otherwise it launches `Continue` linked to the target, or to the
+/// project's most recent terminal session when none was named.
 fn resume_decision(
     resume: bool,
     harness_resume: Resume,
-    live: bool,
-    latest_terminal: Option<SessionId>,
+    target: ResumeTarget,
 ) -> Result<(LaunchMode, Option<SessionId>), OpError> {
     if !resume {
         return Ok((LaunchMode::Fresh, None));
@@ -540,14 +568,23 @@ fn resume_decision(
             "this harness cannot resume a conversation",
         ));
     }
-    if live {
-        return Err(OpError::coded(
-            "session_already_live",
-            "a session for this project is already running; \
-             use it or stop it first",
-        ));
+    match target {
+        ResumeTarget::Named { state: None, .. } => Err(OpError {
+            code: "resume_target_not_found".to_owned(),
+            message: "no such session".to_owned(),
+            remediation: "choose a session from the Sessions panel".to_owned(),
+        }),
+        ResumeTarget::Named { state: Some(s), .. } if s.is_live() => {
+            Err(OpError {
+                code: "resume_target_live".to_owned(),
+                message: "that session is already open".to_owned(),
+                remediation: "it is already open; switch to its tab".to_owned(),
+            })
+        }
+        ResumeTarget::Named { id, .. } => Ok((LaunchMode::Continue, Some(id))),
+        ResumeTarget::Latest(id) => Ok((LaunchMode::Continue, id)),
+        ResumeTarget::None => Ok((LaunchMode::Continue, None)),
     }
-    Ok((LaunchMode::Continue, latest_terminal))
 }
 
 /// Layer 1 from the harness, layer 2 from the project record. A policy
@@ -604,7 +641,7 @@ fn placeholder(id: SessionId) -> Session {
         harness: String::new(),
         workspace: String::new(),
         kind: SessionKind::Agent,
-        state: willie_core::session::SessionState::Running,
+        state: SessionState::Running,
         created_at: String::new(),
         started_at: None,
         finished_at: None,
@@ -682,43 +719,98 @@ mod tests {
 
     #[test]
     fn a_fresh_request_launches_fresh_with_no_lineage() {
-        let (mode, resumed_from) =
-            resume_decision(false, Resume::ById, true, Some(SessionId::new()))
-                .unwrap();
+        // Even a target naming a live session is ignored: a fresh create
+        // no longer looks at other sessions of the project at all.
+        let (mode, resumed_from) = resume_decision(
+            false,
+            Resume::ById,
+            ResumeTarget::Named {
+                id: SessionId::new(),
+                state: Some(SessionState::Running),
+            },
+        )
+        .unwrap();
         assert_eq!(mode, LaunchMode::Fresh);
         assert_eq!(resumed_from, None);
     }
 
     #[test]
-    fn a_resume_request_launches_continue_linked_to_the_latest_terminal() {
+    fn resume_without_a_target_continues_the_latest_terminal_session() {
         let latest = SessionId::new();
-        let (mode, resumed_from) =
-            resume_decision(true, Resume::ById, false, Some(latest)).unwrap();
+        let (mode, resumed_from) = resume_decision(
+            true,
+            Resume::ById,
+            ResumeTarget::Latest(Some(latest)),
+        )
+        .unwrap();
         assert_eq!(mode, LaunchMode::Continue);
         assert_eq!(resumed_from, Some(latest));
     }
 
     #[test]
     fn resume_is_refused_when_the_harness_cannot_resume() {
-        let err = resume_decision(true, Resume::None, false, None).unwrap_err();
+        let err = resume_decision(true, Resume::None, ResumeTarget::None)
+            .unwrap_err();
         assert_eq!(err.code, "harness_cannot_resume");
     }
 
     #[test]
-    fn resume_is_refused_while_a_session_is_already_live() {
-        let err =
-            resume_decision(true, Resume::ById, true, Some(SessionId::new()))
-                .unwrap_err();
-        assert_eq!(err.code, "session_already_live");
+    fn resume_from_a_terminal_session_continues_it() {
+        let id = SessionId::new();
+        let (mode, resumed_from) = resume_decision(
+            true,
+            Resume::ById,
+            ResumeTarget::Named {
+                id,
+                state: Some(SessionState::Exited {
+                    code: Some(0),
+                    signal: None,
+                }),
+            },
+        )
+        .unwrap();
+        assert_eq!(mode, LaunchMode::Continue);
+        assert_eq!(resumed_from, Some(id));
     }
 
     #[test]
-    fn the_live_guard_is_checked_before_the_lineage_is_used() {
-        // No prior terminal session at all: resume still launches Continue
-        // (the harness's own "nothing to continue" message is the fallback
-        // the design accepts), just with no lineage to record.
+    fn resume_from_a_live_session_is_resume_target_live() {
+        let id = SessionId::new();
+        let err = resume_decision(
+            true,
+            Resume::ById,
+            ResumeTarget::Named {
+                id,
+                state: Some(SessionState::Running),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "resume_target_live");
+    }
+
+    #[test]
+    fn resume_from_an_unknown_session_is_resume_target_not_found() {
+        let err = resume_decision(
+            true,
+            Resume::ById,
+            ResumeTarget::Named {
+                id: SessionId::new(),
+                state: None,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "resume_target_not_found");
+    }
+
+    #[test]
+    fn resume_with_no_target_and_no_prior_session_still_launches_continue() {
+        // No named target and no prior terminal session at all: resume
+        // still launches Continue (the harness's own "nothing to
+        // continue" message is the fallback the design accepts), just
+        // with no lineage to record.
         let (mode, resumed_from) =
-            resume_decision(true, Resume::ById, false, None).unwrap();
+            resume_decision(true, Resume::ById, ResumeTarget::Latest(None))
+                .unwrap();
         assert_eq!(mode, LaunchMode::Continue);
         assert_eq!(resumed_from, None);
     }
@@ -1070,16 +1162,35 @@ mod create_tests {
         drop(tx);
     }
 
-    /// The live-session guard trips before `create` ever touches the
-    /// harness or spawns a supervisor, so this exercises the real `create`
-    /// path (not just the extracted decision) without needing a `claude`
-    /// binary on this host.
+    /// Several live sessions per project are now allowed: two fresh
+    /// creates for the same project both succeed, and both end up
+    /// `Running` in state. A fake `claude` (answers `--version`) and a
+    /// fake supervisor (prints one readiness line and exits) stand in
+    /// for the real binaries so this exercises the real `create` path,
+    /// not just the extracted decision.
     #[test]
-    fn create_refuses_a_resume_while_a_session_is_already_live() {
-        use willie_core::{
-            id::SessionId,
-            session::{Session, SessionKind, SessionState},
-        };
+    fn a_fresh_create_is_allowed_while_another_session_is_live() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use willie_proto::session::GitIdentity;
+
+        let home = std::env::temp_dir().join("willie-sess-multi-live-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let claude = home.join("claude");
+        std::fs::write(&claude, "#!/bin/sh\necho '1.0.0 (fake)'\n").unwrap();
+        std::fs::set_permissions(
+            &claude,
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let fake_sess = home.join("willie-sess-fake");
+        std::fs::write(&fake_sess, "#!/bin/sh\necho 'ok 4242'\n").unwrap();
+        std::fs::set_permissions(
+            &fake_sess,
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
 
         let state = Arc::new(Mutex::new(State::default()));
         let (out, _h) = Outbound::spawn(std::io::sink());
@@ -1088,44 +1199,55 @@ mod create_tests {
         let project = ready_project();
         let pid = project.id;
         crate::lock(&state).projects.insert(pid, project);
-        let live = Session {
-            id: SessionId::new(),
-            project_id: pid,
-            harness: "claude-code".into(),
-            workspace: "/w".into(),
-            kind: SessionKind::Agent,
-            state: SessionState::Running,
-            created_at: clock(),
-            started_at: None,
-            finished_at: None,
-            pid: Some(1),
-            clients: 0,
-            resumed_from: None,
-            label: None,
-            title: None,
-            sandbox: Default::default(),
-        };
-        crate::lock(&state).sessions.insert(live.id, live);
 
         let ops = SessionOps::new(
             Arc::clone(&state),
             out,
-            std::env::temp_dir().join("willie-sess-resume-live-state"),
-            std::env::temp_dir().join("willie-sess-resume-live-run"),
-            std::env::temp_dir().join("willie-sess-resume-live-home"),
+            std::env::temp_dir().join("willie-sess-multi-live-state"),
+            std::env::temp_dir().join("willie-sess-multi-live-run"),
+            home,
             clock,
             Arc::clone(&runner),
         );
-        let err = ops
-            .create(CreateParams {
-                project_id: pid,
-                git_identity: None,
-                resume: true,
-                resume_from: None,
-                kind: SessionKind::Agent,
+        let identity = || {
+            Some(GitIdentity {
+                name: "T".into(),
+                email: "t@x".into(),
             })
-            .unwrap_err();
-        assert_eq!(err.code, "session_already_live");
+        };
+        let make = || CreateParams {
+            project_id: pid,
+            git_identity: identity(),
+            resume: false,
+            resume_from: None,
+            kind: SessionKind::Agent,
+        };
+
+        // SAFETY: this test does not run concurrently with another test
+        // that reads or writes these process-wide variables.
+        unsafe {
+            std::env::set_var("WILLIE_HARNESS_BIN", &claude);
+            std::env::set_var("WILLIE_SESS_BIN", &fake_sess);
+        }
+        let first = ops.create(make());
+        let second = ops.create(make());
+        // SAFETY: same single-threaded scope as the set above.
+        unsafe {
+            std::env::remove_var("WILLIE_HARNESS_BIN");
+            std::env::remove_var("WILLIE_SESS_BIN");
+        }
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_ne!(first.id, second.id);
+        assert_eq!(first.state, willie_core::session::SessionState::Running);
+        assert_eq!(second.state, willie_core::session::SessionState::Running);
+        let live = crate::lock(&ops.state)
+            .sessions
+            .values()
+            .filter(|s| s.project_id == pid && s.state.is_live())
+            .count();
+        assert_eq!(live, 2);
     }
 
     /// The policy is resolved before the harness is detected and before
