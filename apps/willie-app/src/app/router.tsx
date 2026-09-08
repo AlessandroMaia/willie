@@ -65,6 +65,11 @@ const sandboxRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/sandbox",
   component: SandboxScreen,
+  /* Read by Task 15's system aggregate; the footer's governance
+   * segment (Task 11) links here with `?session=<id>` today. */
+  validateSearch: (search: Record<string, unknown>): { session?: string } => ({
+    session: typeof search.session === "string" ? search.session : undefined,
+  }),
 });
 
 const profilesRoute = createRoute({

@@ -1,3 +1,4 @@
+import { deniedCount } from "@/lib/domain/sandbox";
 import type { Denied, SandboxState, Session } from "@/lib/proto";
 
 /**
@@ -89,11 +90,8 @@ export function sandboxPosture(session: Session): Posture {
 
 /** The session's denials, highest count first, with the total across all. */
 export function denials(session: Session): { items: Denied[]; total: number } {
-  const items = [...sandboxOf(session).denied].sort(
-    (a, b) => b.count - a.count,
-  );
+  const sb = sandboxOf(session);
+  const items = [...sb.denied].sort((a, b) => b.count - a.count);
 
-  const total = items.reduce((sum, d) => sum + d.count, 0);
-
-  return { items, total };
+  return { items, total: deniedCount(sb) };
 }
