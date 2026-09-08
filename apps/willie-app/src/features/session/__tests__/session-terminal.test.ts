@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isShellShortcut } from "@/features/sessions/session-terminal";
+import { isShellShortcut } from "@/features/session/session-terminal";
 
 function keydown(
   key: string,

@@ -43,6 +43,34 @@ export function recentTerminal(sessions: Session[], limit: number): Session[] {
     .slice(0, limit);
 }
 
+/** The id's last six characters — a session's fallback name when it has
+ * neither a user label nor a resolved title. */
+function shortId(id: string): string {
+  return id.slice(-6);
+}
+
+/** A session's display name: what the user renamed it to, else its
+ * first-prompt title, else the id's last six characters. Presentation
+ * order the tab strip and the empty state's "Resume" button share. */
+export function sessionName(s: Session): string {
+  return s.label ?? s.title ?? shortId(s.id);
+}
+
+/** One system's live sessions, newest first — `liveSessions` scoped to
+ * a single project, the Session screen's tab-strip source. */
+export function liveOf(projectId: string, sessions: Session[]): Session[] {
+  return liveSessions(sessions).filter((s) => s.project_id === projectId);
+}
+
+/** One system's finished sessions, newest first — `recentTerminal`
+ * scoped to a single project and uncapped, since the empty state only
+ * ever needs to know whether one exists and show the latest. */
+export function finishedOf(projectId: string, sessions: Session[]): Session[] {
+  return recentTerminal(sessions, sessions.length).filter(
+    (s) => s.project_id === projectId,
+  );
+}
+
 export type Posture = "full" | "reduced" | "unknown";
 
 const EMPTY_SANDBOX: SandboxState = {

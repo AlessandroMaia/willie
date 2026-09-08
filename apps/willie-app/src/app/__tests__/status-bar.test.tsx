@@ -3,6 +3,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngineStatus } from "@/lib/ipc";
 import type { Session, Snapshot, UsageSnapshot } from "@/lib/proto";
 
+/* The Session screen (Task 12) hosts a real `SessionTerminal` for every
+ * live session, and this suite resets the module graph for every test
+ * (see the `beforeEach` below) — without this, the real `@xterm/xterm`
+ * would be re-imported and re-initialised from scratch on every case.
+ * A fake stands in, same shape `session-screen.test.tsx` uses. */
+vi.mock("@xterm/xterm", () => {
+  class FakeTerminal {
+    rows = 24;
+    cols = 80;
+    options: Record<string, unknown> = {};
+    attachCustomKeyEventHandler() {}
+    loadAddon() {}
+    open() {}
+    onData() {}
+    write() {}
+    dispose() {}
+  }
+  return { Terminal: FakeTerminal };
+});
+
+vi.mock("@xterm/addon-fit", () => {
+  class FakeFitAddon {
+    fit() {}
+  }
+  return { FitAddon: FakeFitAddon };
+});
+
 const STATUS: EngineStatus = {
   engine_version: "0.1.0",
   wsl: {

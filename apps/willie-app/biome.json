@@ -205,6 +205,38 @@
       }
     },
     {
+      "includes": ["src/features/session/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/features/projects/*",
+                      "@/features/sessions/*",
+                      "@/features/health/*",
+                      "**/app/**",
+                      "../projects/**",
+                      "../sessions/**",
+                      "../health/**",
+                      "**/features/projects/**",
+                      "**/features/sessions/**",
+                      "**/features/health/**"
+                    ],
+                    "message": "features/session never imports app/ or another feature (projects, sessions, health). What session and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
       "includes": ["src/features/health/**"],
       "linter": {
         "rules": {
