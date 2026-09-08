@@ -13,7 +13,7 @@ use willie_core::{
 };
 use willie_proto::session::{
     CreateParams, CreateResult, GitIdentity, IdParams as SessionIdParams,
-    SessionList, method as session,
+    RenameParams as SessionRenameParams, SessionList, method as session,
 };
 use willie_proto::tool::{
     InstallParams, ToolList, UpdateParams, method as tool,
@@ -23,8 +23,9 @@ use willie_proto::{
     job::method as job,
     plugin::{EnableParams, PluginStatus, method as plugin},
     project::{
-        AddParams, AddResult, IdParams, JobRef, ProjectList, RelocateParams,
-        RemoveParams, RenameParams, SetSandboxParams, method as project,
+        AddParams, AddResult, IdParams, JobRef, ProjectList, ReadFileParams,
+        ReadFileResult, RelocateParams, RemoveParams, RenameParams,
+        SetSandboxParams, TreeParams, TreeResult, method as project,
     },
     rpc::Notification,
     state::{Snapshot, method as state},
@@ -32,7 +33,7 @@ use willie_proto::{
 };
 
 use crate::{
-    config::{EngineConfig, Projects},
+    config::{EngineConfig, Projects, Ui},
     daemon::{DaemonState, DaemonSupervisor},
     discover::{self, Candidate},
     distro::{DistroManager, DistroStatus, locate_image},
@@ -178,13 +179,18 @@ impl Engine {
 
     /// Distro pre-flight, then a call the daemon supervisor forwards
     /// over RPC, starting the daemon on demand. Every project and job
-    /// method is a thin wrapper around this.
+    /// method is a thin wrapper around this. The pre-flight is skipped
+    /// once a daemon is already connected — same rule [`Engine::run_doctor`]
+    /// already applies — which is also what lets a test drive a call
+    /// against an injected connection with no `wsl.exe` in the loop.
     fn daemon_call<P: Serialize, R: DeserializeOwned>(
         &mut self,
         method: &str,
         params: P,
     ) -> Result<R, EngineError> {
-        self.ensure_distro_registered()?;
+        if !matches!(self.daemon.state(), DaemonState::Running { .. }) {
+            self.ensure_distro_registered()?;
+        }
         self.daemon.call(method, params)
     }
 
@@ -273,11 +279,33 @@ impl Engine {
         )
     }
 
+    /// Lists a workspace directory (its root when `path` is absent), with
+    /// each entry's aggregated git status and the branch, for the
+    /// workspace tree.
+    pub fn project_tree(
+        &mut self,
+        id: ProjectId,
+        path: Option<String>,
+    ) -> Result<TreeResult, EngineError> {
+        self.daemon_call(project::TREE, TreeParams { id, path })
+    }
+
+    /// Reads one workspace file for the read-only preview.
+    pub fn project_read_file(
+        &mut self,
+        id: ProjectId,
+        path: String,
+    ) -> Result<ReadFileResult, EngineError> {
+        self.daemon_call(project::READ_FILE, ReadFileParams { id, path })
+    }
+
     pub fn session_create(
         &mut self,
         project_id: ProjectId,
         git_identity: Option<GitIdentity>,
         resume: bool,
+        resume_from: Option<SessionId>,
+        kind: SessionKind,
     ) -> Result<CreateResult, EngineError> {
         self.daemon_call(
             session::CREATE,
@@ -285,42 +313,60 @@ impl Engine {
                 project_id,
                 git_identity,
                 resume,
-                resume_from: None,
-                kind: SessionKind::Agent,
+                resume_from,
+                kind,
             },
         )
     }
 
     /// Create a session and open its terminal. A terminal that fails to
     /// launch does NOT undo the session (it is alive and attachable) — it
-    /// comes back as `terminal_problem` for the UI to surface.
+    /// comes back as `terminal_problem` for the UI to surface. `kind`
+    /// chooses an agent conversation or an interactive shell.
     pub fn session_open(
         &mut self,
         project_id: ProjectId,
+        kind: SessionKind,
     ) -> Result<SessionOpened, EngineError> {
-        self.session_open_impl(project_id, false)
+        self.session_open_impl(project_id, false, None, kind)
     }
 
     /// Continue a project's last conversation: create the session with
     /// `resume: true` and open its terminal, same shape as
-    /// [`Engine::session_open`].
+    /// [`Engine::session_open`]. `resume_from` names the finished session
+    /// to continue; absent, the daemon picks the project's most recent
+    /// one. Always an agent session — resuming a shell has no meaning.
     pub fn session_resume(
         &mut self,
         project_id: ProjectId,
+        resume_from: Option<SessionId>,
     ) -> Result<SessionOpened, EngineError> {
-        self.session_open_impl(project_id, true)
+        self.session_open_impl(
+            project_id,
+            true,
+            resume_from,
+            SessionKind::Agent,
+        )
     }
 
     /// Shared body for [`Engine::session_open`] and
-    /// [`Engine::session_resume`]: they differ only in the `resume` flag
-    /// passed to the daemon.
+    /// [`Engine::session_resume`]: they differ only in the `resume`,
+    /// `resume_from` and `kind` passed to the daemon.
     fn session_open_impl(
         &mut self,
         project_id: ProjectId,
         resume: bool,
+        resume_from: Option<SessionId>,
+        kind: SessionKind,
     ) -> Result<SessionOpened, EngineError> {
         let identity = crate::identity::windows_git_identity();
-        let created = self.session_create(project_id, identity, resume)?;
+        let created = self.session_create(
+            project_id,
+            identity,
+            resume,
+            resume_from,
+            kind,
+        )?;
         let title = self
             .project_title(project_id)
             .unwrap_or_else(|| created.session.id.to_string());
@@ -336,6 +382,15 @@ impl Engine {
             session: created.session,
             terminal_problem,
         })
+    }
+
+    /// Renames or clears (`label: None`) a session's display label.
+    pub fn session_rename(
+        &mut self,
+        id: SessionId,
+        label: Option<String>,
+    ) -> Result<Session, EngineError> {
+        self.daemon_call(session::RENAME, SessionRenameParams { id, label })
     }
 
     /// Open (another) terminal for an existing session.
@@ -455,7 +510,8 @@ impl Engine {
     }
 
     /// Persists the discovery roots to `engine.toml`, creating the data
-    /// directory the first time a root is set.
+    /// directory the first time a root is set. Load-modify-save so an
+    /// already-saved `[ui]` table is kept, not clobbered.
     pub fn set_projects_roots(
         &self,
         roots: Vec<String>,
@@ -465,9 +521,33 @@ impl Engine {
                 what: "LOCALAPPDATA",
                 text: String::new(),
             })?;
-        let config = EngineConfig {
-            projects: Projects { roots },
-        };
+        let mut config = EngineConfig::load(&path);
+        config.projects = Projects { roots };
+        config.save(&path).map_err(|e| EngineError::ConfigWrite {
+            path: path.display().to_string(),
+            message: e.to_string(),
+        })
+    }
+
+    /// The UI preferences saved in `engine.toml`'s `[ui]` table, empty
+    /// when the file or the table itself is absent.
+    #[must_use]
+    pub fn ui_prefs(&self) -> Ui {
+        paths::engine_toml_path()
+            .map(|p| EngineConfig::load(&p).ui)
+            .unwrap_or_default()
+    }
+
+    /// Persists the UI preferences. Load-modify-save so the `[projects]`
+    /// table already on disk is kept, not clobbered.
+    pub fn set_ui_prefs(&self, ui: Ui) -> Result<(), EngineError> {
+        let path =
+            paths::engine_toml_path().ok_or_else(|| WslError::Unparseable {
+                what: "LOCALAPPDATA",
+                text: String::new(),
+            })?;
+        let mut config = EngineConfig::load(&path);
+        config.ui = ui;
         config.save(&path).map_err(|e| EngineError::ConfigWrite {
             path: path.display().to_string(),
             message: e.to_string(),
@@ -567,5 +647,92 @@ mod tests {
             .plugin_call("plugin.profile.list".into(), serde_json::json!({}))
             .unwrap_err();
         assert_eq!(err.code(), "method_not_served");
+    }
+
+    /// A peer that echoes the `session.create` request's `kind` and
+    /// `resume_from` back inside a minimal `CreateResult`, so a test can
+    /// assert on the exact `CreateParams` `Engine::session_create` put on
+    /// the wire without a running daemon.
+    fn create_echo_peer_main() {
+        use std::io::{BufRead, Write};
+
+        crate::test_support::announce_ready();
+        let stdin = std::io::stdin();
+        let mut out = std::io::stdout();
+        for line in stdin.lock().lines().map_while(Result::ok) {
+            let req: willie_proto::rpc::Request =
+                serde_json::from_str(&line).unwrap();
+            let params: CreateParams =
+                serde_json::from_value(req.params.clone()).unwrap();
+            let result = serde_json::json!({
+                "session": {
+                    "id": SessionId::new().to_string(),
+                    "project_id": params.project_id.to_string(),
+                    "harness": "claude-code",
+                    "workspace": "/home/willie/projects/x",
+                    "kind": params.kind,
+                    "state": { "state": "creating" },
+                    "created_at": "0",
+                    "resumed_from": params.resume_from,
+                },
+            });
+            let resp = willie_proto::rpc::Response::ok(req.id, result).unwrap();
+            writeln!(out, "{}", serde_json::to_string(&resp).unwrap()).unwrap();
+            out.flush().unwrap();
+        }
+        std::process::exit(0);
+    }
+
+    /// `session_open`/`session_resume` both narrow to `session_create`,
+    /// the seam that actually builds `CreateParams` and calls the
+    /// daemon — tested here directly rather than through the public
+    /// wrappers, which also open a real terminal tab that a unit test
+    /// must not spawn. A scripted peer stands in for `willied`, wrapped
+    /// as a "connected" daemon so no `wsl.exe` is involved.
+    #[test]
+    fn session_create_sends_the_requested_kind_and_resume_from() {
+        if std::env::var_os("WILLIE_CREATE_ECHO_MODE").is_some() {
+            create_echo_peer_main();
+            return;
+        }
+        let child = crate::test_support::spawn_peer(
+            "engine::tests::session_create_sends_the_requested_kind_and_resume_from",
+            "WILLIE_CREATE_ECHO_MODE",
+        );
+        let mut process =
+            crate::process::WslProcess::from_child(child).unwrap();
+        let mut transport = process.transport().unwrap();
+        crate::test_support::await_ready(&mut transport);
+        let client = crate::rpc::RpcClient::new(
+            transport,
+            std::time::Duration::from_secs(5),
+        );
+        let mut engine = Engine {
+            image_candidates: Vec::new(),
+            distro: DistroManager,
+            daemon: DaemonSupervisor::connected(process, client),
+            last_doctor: None,
+            #[cfg(windows)]
+            embedded: None,
+        };
+
+        let project_id = ProjectId::new();
+        let created = engine
+            .session_create(project_id, None, false, None, SessionKind::Shell)
+            .expect("session.create (shell)");
+        assert_eq!(created.session.kind, SessionKind::Shell);
+        assert!(created.session.resumed_from.is_none());
+
+        let resume_from = SessionId::new();
+        let created = engine
+            .session_create(
+                project_id,
+                None,
+                true,
+                Some(resume_from),
+                SessionKind::Agent,
+            )
+            .expect("session.create (resume)");
+        assert_eq!(created.session.resumed_from, Some(resume_from));
     }
 }
