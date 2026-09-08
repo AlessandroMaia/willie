@@ -1,3 +1,4 @@
+import { deniedCount } from "@/lib/domain/sandbox";
 import type { Denied, SandboxState, Session } from "@/lib/proto";
 
 /**
@@ -40,6 +41,47 @@ export function recentTerminal(sessions: Session[], limit: number): Session[] {
     .filter((s) => !isLive(s))
     .sort((a, b) => at(b).localeCompare(at(a)))
     .slice(0, limit);
+}
+
+/** The id's last six characters — a session's fallback name when it has
+ * neither a user label nor a resolved title. */
+function shortId(id: string): string {
+  return id.slice(-6);
+}
+
+/** A session's display name: what the user renamed it to, else its
+ * first-prompt title, else the id's last six characters. Presentation
+ * order the tab strip and the empty state's "Resume" button share. */
+export function sessionName(s: Session): string {
+  return s.label ?? s.title ?? shortId(s.id);
+}
+
+/** One system's live sessions, newest first — `liveSessions` scoped to
+ * a single project, the Session screen's tab-strip source. */
+export function liveOf(projectId: string, sessions: Session[]): Session[] {
+  return liveSessions(sessions).filter((s) => s.project_id === projectId);
+}
+
+/** One system's finished sessions, newest first — `recentTerminal`
+ * scoped to a single project and uncapped, since the empty state only
+ * ever needs to know whether one exists and show the latest. */
+export function finishedOf(projectId: string, sessions: Session[]): Session[] {
+  return recentTerminal(sessions, sessions.length).filter(
+    (s) => s.project_id === projectId,
+  );
+}
+
+/**
+ * The one finished session a resume can honestly name. `resume_from`
+ * records which session the new one continues, but the harness is
+ * launched with a bare "continue", which always picks the workspace's
+ * most recent conversation — so only the newest finished agent session
+ * is what a resume would actually reopen. A shell has no conversation
+ * to continue at all. Takes a project's finished list, newest first
+ * (`finishedOf`), and returns `null` when it holds no agent session.
+ */
+export function latestResumable(finished: Session[]): Session | null {
+  return finished.find((s) => (s.kind ?? "agent") === "agent") ?? null;
 }
 
 export type Posture = "full" | "reduced" | "unknown";
@@ -89,11 +131,8 @@ export function sandboxPosture(session: Session): Posture {
 
 /** The session's denials, highest count first, with the total across all. */
 export function denials(session: Session): { items: Denied[]; total: number } {
-  const items = [...sandboxOf(session).denied].sort(
-    (a, b) => b.count - a.count,
-  );
+  const sb = sandboxOf(session);
+  const items = [...sb.denied].sort((a, b) => b.count - a.count);
 
-  const total = items.reduce((sum, d) => sum + d.count, 0);
-
-  return { items, total };
+  return { items, total: deniedCount(sb) };
 }

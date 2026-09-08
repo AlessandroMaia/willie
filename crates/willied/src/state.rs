@@ -169,13 +169,14 @@ mod tests {
 
     #[test]
     fn a_session_upsert_bumps_seq_and_shows_in_the_snapshot() {
-        use willie_core::session::{Session, SessionState};
+        use willie_core::session::{Session, SessionKind, SessionState};
         let mut s = State::default();
         let sess = Session {
             id: SessionId::new(),
             project_id: ProjectId::new(),
             harness: "claude-code".into(),
             workspace: "/w".into(),
+            kind: SessionKind::Agent,
             state: SessionState::Running,
             created_at: "t".into(),
             started_at: None,
@@ -183,6 +184,8 @@ mod tests {
             pid: Some(3),
             clients: 0,
             resumed_from: None,
+            label: None,
+            title: None,
             sandbox: Default::default(),
         };
         let ev = s.upsert_session(sess.clone());

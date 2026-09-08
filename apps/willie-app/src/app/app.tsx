@@ -2,9 +2,9 @@ import { HotkeysProvider } from "@tanstack/react-hotkeys";
 import { RouterProvider } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { type AppRouter, createAppRouter } from "@/app/router";
-import { followSystemTheme } from "@/app/theme";
 import { Toaster } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { applyTheme, useThemeMode } from "@/store/use-theme";
 
 const defaultRouter = createAppRouter();
 
@@ -14,7 +14,8 @@ interface AppProps {
 }
 
 export function App({ router = defaultRouter }: AppProps) {
-  useEffect(() => followSystemTheme(), []);
+  const { mode } = useThemeMode();
+  useEffect(() => applyTheme(mode), [mode]);
 
   return (
     <HotkeysProvider>

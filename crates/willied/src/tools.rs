@@ -27,7 +27,13 @@ pub fn install(
     name: &str,
 ) -> Result<JobId, OpError> {
     if name != harness::claude().id() {
-        return Err(OpError::coded("invalid_params", "unknown harness"));
+        // Not the shared table's remediation: that one tells the user to
+        // reopen the session, and nothing here is about a session.
+        return Err(OpError::new(
+            "invalid_params",
+            "unknown harness",
+            "call tool.list for the ids this build can install",
+        ));
     }
     if harness::detect_claude(&home).is_some() {
         return Err(OpError::coded(
@@ -80,7 +86,11 @@ pub fn update(
     id: &str,
 ) -> Result<JobId, OpError> {
     if id != harness::claude().id() {
-        return Err(OpError::coded("invalid_params", "unknown tool"));
+        return Err(OpError::new(
+            "invalid_params",
+            "unknown tool",
+            "call tool.list for the ids this build manages",
+        ));
     }
     if harness::detect_claude(&home).is_none() {
         return Err(OpError::coded(

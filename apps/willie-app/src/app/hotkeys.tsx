@@ -35,13 +35,13 @@ function SidebarHotkey() {
   return null;
 }
 
-/** The shell's shortcuts: Mod+1…N for the available screens, in
- * registry order, and Mod+B for the sidebar. Rendered inside the
+/** The shell's shortcuts: Mod+1…4 for the four screens, in registry
+ * order, and Mod+B for the sidebar. Rendered inside the
  * SidebarProvider and the RouterProvider, which both hooks need. */
 export function ShellHotkeys() {
   return (
     <>
-      {ROUTES.filter((r) => r.available).map((r) => (
+      {ROUTES.map((r) => (
         <ScreenHotkey key={r.id} shortcut={r.shortcut} path={r.path} />
       ))}
       <SidebarHotkey />

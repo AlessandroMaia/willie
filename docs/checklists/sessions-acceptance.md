@@ -1,7 +1,7 @@
 # Sessions acceptance — open, attach and stop from the app
 
 Prove the sessions **engine + app** half by hand, entirely through
-buttons: install the harness from the Dashboard, open a Claude Code
+buttons: install the harness from the Engine screen (settings drawer), open a Claude Code
 session from a project's row into a real Windows Terminal tab, watch it
 in the Sessions screen, attach a second tab, stop it, exercise the
 no-`wt.exe` fallback and the fail-closed refusals inline in the UI, and
@@ -23,7 +23,7 @@ Before the walk:
   `projects-and-workspaces-acceptance.md` rows 1–2, or reuse one); note
   its workspace folder name as `<slug>` and its Windows checkout path as
   `<win>`.
-- **Remove the harness** so the Dashboard's Install row has something to
+- **Remove the harness** so the Engine screen's Install row has something to
   do: `wsl -d willie --user willie -- rm -f /home/willie/.local/bin/claude`
   (the first path a session looks up on; if an earlier walk installed it
   somewhere else on `PATH`, remove that copy instead).
@@ -36,28 +36,28 @@ workspace folder name; `<win>` its Windows checkout path.
 
 | # | Action | Expected |
 | - | ------ | -------- |
-| 1 | Open the **Dashboard** | the doctor's `Claude Code` check shows `[fail]` "not installed" with a remediation, and an **Install** button next to it |
+| 1 | Open the settings drawer (the header's gear) and choose **Engine** | the doctor's `Claude Code` check shows `[fail]` "not installed" with a remediation, and an **Install** button next to it |
 | 2 | Click **Install** | the button disables; while the job runs, its last log line is shown in place of the remediation |
 | 3 | Wait for the install job to finish | the `Claude Code` check turns `[ok]` with a version string; the **Install** button is gone |
-| 4 | On **Projects**, click **Open session** on `<proj>` | a new Windows Terminal tab opens, titled with the project's name, running the Claude Code TUI inside the distro; the project's row grows a badge reading "1 live" |
-| 5 | Open the **Sessions** tab | the session is listed under **Live**: project name, state `running`, harness `claude-code`, "1 client attached", **Attach** and **Stop** buttons |
+| 4 | Pick `<proj>` in the sidebar's system selector and, on the **Session** screen, click **New session** | a tab appears in the Session screen painting the Claude Code TUI inside the distro; the selector's live dot lights up |
+| 5 | Open the **Sessions** panel (the button at the right end of the tab strip) | the session is listed under **Live** with its name (the first prompt once known), a live dot and **Open**; the footer shows its sandbox posture |
 | 6 | Type in the Windows Terminal tab from row 4 | Claude Code echoes the keystrokes and responds like any normal terminal session |
 | 7 | Drag an edge of that tab's window to resize it — **this is the human-eyes row Plan A's checklist left open (row 6 there), only exercisable now that the app can open a real tab** | the TUI reflows to the new width/height, the same way it would in a hand-run `willie attach` |
-| 8 | On the Sessions row, click **Attach** | a second Windows Terminal tab opens onto the *same* session, showing the same screen; typing in either tab reaches the agent |
-| 9 | On the Sessions row, click **Stop** | both tabs print "session stopped" and return; the Sessions screen moves the row from **Live** to **Recent** as `exited 0`; the Projects row's "1 live" badge disappears |
-| 10 | With `wt.exe` hidden (see prereqs), click **Open session** on a `ready` project again | the session is created and listed under **Live** as `running` regardless; the Projects row shows a `terminal_launch_failed` notice with the message "terminal launch failed: …" and a remediation of the form `open a terminal and run: wsl -d willie --user willie -- /opt/willie/bin/willie attach <id>` |
+| 8 | In a Windows Terminal, run `wsl -d willie --user willie -- /opt/willie/bin/willie attach <id>` | the terminal shows the *same* screen as the tab; typing in either reaches the agent |
+| 9 | Exit the TUI in the session's tab | the tab leaves the strip; the Sessions panel moves it from **Live** to **Finished** with a relative time; the footer's governance segment hides |
+| 10 | With `wt.exe` hidden (see prereqs), click **New session** again | the tab opens and paints regardless — the embedded terminal does not need Windows Terminal |
 | 11 | Copy that exact line into a PowerShell prompt and run it | it attaches to the very session from row 10, proving the paste-able fallback works; restore `wt.exe` afterwards |
-| 12 | Start a long-running project job (e.g. **Send to Windows** on a large workspace), then immediately click **Open session** on that same project | the row shows an inline `project_busy` problem with its remediation, and no session is created |
-| 13 | Remove the harness again (prereqs step), then click **Open session** on a `ready` project | the row shows an inline `harness_not_installed` problem with the remediation "click Install on the Dashboard", and no session is created |
+| 12 | Start a long-running project job (e.g. **Send to Windows** on a large workspace), then immediately click **New session** for that same project | the row shows an inline `project_busy` problem with its remediation, and no session is created |
+| 13 | Remove the harness again (prereqs step), then click **New session** for a `ready` system | the row shows an inline `harness_not_installed` problem with the remediation "click Install on the Dashboard", and no session is created |
 | 14 | With a session still `running` (repeat row 4 first if needed), close the Willie window entirely, then reopen it | the Sessions screen shows the same session under **Live**, restored from the daemon's re-adoption scan, not re-created; no console window appeared at any point |
-| 15 | With `<proj>` having a live session (repeat row 4 if needed), on its **Sessions** row click **Open in app** | an embedded terminal panel opens inside the Willie window, painting the Claude Code TUI; no Windows Terminal tab opens |
-| 16 | Type in the embedded terminal | Claude Code echoes the keystrokes and responds like any normal terminal session |
-| 17 | Resize the **Willie window** — the human-eyes row for the embedded path | the embedded TUI reflows to the new width/height |
-| 18 | Open a second live session (**Open session** again, on `<proj>` or another `ready` project), then click **Open in app** on its row | the first session's embedded terminal detaches (it keeps running, still listed under **Live**); the second session's terminal attaches, its screen restored from the ring replay |
-| 19 | On the embedded terminal panel, click **Close** | the panel goes away; the session stays listed under **Live**, unaffected |
-| 20 | Regression: with `wt.exe` present (not hidden), click **Open session** (not **Open in app**) on a `ready` project | exactly one Windows Terminal tab opens; no stray `wt.exe` window appears at any point |
-| 21 | With `<proj>` having a finished session that held some conversation (stop the session from row 9 first if needed) and no live session, click **Resume** on its Projects row | a new Windows Terminal tab opens, continuing the conversation — Claude Code recalls the prior context — instead of starting fresh; the Projects row's live badge goes to "1 live" |
-| 22 | With that resumed session still live, observe `<proj>`'s **Resume** button | it is disabled — a project with a live session cannot start a concurrent resume from the UI — and re-enables once the session ends. (The daemon also refuses a concurrent resume with `session_already_live` as a fail-closed backstop; not reachable by clicking here since the button is disabled, so this is covered instead by the daemon's own integration test, not this walk.) |
+| 15 | With `<proj>` having a live session (repeat row 4 if needed), open the **Session** screen | its tab already paints the Claude Code TUI in the Willie window; no Windows Terminal tab opens |
+| 16 | Type in the active tab | Claude Code echoes the keystrokes and responds like any normal terminal session |
+| 17 | Resize the **Willie window** — the human-eyes row for the embedded path | the active tab's TUI reflows to the new width/height; switching to another tab and back reflows it too |
+| 18 | Click **+ → New session** to open a second live session, then switch between the two tabs | both tabs keep their scrollback and keep echoing; neither detaches; the footer follows the focused tab |
+| 19 | Exit the TUI in one of the two tabs | only that tab's bridge closes and the tab leaves the strip; the other tab is unaffected |
+| 20 | Regression: with `wt.exe` present (not hidden), click **+ → New zsh** | a `$ zsh` tab opens inside the Willie window with the Willie prompt naming the branch; no `wt.exe` window appears at any point |
+| 21 | With `<proj>` having a finished agent session that held some conversation and no live session, click **Resume <name>** on the Session screen's empty state (or **Resume** on the latest finished row of the Sessions panel) | a new tab opens continuing the workspace's most recent conversation — Claude Code recalls the prior context — instead of starting fresh |
+| 22 | With that resumed session still live, open the Session screen's **Sessions** panel | the live session is listed under **Live** with **Open**, and a resume is offered on the newest finished agent session only — a project may hold several live sessions now, so nothing is disabled for having one; `session_already_live` is retired and no longer produced |
 
 ## Results
 

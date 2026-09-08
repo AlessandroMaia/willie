@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   denials,
+  finishedOf,
   isLive,
   liveCount,
+  liveOf,
   liveSessions,
   recentTerminal,
   sandboxPosture,
+  sessionName,
 } from "@/lib/domain/sessions";
 import type { Denied, SandboxState, Session } from "@/lib/proto";
 
@@ -98,6 +101,68 @@ describe("session helpers", () => {
       "f-mid",
       "f-old",
     ]);
+  });
+});
+
+describe("sessionName", () => {
+  it("prefers the user's own label", () => {
+    const session = {
+      ...s("abc123def456", "p", { state: "running" }, "1"),
+      label: "web-autenticacao",
+      title: "fix the login flow",
+    };
+    expect(sessionName(session)).toBe("web-autenticacao");
+  });
+
+  it("falls back to the resolved title when there is no label", () => {
+    const session = {
+      ...s("abc123def456", "p", { state: "running" }, "1"),
+      title: "fix the login flow",
+    };
+    expect(sessionName(session)).toBe("fix the login flow");
+  });
+
+  it("falls back past an explicitly cleared label to the title", () => {
+    const session = {
+      ...s("abc123def456", "p", { state: "running" }, "1"),
+      label: null,
+      title: "fix the login flow",
+    };
+    expect(sessionName(session)).toBe("fix the login flow");
+  });
+
+  it("falls back to the id's last six characters when neither is set", () => {
+    const session = s("sess_01abcdef456789", "p", { state: "running" }, "1");
+    expect(sessionName(session)).toBe("456789");
+  });
+});
+
+describe("liveOf", () => {
+  it("scopes live sessions to one system, newest first", () => {
+    const list = [
+      s("a", "p1", { state: "running" }, "2"),
+      s("b", "p2", { state: "running" }, "9"),
+      s("c", "p1", { state: "running" }, "5"),
+      s("d", "p1", { state: "exited", code: 0, signal: null }, "9"),
+    ];
+    expect(liveOf("p1", list).map((x) => x.id)).toEqual(["c", "a"]);
+  });
+});
+
+describe("finishedOf", () => {
+  it("scopes finished sessions to one system, newest first", () => {
+    const list = [
+      s("live", "p1", { state: "running" }, "50"),
+      s("f-old", "p1", { state: "exited", code: 0, signal: null }, "1", "10"),
+      s("f-new", "p1", { state: "exited", code: 0, signal: null }, "1", "30"),
+      s("other", "p2", { state: "exited", code: 0, signal: null }, "1", "40"),
+    ];
+    expect(finishedOf("p1", list).map((x) => x.id)).toEqual(["f-new", "f-old"]);
+  });
+
+  it("is empty when the system has no finished sessions", () => {
+    const list = [s("live", "p1", { state: "running" }, "1")];
+    expect(finishedOf("p1", list)).toEqual([]);
   });
 });
 

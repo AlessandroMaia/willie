@@ -1,6 +1,8 @@
 import { FolderGit2Icon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { ProblemAlert } from "@/components/problem-alert";
+import { RelocateProjectDialog } from "@/components/system-dialogs/relocate-project-dialog";
+import { RemoveProjectDialog } from "@/components/system-dialogs/remove-project-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -15,28 +17,13 @@ import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import { DiscoverPanel } from "@/features/projects/discover-panel";
 import { ProjectRow } from "@/features/projects/project-row";
-import { RelocateProjectDialog } from "@/features/projects/relocate-project-dialog";
-import { RemoveProjectDialog } from "@/features/projects/remove-project-dialog";
 import { RootsPanel } from "@/features/projects/roots-panel";
-import { SandboxDialog } from "@/features/projects/sandbox-dialog";
 import { latestJobFor } from "@/lib/domain/jobs";
-import { isLive, liveCount } from "@/lib/domain/sessions";
+import { liveCount } from "@/lib/domain/sessions";
 import type { Problem } from "@/lib/ipc";
-import {
-  dialogs,
-  editorAvailable as editorAvailableApi,
-  projects as projectsApi,
-  sandbox as sandboxApi,
-  sessions as sessionsApi,
-} from "@/lib/ipc";
+import { dialogs, projects as projectsApi } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
-import type {
-  Candidate,
-  CapabilityInfo,
-  Job,
-  Project,
-  SandboxProfile,
-} from "@/lib/proto";
+import type { Candidate, Job, Project } from "@/lib/proto";
 import { useSnapshot } from "@/store/use-snapshot";
 
 function wslPathFor(slug: string): string {
@@ -66,6 +53,13 @@ function projectJobId(job: Job): string {
   return id;
 }
 
+/**
+ * Every system the daemon knows about: add by path, discover under a
+ * root, and the machine-wide maintenance actions (rename, relocate,
+ * remove) on each row. A session, its sandbox and its editor belong to
+ * the system's own screens now, not this list — this row only reports
+ * whether one is live.
+ */
 export function ProjectsScreen() {
   const store = useSnapshot();
   const snap = store.snapshot;
@@ -95,31 +89,11 @@ export function ProjectsScreen() {
   const [relocating, setRelocating] = useState<Project | null>(null);
   const [relocatePath, setRelocatePath] = useState("");
   const [relocateProblem, setRelocateProblem] = useState<Problem | null>(null);
-  const [sandboxTarget, setSandboxTarget] = useState<Project | null>(null);
-  const [sandboxProblem, setSandboxProblem] = useState<Problem | null>(null);
-  /* Static domain data, fetched once on mount: `sandbox-dialog.tsx`
-   * renders one row per catalogue entry, so an empty catalogue is an
-   * empty dialog, not a fallback — a fetch failure is surfaced below,
-   * not swallowed. */
-  const [catalogue, setCatalogue] = useState<CapabilityInfo[]>([]);
-  /* Static per-machine fact, fetched once on mount: whether VS Code is
-   * installed. Gates the row's "Open in VS Code" item the same way the
-   * catalogue gates the Sandbox dialog — a fetch failure defaults to
-   * unavailable rather than leaving the action stuck in an unknown
-   * state. */
-  const [editorAvailable, setEditorAvailable] = useState(false);
   /* Synchronous RPC-level rejects that belong to one project (a job
    * already running, a cancel or retry that failed) — shown on that
    * project's row, never in the page-level banner below, which is
    * reserved for genuinely global actions (roots, discover, add). */
   const [rowProblems, setRowProblems] = useState<Map<string, Problem>>(
-    new Map(),
-  );
-  /* A session that opened successfully but whose terminal tab could not
-   * be launched (`SessionOpened.terminal_problem`) — the session is
-   * alive, so this is kept apart from `rowProblems` and rendered as a
-   * dismissable notice instead of a row failure. */
-  const [openNotices, setOpenNotices] = useState<Map<string, Problem>>(
     new Map(),
   );
 
@@ -151,22 +125,6 @@ export function ProjectsScreen() {
     loadRoots();
   }, [loadRoots]);
 
-  /* Same page-level banner `loadRoots` uses: a failure here is not
-   * silent — without the catalogue the Sandbox dialog has nothing to
-   * render, so the failure belongs where the user is looking. */
-  useEffect(() => {
-    sandboxApi
-      .catalogue()
-      .then(setCatalogue)
-      .catch((error: unknown) => setLocal(asProblem(error)));
-  }, []);
-
-  useEffect(() => {
-    editorAvailableApi()
-      .then(setEditorAvailable)
-      .catch(() => setEditorAvailable(false));
-  }, []);
-
   async function run(
     id: string,
     action: () => Promise<unknown>,
@@ -186,15 +144,6 @@ export function ProjectsScreen() {
 
   function setRowProblem(projectId: string, problem: Problem | null) {
     setRowProblems((prev) => {
-      const next = new Map(prev);
-      if (problem) next.set(projectId, problem);
-      else next.delete(projectId);
-      return next;
-    });
-  }
-
-  function setOpenNotice(projectId: string, problem: Problem | null) {
-    setOpenNotices((prev) => {
       const next = new Map(prev);
       if (problem) next.set(projectId, problem);
       else next.delete(projectId);
@@ -335,33 +284,6 @@ export function ProjectsScreen() {
     if (ok) setEditingId(null);
   }
 
-  /* `runRow` already routes a thrown `Problem` (the create itself
-   * failing — `project_busy`, `harness_not_installed`, …) into
-   * `rowProblems`. A `terminal_problem` only ever rides along on a
-   * *successful* open — the session is alive, just no tab launched — so
-   * it is pulled out of the result here and kept in `openNotices`
-   * instead of being treated as a row failure. */
-  function openSession(project: Project) {
-    setOpenNotice(project.id, null);
-    void runRow(project.id, project.id, async () => {
-      const result = await sessionsApi.open(project.id);
-      setOpenNotice(project.id, result.terminal_problem ?? null);
-    });
-  }
-
-  /* Same shape as `openSession`: a `terminal_problem` on an otherwise
-   * successful resume is a live-session notice, not a row failure; a
-   * thrown `Problem` (`session_already_live`, `harness_cannot_resume`,
-   * …) falls through to `runRow`'s row-failure handling like any other
-   * action. */
-  function resumeSession(project: Project) {
-    setOpenNotice(project.id, null);
-    void runRow(project.id, project.id, async () => {
-      const result = await sessionsApi.resume(project.id);
-      setOpenNotice(project.id, result.terminal_problem ?? null);
-    });
-  }
-
   function syncToWindows(project: Project) {
     void runRow(project.id, project.id, () =>
       projectsApi.syncToWindows(project.id),
@@ -420,15 +342,6 @@ export function ProjectsScreen() {
   function openInExplorer(project: Project, path: string) {
     projectsApi
       .openInExplorer(path)
-      .catch((error: unknown) => setRowProblem(project.id, asProblem(error)));
-  }
-
-  /* The ext4 workspace, not the Windows `source` — editing happens in
-   * the fast clone the same way `openInExplorer` shows the Windows-side
-   * UNC path. */
-  function openInEditor(project: Project) {
-    projectsApi
-      .openInEditor(project.workspace)
       .catch((error: unknown) => setRowProblem(project.id, asProblem(error)));
   }
 
@@ -508,38 +421,10 @@ export function ProjectsScreen() {
     }
   }
 
-  function openSandboxDialog(project: Project) {
-    setSandboxTarget(project);
-    setSandboxProblem(null);
-  }
-
-  function closeSandboxDialog() {
-    setSandboxTarget(null);
-    setSandboxProblem(null);
-  }
-
-  /* `project.set_sandbox` validates by resolving before it persists,
-   * so the one rejection this ever sees is a policy the daemon
-   * refuses outright (`sandbox_capability_unsupported`,
-   * `sandbox_profile_invalid`) — kept visible inside the still-open
-   * dialog, the same shape as `confirmRelocate`. A successful save
-   * closes the dialog; the fresh profile reaches it again only through
-   * the `project_changed` event `set_sandbox` emits into the snapshot. */
-  async function saveSandbox(profile: SandboxProfile) {
-    if (!sandboxTarget) return;
-    setSandboxProblem(null);
-    try {
-      await projectsApi.setSandbox(sandboxTarget.id, profile);
-      setSandboxTarget(null);
-    } catch (error) {
-      setSandboxProblem(asProblem(error));
-    }
-  }
-
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
       <header>
-        <h1 className="font-semibold text-lg">Projects</h1>
+        <h1 className="font-semibold text-lg">Systems</h1>
       </header>
 
       {problem && <ProblemAlert problem={problem} />}
@@ -628,15 +513,7 @@ export function ProjectsScreen() {
               const jobRunning = job?.state.state === "running";
               const path = wslPathFor(project.slug);
               const rowProblem = rowProblems.get(project.id) ?? null;
-              const openNotice = openNotices.get(project.id) ?? null;
               const live = liveCount(snap.sessions, project.id);
-              /* Resume needs a finished conversation to resume and no live
-               * one already occupying the project — both read straight off
-               * the snapshot, never a locally-tracked flag. */
-              const hasFinishedSession = snap.sessions.some(
-                (s) => s.project_id === project.id && !isLive(s),
-              );
-              const canResume = live === 0 && hasFinishedSession;
               return (
                 <ProjectRow
                   key={project.id}
@@ -648,10 +525,7 @@ export function ProjectsScreen() {
                   jobRunning={jobRunning}
                   path={path}
                   rowProblem={rowProblem}
-                  openNotice={openNotice}
                   live={live}
-                  canResume={canResume}
-                  editorAvailable={editorAvailable}
                   onEditingNameChange={setEditingName}
                   onStartRename={() => startRename(project)}
                   onSaveRename={() => saveRename(project)}
@@ -659,11 +533,7 @@ export function ProjectsScreen() {
                   onRetry={retry}
                   onCopyPath={() => copyPath(path)}
                   onOpenInExplorer={() => openInExplorer(project, path)}
-                  onOpenInEditor={() => openInEditor(project)}
                   onOpenRelocateDialog={() => openRelocateDialog(project)}
-                  onOpenSandboxDialog={() => openSandboxDialog(project)}
-                  onOpenSession={() => openSession(project)}
-                  onResumeSession={() => resumeSession(project)}
                   onSyncToWindows={() => syncToWindows(project)}
                   onUpdateFromWindows={() => updateFromWindows(project)}
                   onCancelJob={cancelJobFor}
@@ -692,19 +562,6 @@ export function ProjectsScreen() {
         onBrowse={pickRelocateFolder}
         onConfirm={confirmRelocate}
         onCancel={closeRelocateDialog}
-      />
-
-      <SandboxDialog
-        /* Remounts on every open (including reopening the same
-         * project), so the dialog's local edits always seed from the
-         * project prop's current `sandbox` — never from whatever an
-         * earlier open left behind. */
-        key={sandboxTarget?.id ?? "sandbox-dialog-closed"}
-        project={sandboxTarget}
-        catalogue={catalogue}
-        problem={sandboxProblem}
-        onSave={saveSandbox}
-        onCancel={closeSandboxDialog}
       />
     </div>
   );

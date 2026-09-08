@@ -135,6 +135,8 @@ pub enum EngineError {
     },
     #[error("embedded terminal failed: {message}")]
     EmbeddedTerminal { message: String },
+    #[error("no embedded terminal is open for session {id}")]
+    EmbeddedTerminalNotOpen { id: String },
     #[error("`{method}` is not a plugin method")]
     MethodNotServed { method: String },
 }
@@ -165,6 +167,9 @@ impl EngineError {
             Self::ConfigWrite { .. } => "config_write_failed",
             Self::TerminalLaunch { .. } => "terminal_launch_failed",
             Self::EmbeddedTerminal { .. } => "embedded_terminal_failed",
+            Self::EmbeddedTerminalNotOpen { .. } => {
+                "embedded_terminal_not_open"
+            }
             Self::MethodNotServed { .. } => "method_not_served",
         }
     }
@@ -234,6 +239,11 @@ impl EngineError {
                  Windows Terminal tab instead (Open session), or click \
                  Run doctor"
                 .into(),
+            Self::EmbeddedTerminalNotOpen { .. } => {
+                "the tab lost its terminal: close it and open the \
+                 session again"
+                    .into()
+            }
             Self::MethodNotServed { .. } => {
                 "the app calls plugin methods, not daemon methods".into()
             }
@@ -454,6 +464,9 @@ mod tests {
             },
             EngineError::EmbeddedTerminal {
                 message: "x".into(),
+            },
+            EngineError::EmbeddedTerminalNotOpen {
+                id: "sess_1".into(),
             },
             EngineError::MethodNotServed {
                 method: "daemon.shutdown".into(),

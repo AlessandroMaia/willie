@@ -40,7 +40,9 @@ pub struct OpError {
 }
 
 impl OpError {
-    fn new(
+    /// The one constructor for a refusal whose code, message and
+    /// remediation are all decided at the call site.
+    pub(crate) fn new(
         code: &'static str,
         message: impl Into<String>,
         remediation: impl Into<String>,

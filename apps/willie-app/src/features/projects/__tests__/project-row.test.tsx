@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { ProjectRow } from "@/features/projects/project-row";
-import type { Project, ProjectState } from "@/lib/proto";
+import type { Project } from "@/lib/proto";
 
 const project = (): Project => ({
   id: "proj_1",
@@ -22,8 +22,7 @@ function renderRow(
   overrides: Partial<{
     isBusy: boolean;
     jobRunning: boolean;
-    editorAvailable: boolean;
-    onOpenInEditor: () => void;
+    live: number;
   }> = {},
 ) {
   render(
@@ -36,10 +35,7 @@ function renderRow(
       jobRunning={overrides.jobRunning ?? false}
       path="\\\\wsl.localhost\\willie\\home\\willie\\projects\\willie"
       rowProblem={null}
-      openNotice={null}
-      live={0}
-      canResume={true}
-      editorAvailable={overrides.editorAvailable ?? true}
+      live={overrides.live ?? 0}
       onEditingNameChange={vi.fn()}
       onStartRename={vi.fn()}
       onSaveRename={vi.fn()}
@@ -47,11 +43,7 @@ function renderRow(
       onRetry={vi.fn()}
       onCopyPath={vi.fn()}
       onOpenInExplorer={vi.fn()}
-      onOpenInEditor={overrides.onOpenInEditor ?? vi.fn()}
       onOpenRelocateDialog={vi.fn()}
-      onOpenSandboxDialog={vi.fn()}
-      onOpenSession={vi.fn()}
-      onResumeSession={vi.fn()}
       onSyncToWindows={vi.fn()}
       onUpdateFromWindows={vi.fn()}
       onCancelJob={vi.fn()}
@@ -61,7 +53,23 @@ function renderRow(
 }
 
 describe("ProjectRow", () => {
-  it("holds Open session and Resume while the sandbox settings could not be read, but not the sync buttons", () => {
+  it("offers no session, sandbox or editor action — those belong to the system's own screens", async () => {
+    const user = userEvent.setup();
+    renderRow(project());
+
+    expect(screen.queryByRole("button", { name: "Open session" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: /More actions/ }));
+    await screen.findByRole("menuitem", { name: "Rename" });
+
+    expect(screen.queryByRole("menuitem", { name: "Sandbox…" })).toBeNull();
+    expect(
+      screen.queryByRole("menuitem", { name: "Open in VS Code" }),
+    ).toBeNull();
+  });
+
+  it("never blocks Send to Windows or Update from Windows on a sandbox problem", () => {
     renderRow({
       ...project(),
       sandbox_problem: {
@@ -71,17 +79,6 @@ describe("ProjectRow", () => {
       },
     });
 
-    expect(
-      (
-        screen.getByRole("button", {
-          name: "Open session",
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
-    expect(
-      (screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
     expect(
       (
         screen.getByRole("button", {
@@ -98,60 +95,51 @@ describe("ProjectRow", () => {
     ).toBe(false);
   });
 
-  it("leaves Open session and Resume enabled for a project without a sandbox problem", () => {
+  it("offers Rename, Copy workspace path, Open in Explorer and Remove", async () => {
+    const user = userEvent.setup();
     renderRow(project());
+
+    await user.click(screen.getByRole("button", { name: /More actions/ }));
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Rename" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("menuitem", { name: "Copy workspace path" }),
+    ).toBeDefined();
+    expect(
+      screen.getByRole("menuitem", { name: "Open in Explorer" }),
+    ).toBeDefined();
+    expect(screen.getByRole("menuitem", { name: "Remove…" })).toBeDefined();
+  });
+
+  it("offers Relocate source only while the source is missing", async () => {
+    const user = userEvent.setup();
+    renderRow({ ...project(), source_present: false });
+
+    await user.click(screen.getByRole("button", { name: /More actions/ }));
+
+    expect(
+      await screen.findByRole("menuitem", { name: "Relocate source…" }),
+    ).toBeDefined();
+    expect(screen.getByText("source missing")).toBeDefined();
+  });
+
+  it("shows a live badge only when a session is live", () => {
+    renderRow(project(), { live: 2 });
+
+    expect(screen.getByText("2 live")).toBeDefined();
+  });
+
+  it("disables the sync buttons while busy or a job is running", () => {
+    renderRow(project(), { isBusy: true, jobRunning: true });
 
     expect(
       (
         screen.getByRole("button", {
-          name: "Open session",
+          name: "Send to Windows",
         }) as HTMLButtonElement
       ).disabled,
-    ).toBe(false);
-    expect(
-      (screen.getByRole("button", { name: "Resume" }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(false);
-  });
-
-  it("offers Open in VS Code and calls onOpenInEditor when clicked", async () => {
-    const user = userEvent.setup();
-    const onOpenInEditor = vi.fn();
-    renderRow(project(), { onOpenInEditor });
-
-    await user.click(screen.getByRole("button", { name: /More actions/ }));
-    await user.click(
-      await screen.findByRole("menuitem", { name: "Open in VS Code" }),
-    );
-
-    expect(onOpenInEditor).toHaveBeenCalledTimes(1);
-  });
-
-  it("disables Open in VS Code when VS Code is absent", async () => {
-    const user = userEvent.setup();
-    renderRow(project(), { editorAvailable: false });
-
-    await user.click(screen.getByRole("button", { name: /More actions/ }));
-    const item = await screen.findByRole("menuitem", {
-      name: "Open in VS Code",
-    });
-
-    expect(item.hasAttribute("data-disabled")).toBe(true);
-  });
-
-  it("keeps Open in VS Code enabled for a busy, non-ready project", async () => {
-    const user = userEvent.setup();
-    const preparing: ProjectState = { state: "preparing" };
-    renderRow(
-      { ...project(), state: preparing },
-      { isBusy: true, jobRunning: true, editorAvailable: true },
-    );
-
-    await user.click(screen.getByRole("button", { name: /More actions/ }));
-    const item = await screen.findByRole("menuitem", {
-      name: "Open in VS Code",
-    });
-
-    expect(item.hasAttribute("data-disabled")).toBe(false);
+    ).toBe(true);
   });
 });

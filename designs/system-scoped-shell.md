@@ -160,8 +160,10 @@ longer produced.
 Why this is safe for the harness: each session runs in its own private
 sandbox home; the shared `agent.state` bind holds the login and the
 harness's own per-session logs, which the harness writes one file per
-conversation, so two conversations in one workspace do not collide. The
-usage plugin already matches a session to its log by time window.
+conversation, so two conversations in one workspace do not collide on
+disk. Attributing a log to one session (its title, its usage) is by
+workspace and time window until per-session log identity lands; two
+concurrent sessions in one workspace may share those figures.
 
 ### Names — `crates/willie-core/src/session.rs`, `crates/willied/src/sessions.rs`, `session_title.rs`
 
@@ -242,7 +244,13 @@ run in the workspace per call, parsed by a pure function into a map of
 path → flag, so a directory shows a flag when anything under it changed.
 `project.read_file` reads at most 512 KiB (`truncated: true` past that),
 refuses a file whose first 8 KiB contain a NUL byte with `file_not_text`,
-and returns UTF-8 with invalid sequences replaced.
+and returns UTF-8 with invalid sequences replaced. The check
+canonicalises and then opens by path rather than by file descriptor, so
+a writer inside the workspace racing a symlink swap between those two
+steps is an accepted residual (the fix, if ever wanted, is opening path
+component by component, or comparing the opened file's device/inode
+afterwards); a target that is not a regular file — a directory, a
+FIFO — is refused the same way, as `file_not_text`.
 
 The tree drawer slides from under the sidebar over the left edge of the
 centre (toggled by the button at the left of the tab strip, Esc closes),
@@ -257,7 +265,10 @@ preview first, then the tree.
 
 `open_in_editor` gains an optional file: the pure `editor_argv(workspace,
 file: Option<&str>)` appends the file after the workspace, which opens the
-folder window with the file active.
+folder window with the file active. The file arrives workspace-relative
+and is joined onto the workspace before it goes on the command line —
+VS Code resolves a relative argument against the launching process's own
+directory, which is on the Windows side and names nothing in the distro.
 
 ### The Session screen — `apps/willie-app/src/features/session/session-screen.tsx`, `sessions-panel.tsx`
 
@@ -271,9 +282,13 @@ session" (`session.create { project_id }`) and "New zsh" (`kind:
 field; Enter calls `session.rename`, Esc cancels, blur commits.
 
 The Sessions panel is a Sheet: live sessions with "Open" (focus the tab),
-finished ones with the name, when they finished and "Resume"
-(`session.create { project_id, resume: true, resume_from }`), which adds
-a live tab and focuses it. With no live session the centre shows an empty
+finished ones with the name and when they finished. "Resume"
+(`session.create { project_id, resume: true, resume_from }`) adds a live
+tab and focuses it, and is offered on the newest finished *agent*
+session only: `resume_from` records and validates the lineage, but the
+harness is launched with a bare continue and always reopens the
+workspace's most recent conversation, so a Resume anywhere else would
+name one session and open another. The other rows say so. With no live session the centre shows an empty
 state: "New session" and, when a finished one exists, "Resume
 <its name>".
 
@@ -292,8 +307,11 @@ screen it shows the system's aggregate.
 Monitoring first. The header names the system and holds "Edit
 capabilities". Below it, the posture as chips: every mechanism in the
 union of the system's sessions' `sandbox.applied` in the ok tone, every
-one in the union of `unavailable` or `degraded` in the warning tone with
-its reason on hover. Three counts: syscalls denied, terminal sequences
+one in the union of `unavailable` or `degraded` in the warning tone. The
+chips carry the mechanism name only: `SandboxState` puts mechanism names
+on the wire, not the `sandbox_degraded` event's message, so there is no
+per-mechanism reason to show on hover. Three counts: syscalls denied,
+terminal sequences
 denied, sessions covered. Then the history: every `Denied` of every
 session of the system flattened into rows — class, name with a one-line
 explanation from a small table keyed by class and name (unknown names get

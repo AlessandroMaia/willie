@@ -31,10 +31,7 @@ interface ProjectRowProps {
   jobRunning: boolean;
   path: string;
   rowProblem: Problem | null;
-  openNotice: Problem | null;
   live: number;
-  canResume: boolean;
-  editorAvailable: boolean;
   onEditingNameChange: (value: string) => void;
   onStartRename: () => void;
   onSaveRename: () => void;
@@ -42,11 +39,7 @@ interface ProjectRowProps {
   onRetry: (job: Job) => void;
   onCopyPath: () => void;
   onOpenInExplorer: () => void;
-  onOpenInEditor: () => void;
   onOpenRelocateDialog: () => void;
-  onOpenSandboxDialog: () => void;
-  onOpenSession: () => void;
-  onResumeSession: () => void;
   onSyncToWindows: () => void;
   onUpdateFromWindows: () => void;
   onCancelJob: (job: Job) => void;
@@ -62,10 +55,7 @@ export function ProjectRow({
   jobRunning,
   path,
   rowProblem,
-  openNotice,
   live,
-  canResume,
-  editorAvailable,
   onEditingNameChange,
   onStartRename,
   onSaveRename,
@@ -73,22 +63,13 @@ export function ProjectRow({
   onRetry,
   onCopyPath,
   onOpenInExplorer,
-  onOpenInEditor,
   onOpenRelocateDialog,
-  onOpenSandboxDialog,
-  onOpenSession,
-  onResumeSession,
   onSyncToWindows,
   onUpdateFromWindows,
   onCancelJob,
   onOpenRemoveDialog,
 }: ProjectRowProps) {
   const actionable = !isBusy && project.state.state === "ready" && !jobRunning;
-  /* The workspace is fine even when the policy is not: only the two
-   * actions that launch a session are held while the daemon refuses
-   * `session.create` for this project (`sandbox_problem` set); Send to
-   * Windows and Update from Windows never touch the sandbox. */
-  const sandboxBlocked = project.sandbox_problem != null;
 
   return (
     <Item variant="outline" className="flex-col items-stretch gap-2">
@@ -144,25 +125,11 @@ export function ProjectRow({
             <DropdownMenuItem onClick={onOpenInExplorer}>
               Open in Explorer
             </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={onOpenInEditor}
-              disabled={!editorAvailable}
-              title={
-                editorAvailable
-                  ? undefined
-                  : "VS Code was not found on this machine"
-              }
-            >
-              Open in VS Code
-            </DropdownMenuItem>
             {!project.source_present && (
               <DropdownMenuItem onClick={onOpenRelocateDialog}>
                 Relocate source…
               </DropdownMenuItem>
             )}
-            <DropdownMenuItem onClick={onOpenSandboxDialog}>
-              Sandbox…
-            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem
               variant="destructive"
@@ -191,26 +158,8 @@ export function ProjectRow({
       </ItemDescription>
 
       {rowProblem && <ProblemAlert problem={rowProblem} />}
-      {openNotice && <ProblemAlert problem={openNotice} tone="notice" />}
 
       <ItemActions className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          disabled={!actionable || sandboxBlocked}
-          title={sandboxBlocked ? project.sandbox_problem?.message : undefined}
-          onClick={onOpenSession}
-        >
-          Open session
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!actionable || !canResume || sandboxBlocked}
-          title={sandboxBlocked ? project.sandbox_problem?.message : undefined}
-          onClick={onResumeSession}
-        >
-          Resume
-        </Button>
         <ButtonGroup>
           <Button
             size="sm"

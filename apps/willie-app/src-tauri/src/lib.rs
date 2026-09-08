@@ -14,13 +14,17 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use willie_core::id::{JobId, ProjectId, SessionId};
 use willie_core::project::Project;
 use willie_core::sandbox::SandboxProfile;
+use willie_core::session::{Session, SessionKind};
+use willie_engine::config::Ui;
 use willie_engine::discover::Candidate;
 use willie_engine::error::EngineError;
 use willie_engine::{Engine, EngineStatus, Problem, SessionOpened};
 use willie_harness::{ClaudeCode, Harness};
 use willie_proto::daemon::DoctorReport;
 use willie_proto::plugin::PluginStatus;
-use willie_proto::project::{AddResult, JobRef, ProjectList};
+use willie_proto::project::{
+    AddResult, JobRef, ProjectList, ReadFileResult, TreeResult,
+};
 use willie_proto::sandbox::CapabilityInfo;
 use willie_proto::state::Snapshot;
 use willie_proto::tool::ToolList;
@@ -261,6 +265,30 @@ fn project_set_sandbox(
     })
 }
 
+#[tauri::command(async)]
+fn project_tree(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: ProjectId,
+    path: Option<String>,
+) -> Result<TreeResult, Problem> {
+    daemon_command(&app, &state, &pump, |engine| engine.project_tree(id, path))
+}
+
+#[tauri::command(async)]
+fn project_read_file(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: ProjectId,
+    path: String,
+) -> Result<ReadFileResult, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.project_read_file(id, path)
+    })
+}
+
 /// The capability catalogue: static domain data, so no engine lock and
 /// no daemon. The app renders this copy verbatim rather than keeping a
 /// second copy of ten user-facing sentences in TypeScript — and, since
@@ -324,14 +352,28 @@ fn discover_projects(
 }
 
 #[tauri::command(async)]
+fn ui_prefs(state: State<'_, EngineState>) -> Result<Ui, Problem> {
+    with_engine(&state, |engine| engine.ui_prefs())
+}
+
+#[tauri::command(async)]
+fn set_ui_prefs(
+    state: State<'_, EngineState>,
+    prefs: Ui,
+) -> Result<(), Problem> {
+    query(&state, |engine| engine.set_ui_prefs(prefs))
+}
+
+#[tauri::command(async)]
 fn session_open(
     app: AppHandle,
     state: State<'_, EngineState>,
     pump: State<'_, EventPump>,
     project_id: ProjectId,
+    kind: Option<SessionKind>,
 ) -> Result<SessionOpened, Problem> {
     daemon_command(&app, &state, &pump, |engine| {
-        engine.session_open(project_id)
+        engine.session_open(project_id, kind.unwrap_or_default())
     })
 }
 
@@ -341,9 +383,23 @@ fn session_resume(
     state: State<'_, EngineState>,
     pump: State<'_, EventPump>,
     project_id: ProjectId,
+    resume_from: Option<SessionId>,
 ) -> Result<SessionOpened, Problem> {
     daemon_command(&app, &state, &pump, |engine| {
-        engine.session_resume(project_id)
+        engine.session_resume(project_id, resume_from)
+    })
+}
+
+#[tauri::command(async)]
+fn session_rename(
+    app: AppHandle,
+    state: State<'_, EngineState>,
+    pump: State<'_, EventPump>,
+    id: SessionId,
+    label: Option<String>,
+) -> Result<Session, Problem> {
+    daemon_command(&app, &state, &pump, |engine| {
+        engine.session_rename(id, label)
     })
 }
 
@@ -487,7 +543,7 @@ fn session_terminal_input(
     id: SessionId,
     data: String,
 ) -> Result<(), Problem> {
-    with_engine(&state, |engine| {
+    query(&state, |engine| {
         engine.session_terminal_input(id, data.as_bytes())
     })
 }
@@ -499,7 +555,7 @@ fn session_terminal_resize(
     rows: u16,
     cols: u16,
 ) -> Result<(), Problem> {
-    with_engine(&state, |engine| {
+    query(&state, |engine| {
         engine.session_terminal_resize(id, rows, cols)
     })
 }
@@ -527,12 +583,25 @@ fn open_in_explorer(path: String) -> Result<(), Problem> {
 
 /// The Remote-WSL arguments that open `workspace` on the willie distro:
 /// VS Code's documented form for a folder in a named WSL distribution.
-fn editor_argv(workspace: &str) -> Vec<String> {
-    vec![
+/// `file`, when given, opens with that file active in the folder window.
+/// The tree and the preview hand it over workspace-relative, and VS
+/// Code resolves a relative argument against the *launching* process's
+/// directory — a Windows path — so it is joined onto the workspace here
+/// with the distro's own separator and passed absolute.
+fn editor_argv(workspace: &str, file: Option<&str>) -> Vec<String> {
+    let mut argv = vec![
         "--remote".to_owned(),
         format!("wsl+{}", willie_engine::wsl::DISTRO_NAME),
         workspace.to_owned(),
-    ]
+    ];
+    if let Some(file) = file {
+        argv.push(if file.starts_with('/') {
+            file.to_owned()
+        } else {
+            format!("{}/{}", workspace.trim_end_matches('/'), file)
+        });
+    }
+    argv
 }
 
 /// The candidate walk behind `locate_code`, pure so it is deterministic
@@ -594,7 +663,10 @@ fn locate_code() -> Option<PathBuf> {
 }
 
 #[tauri::command(async)]
-fn open_in_editor(workspace: String) -> Result<(), Problem> {
+fn open_in_editor(
+    workspace: String,
+    file: Option<String>,
+) -> Result<(), Problem> {
     let code = locate_code().ok_or_else(|| Problem {
         code: "editor_not_found".into(),
         message: "VS Code was not found on this machine".into(),
@@ -603,7 +675,7 @@ fn open_in_editor(workspace: String) -> Result<(), Problem> {
             .into(),
     })?;
     let mut command = std::process::Command::new(&code);
-    command.args(editor_argv(&workspace));
+    command.args(editor_argv(&workspace, file.as_deref()));
     // GUI-subsystem release builds have no console; std runs code.cmd via
     // cmd.exe (a console app), which would otherwise flash a fresh console
     // window. CREATE_NO_WINDOW suppresses it.
@@ -667,13 +739,18 @@ pub fn run() {
             projects_roots,
             set_projects_roots,
             discover_projects,
+            ui_prefs,
+            set_ui_prefs,
             open_in_explorer,
             open_in_editor,
             editor_available,
             session_open,
             session_resume,
+            session_rename,
             session_attach,
             session_stop,
+            project_tree,
+            project_read_file,
             tool_install,
             tool_list,
             tool_update,
@@ -701,12 +778,44 @@ mod tests {
     #[test]
     fn editor_argv_opens_the_workspace_on_the_willie_distro() {
         assert_eq!(
-            editor_argv("/home/willie/projects/x"),
+            editor_argv("/home/willie/projects/x", None),
             vec![
                 "--remote".to_owned(),
                 "wsl+willie".to_owned(),
                 "/home/willie/projects/x".to_owned(),
             ]
+        );
+    }
+
+    /// A file argument opens the folder window with that file active,
+    /// for the workspace tree's "Open in VS Code" on a single file. It
+    /// must be absolute in the distro: a relative one would be resolved
+    /// against the Windows-side working directory and name nothing.
+    #[test]
+    fn editor_argv_appends_the_file_after_the_workspace() {
+        assert_eq!(
+            editor_argv("/home/willie/projects/x", Some("src/main.rs"),),
+            vec![
+                "--remote".to_owned(),
+                "wsl+willie".to_owned(),
+                "/home/willie/projects/x".to_owned(),
+                "/home/willie/projects/x/src/main.rs".to_owned(),
+            ]
+        );
+    }
+
+    /// A workspace with a trailing separator, and a file already
+    /// absolute, both still produce exactly one separator and no
+    /// duplicated prefix.
+    #[test]
+    fn editor_argv_joins_the_file_without_doubling_the_separator() {
+        assert_eq!(
+            editor_argv("/home/willie/projects/x/", Some("src/main.rs"))[3],
+            "/home/willie/projects/x/src/main.rs"
+        );
+        assert_eq!(
+            editor_argv("/home/willie/projects/x", Some("/etc/hosts"))[3],
+            "/etc/hosts"
         );
     }
 

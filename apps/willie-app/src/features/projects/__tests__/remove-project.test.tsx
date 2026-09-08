@@ -3,7 +3,9 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Toaster } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { ProjectsScreen } from "@/features/projects/projects-screen";
 import type { Snapshot } from "@/lib/proto";
+import { resetStores } from "@/test-support/reset-stores";
 
 const SNAPSHOT: Snapshot = {
   seq: 1,
@@ -76,18 +78,14 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/lib/ipc", () => ipc);
 
-let ProjectsScreen: typeof import("@/features/projects/projects-screen").ProjectsScreen;
-
 /* `useSnapshot` backs onto a module-level singleton store, so a
  * snapshot left behind by one render would still be there for the
- * next test's first synchronous render. Reset the module graph and
- * re-import the screen fresh for every case. */
-beforeEach(async () => {
-  vi.resetModules();
+ * next test's first synchronous render. */
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.projects.snapshot.mockResolvedValue(SNAPSHOT);
   ipc.projects.remove.mockRejectedValue(BUSY);
-  ({ ProjectsScreen } = await import("@/features/projects/projects-screen"));
 });
 
 describe("removing a project", () => {

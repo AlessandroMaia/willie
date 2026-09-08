@@ -122,11 +122,18 @@ export interface SandboxState {
   degraded: string[];
   denied: Denied[];
 }
+/* Mirrors `willie_core::session::SessionKind`: an agent conversation or
+ * an interactive shell. */
+export type SessionKind = "agent" | "shell";
+
 export interface Session {
   id: string;
   project_id: string;
   harness: string;
   workspace: string;
+  /* Absent on a session from a pre-shell-sessions log; treat as
+   * `"agent"` (Rust's `#[serde(default)]`). */
+  kind?: SessionKind;
   state: SessionState;
   created_at: string;
   started_at?: string | null;
@@ -134,6 +141,12 @@ export interface Session {
   pid?: number | null;
   clients: number;
   resumed_from?: string | null;
+  /* What the user renamed the session to; absent until `session.rename`
+   * sets it, or after an empty label clears it. */
+  label?: string | null;
+  /* The session's first prompt, best-effort; absent until the daemon
+   * resolves it, or when it cannot find one. */
+  title?: string | null;
   sandbox?: SandboxState;
 }
 /* Mirrors `willie_proto::plugin::{Scope, Enablement, PluginStatus}`.
@@ -225,4 +238,30 @@ export interface UsageSnapshot {
   sessions: SessionUsage[];
   projects: ProjectUsage[];
   fetched_at: string;
+}
+
+/* Mirrors `willie_proto::project::{EntryKind, TreeEntry, TreeResult}`.
+ * `git` carries `M`/`A`/`D`/`R`/`?`, aggregated up to a directory from
+ * any changed path beneath it; absent when nothing changed. */
+export interface TreeEntry {
+  name: string;
+  kind: "dir" | "file";
+  git?: string | null;
+}
+export interface TreeResult {
+  entries: TreeEntry[];
+  /* The workspace's current branch, when it resolves. */
+  branch?: string | null;
+}
+
+/* Mirrors `willie_proto::project::ReadFileResult`. */
+export interface ReadFileResult {
+  content: string;
+  truncated: boolean;
+}
+
+/* Mirrors `willie_engine::config::Ui`: the current-system preference
+ * persisted in `engine.toml`'s `[ui]` table. */
+export interface UiPrefs {
+  current_project?: string | null;
 }

@@ -270,6 +270,21 @@ impl DaemonSupervisor {
     fn stop_quietly(&mut self) {
         let _ = self.stop();
     }
+
+    /// Wraps an already-connected client as a running daemon, mirroring
+    /// [`DaemonSupervisor::start`]'s success state. Lets a test elsewhere
+    /// in the crate drive a call end-to-end against a scripted peer, with
+    /// no `wsl.exe` in the loop.
+    #[cfg(test)]
+    pub(crate) fn connected(process: WslProcess, client: RpcClient) -> Self {
+        Self {
+            live: Some((process, client)),
+            state: DaemonState::Running {
+                willie_version: willie_core::VERSION.to_owned(),
+                image_version: None,
+            },
+        }
+    }
 }
 
 impl Drop for DaemonSupervisor {

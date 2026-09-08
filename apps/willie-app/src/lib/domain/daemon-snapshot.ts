@@ -34,6 +34,11 @@ export interface Store {
    * holder is active, and the last release tears it down. Returns the
    * release, which is safe to call twice. */
   acquire: () => () => void;
+  /** Forgets every holder and everything held, and invalidates what is
+   * in flight. Only a test harness calls this: it is what keeps one
+   * case's snapshot out of the next one's first render, now that the
+   * suite shares one module graph across a file's tests. */
+  reset: () => void;
 }
 
 /**
@@ -151,6 +156,14 @@ export function createStore(source: StoreSource): Store {
           set({ status: "idle", snapshot: null, problem: null });
         }
       };
+    },
+    reset() {
+      generation += 1;
+      holders = 0;
+      subscriptionProblem = null;
+      unlisten?.();
+      unlisten = undefined;
+      set({ status: "idle", snapshot: null, problem: null });
     },
   };
 }

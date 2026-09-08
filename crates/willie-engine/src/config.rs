@@ -4,17 +4,29 @@
 use std::{fs, io, path::Path};
 
 use serde::{Deserialize, Serialize};
+use willie_core::id::ProjectId;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EngineConfig {
     #[serde(default)]
     pub projects: Projects,
+    #[serde(default)]
+    pub ui: Ui,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Projects {
     #[serde(default)]
     pub roots: Vec<String>,
+}
+
+/// UI preferences: which system the sidebar shows selected, restored
+/// across restarts. TOML has no null, so an unset preference is a
+/// missing key rather than one written as `null`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ui {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_project: Option<ProjectId>,
 }
 
 impl EngineConfig {
@@ -51,6 +63,7 @@ mod tests {
             projects: Projects {
                 roots: vec![r"C:\github".into()],
             },
+            ui: Ui::default(),
         };
         cfg.save(&path).unwrap();
         assert_eq!(EngineConfig::load(&path), cfg);
@@ -62,5 +75,38 @@ mod tests {
         let cfg: EngineConfig =
             toml::from_str("future = true\n[projects]\nroots = []\n").unwrap();
         assert!(cfg.projects.roots.is_empty());
+    }
+
+    /// The `[ui]` table round-trips through `save`/`load`; an absent
+    /// table (or an absent file) resolves to `None`, never a placeholder
+    /// id, and a later save that only means to touch `[ui]` still keeps
+    /// `projects.roots` intact.
+    #[test]
+    fn engine_config_reads_and_writes_the_ui_table() {
+        let dir = std::env::temp_dir()
+            .join(format!("willie-cfg-ui-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("engine.toml");
+
+        assert!(EngineConfig::load(&path).ui.current_project.is_none());
+
+        let mut cfg = EngineConfig {
+            projects: Projects {
+                roots: vec![r"C:\github".into()],
+            },
+            ui: Ui {
+                current_project: Some(ProjectId::new()),
+            },
+        };
+        cfg.save(&path).unwrap();
+        assert_eq!(EngineConfig::load(&path), cfg);
+
+        cfg.ui.current_project = None;
+        cfg.save(&path).unwrap();
+        let reloaded = EngineConfig::load(&path);
+        assert_eq!(reloaded.projects.roots, vec![r"C:\github".to_owned()]);
+        assert!(reloaded.ui.current_project.is_none());
+
+        let _ = fs::remove_dir_all(&dir);
     }
 }

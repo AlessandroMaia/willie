@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ToolsScreen } from "@/features/tools/tools-screen";
 import type { Snapshot, ToolStatus } from "@/lib/proto";
+import { resetStores } from "@/test-support/reset-stores";
 
 const emptySnapshot = (): Snapshot => ({
   seq: 1,
@@ -20,17 +22,13 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/lib/ipc", () => ipc);
 
-let ToolsScreen: typeof import("@/features/tools/tools-screen").ToolsScreen;
-
 /* `useSnapshot` backs onto a module-level singleton store, so a
  * snapshot left behind by one render would still be there for the
- * next test's first synchronous render. Reset the module graph and
- * re-import the screen fresh for every case. */
-beforeEach(async () => {
-  vi.resetModules();
+ * next test's first synchronous render. */
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.projects.snapshot.mockResolvedValue(emptySnapshot());
-  ({ ToolsScreen } = await import("@/features/tools/tools-screen"));
 });
 
 describe("ToolsScreen", () => {

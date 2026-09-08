@@ -227,7 +227,7 @@ pub(crate) mod fixtures {
     use willie_core::{
         id::{ProjectId, SessionId},
         sandbox::CapabilitySet,
-        session::SessionSpec,
+        session::{SessionKind, SessionSpec},
     };
     use willie_harness::{ClaudeCode, Harness};
 
@@ -256,6 +256,7 @@ pub(crate) mod fixtures {
             created_at: "1".into(),
             willie_version: "0".into(),
             resumed_from: None,
+            kind: SessionKind::Agent,
             capabilities,
         }
     }

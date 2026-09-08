@@ -1,86 +1,57 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { ROUTES, shortcutLabel } from "@/app/routes";
+import { SystemActionsMenu } from "@/app/shell/system-actions-menu";
+import { SystemSelector } from "@/app/shell/system-selector";
 import { Kbd } from "@/components/ui/kbd";
 import {
   Sidebar,
   SidebarContent,
   SidebarGroup,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
 } from "@/components/ui/sidebar";
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip";
 
-/* This span exists only to carry hover/focus for a planned entry's
- * tooltip trigger, wrapped around its disabled button; it takes no
- * other keyboard action itself. */
-// biome-ignore lint/a11y/noNoninteractiveTabindex: see comment above
-const disabledEntryTrigger = <span className="block" tabIndex={0} />;
-
+/** The system-scoped shell's sidebar: the current system (its selector
+ * and "…" actions) up top, then the four screens every system has.
+ * Nothing global belongs here — everything machine-wide lives behind
+ * the header's settings button. */
 export function AppSidebar() {
   const pathname = useLocation({ select: (location) => location.pathname });
 
   return (
     <Sidebar collapsible="icon">
-      <SidebarHeader className="h-12 justify-center px-4">
-        <span className="truncate font-semibold tracking-tight group-data-[collapsible=icon]:hidden">
-          Willie
-        </span>
+      <SidebarHeader className="flex-row items-center gap-1 px-2 py-2">
+        <SystemSelector />
+        <SystemActionsMenu />
       </SidebarHeader>
 
       <SidebarContent>
         <SidebarGroup>
+          <SidebarGroupLabel>Screens</SidebarGroupLabel>
           <SidebarMenu>
             {ROUTES.map((entry) => (
               <SidebarMenuItem key={entry.id}>
-                {entry.available ? (
-                  <SidebarMenuButton
-                    render={<Link to={entry.path} />}
-                    isActive={pathname === entry.path}
-                    tooltip={{
-                      children: (
-                        <>
-                          {entry.label}{" "}
-                          <Kbd>{shortcutLabel(entry.shortcut)}</Kbd>
-                        </>
-                      ),
-                    }}
-                  >
-                    <entry.icon />
-                    <span>{entry.label}</span>
-                    <Kbd className="ml-auto group-data-[collapsible=icon]:hidden">
-                      {shortcutLabel(entry.shortcut)}
-                    </Kbd>
-                  </SidebarMenuButton>
-                ) : (
-                  /* A disabled control receives no pointer or focus
-                   * events, so a tooltip trigger wrapped directly around
-                   * it (via `SidebarMenuButton`'s own `tooltip` prop)
-                   * would never open — and in the icon-collapsed sidebar
-                   * that tooltip is the row's only label. The tooltip
-                   * hangs instead on a plain, focusable wrapper around
-                   * the inert, still genuinely disabled button. */
-                  <Tooltip>
-                    <TooltipTrigger render={disabledEntryTrigger}>
-                      <SidebarMenuButton
-                        disabled
-                        className="pointer-events-none"
-                      >
-                        <entry.icon />
-                        <span>{entry.label}</span>
-                      </SidebarMenuButton>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">
-                      Not available yet
-                    </TooltipContent>
-                  </Tooltip>
-                )}
+                <SidebarMenuButton
+                  render={<Link to={entry.path} />}
+                  isActive={pathname === entry.path}
+                  tooltip={{
+                    children: (
+                      <>
+                        {entry.label} <Kbd>{shortcutLabel(entry.shortcut)}</Kbd>
+                      </>
+                    ),
+                  }}
+                >
+                  <entry.icon />
+                  <span>{entry.label}</span>
+                  <Kbd className="ml-auto group-data-[collapsible=icon]:hidden">
+                    {shortcutLabel(entry.shortcut)}
+                  </Kbd>
+                </SidebarMenuButton>
               </SidebarMenuItem>
             ))}
           </SidebarMenu>

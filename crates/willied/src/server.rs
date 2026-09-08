@@ -140,6 +140,10 @@ impl Server {
                 handlers::project_set_sandbox(&self.ops, req.params)
             }
             project::LIST => handlers::project_list(&self.state),
+            project::TREE => handlers::project_tree(&self.state, req.params),
+            project::READ_FILE => {
+                handlers::project_read_file(&self.state, req.params)
+            }
             job::LIST => handlers::job_list(&self.state),
             job::GET => handlers::job_get(&self.state, req.params),
             job::CANCEL => handlers::job_cancel(&self.ops, req.params),
@@ -150,6 +154,9 @@ impl Server {
                 handlers::session_create(&self.sessions, req.params)
             }
             session::STOP => handlers::session_stop(&self.sessions, req.params),
+            session::RENAME => {
+                handlers::session_rename(&self.sessions, req.params)
+            }
             session::LIST => handlers::session_list(&self.sessions),
             sandbox::EXPLAIN => {
                 handlers::sandbox_explain(&self.state, req.params)
@@ -157,9 +164,12 @@ impl Server {
             plugin::LIST => handlers::plugin_list(&self.host),
             plugin::ENABLE => handlers::plugin_enable(&self.host, req.params),
             plugin::DISABLE => handlers::plugin_disable(&self.host, req.params),
-            state_method::SNAPSHOT => {
-                handlers::state_snapshot(&self.ops, &self.state, &self.host)
-            }
+            state_method::SNAPSHOT => handlers::state_snapshot(
+                &self.ops,
+                &self.sessions,
+                &self.state,
+                &self.host,
+            ),
             // A `usage.*` call (e.g. `usage.snapshot`) carries no top-level
             // dispatch arm either: `usage_handle` injects the daemon's live
             // sessions and home directory (the same daemon-fills-targets
@@ -593,6 +603,25 @@ mod tests {
         assert_eq!(
             resp[0].clone().into_result().unwrap_err().code,
             "invalid_params"
+        );
+    }
+
+    /// `session.rename` is dispatched: an unknown id answers
+    /// `session_not_found`, not `method_not_found` — proof the arm reaches
+    /// `handlers::session_rename` rather than falling through to the
+    /// dispatch's catch-all.
+    #[test]
+    fn session_rename_is_served() {
+        let (_, resp) = roundtrip(&line(
+            session::RENAME,
+            serde_json::json!({
+                "id": "sess_00000000000000000000000000",
+                "label": "x"
+            }),
+        ));
+        assert_ne!(
+            resp[0].clone().into_result().unwrap_err().code,
+            "method_not_found"
         );
     }
 

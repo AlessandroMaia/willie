@@ -49,10 +49,14 @@ impl SessionState {
 pub struct Session {
     pub id: SessionId,
     pub project_id: ProjectId,
-    /// Harness id, e.g. `claude-code`.
+    /// Harness id, e.g. `claude-code`, or `zsh` for a shell session.
     pub harness: String,
     /// The working directory handed to the harness.
     pub workspace: String,
+    /// An agent conversation or an interactive shell. Defaulted so a
+    /// session from a pre-shell-sessions log re-adopts as `Agent`.
+    #[serde(default)]
+    pub kind: SessionKind,
     pub state: SessionState,
     /// Epoch seconds as a string, like jobs.
     pub created_at: String,
@@ -69,11 +73,37 @@ pub struct Session {
     /// The session this one continues, if it was opened as a resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_from: Option<SessionId>,
+    /// What the user renamed the session to; `None` until `session.rename`
+    /// sets it, or after an empty label clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The session's first prompt, best-effort; `None` until the daemon
+    /// resolves it, or when it cannot find one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// What the sandbox applied and refused for this session; empty until
     /// its events are folded, and on a session from a pre-part-2 log.
     #[serde(default)]
     pub sandbox: SandboxState,
 }
+
+/// What a session runs: an agent conversation, or an interactive shell
+/// beside it. Defaults to `Agent` so a spec written before shell
+/// sessions existed re-adopts unchanged.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionKind {
+    #[default]
+    Agent,
+    Shell,
+}
+
+/// The `harness` a `Shell` session carries. No tool installs it and it
+/// names no entry in the harness registry, so the daemon that writes a
+/// spec and the supervisor that validates one must agree on it here.
+pub const SHELL_HARNESS: &str = "zsh";
 
 /// What the sandbox reported for one session. Empty until the
 /// `sandbox_applied` event is folded; a session from a pre-part-2 log
@@ -130,6 +160,10 @@ pub struct SessionSpec {
     /// Persisted so a re-adopted session keeps its lineage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resumed_from: Option<SessionId>,
+    /// An agent conversation or an interactive shell. Defaulted so a spec
+    /// written before shell sessions existed re-adopts as `Agent`.
+    #[serde(default)]
+    pub kind: SessionKind,
     /// The policy this session runs under, resolved once by the daemon
     /// before anything is spawned. Defaulted so a spec written before
     /// sandboxing is re-adopted rather than rejected.
@@ -172,6 +206,11 @@ pub enum SessionEventKind {
     SandboxDegraded {
         mechanism: String,
         message: String,
+    },
+    /// The user renamed the session; `None` clears the label rather than
+    /// leaving the previous one in place.
+    Renamed {
+        label: Option<String>,
     },
     Attached {
         client: u64,
@@ -240,6 +279,9 @@ pub fn apply_event(session: &mut Session, event: &SessionEvent) {
             session.pid = Some(*pid);
             session.started_at = Some(event.at.clone());
         }
+        SessionEventKind::Renamed { label } => {
+            session.label = label.clone().filter(|l| !l.trim().is_empty());
+        }
         SessionEventKind::Attached { .. } => session.clients += 1,
         SessionEventKind::Detached { .. } => {
             session.clients = session.clients.saturating_sub(1);
@@ -280,6 +322,7 @@ pub fn from_log(spec: &SessionSpec, events: &[SessionEvent]) -> Session {
         project_id: spec.project_id,
         harness: spec.harness.clone(),
         workspace: spec.workspace.clone(),
+        kind: spec.kind,
         state: SessionState::Creating,
         created_at: spec.created_at.clone(),
         started_at: None,
@@ -287,6 +330,8 @@ pub fn from_log(spec: &SessionSpec, events: &[SessionEvent]) -> Session {
         pid: None,
         clients: 0,
         resumed_from: spec.resumed_from,
+        label: None,
+        title: None,
         sandbox: SandboxState::default(),
     };
     for event in events {
@@ -307,9 +352,6 @@ pub fn remediation_for(code: &str) -> &'static str {
             "open a fresh session instead; this harness cannot continue \
              a conversation"
         }
-        "session_already_live" => {
-            "use the running session, or stop it first, then resume"
-        }
         "harness_not_installed" => "click Install on the Dashboard",
         "git_identity_missing" => {
             "set `git config --global user.name` and `user.email` on \
@@ -328,6 +370,10 @@ pub fn remediation_for(code: &str) -> &'static str {
         "sandbox_backend_missing" => {
             "the image lacks the namespace helper: rebuild and reinstall \
              the distribution (`just distro-build`, `just distro-install`)"
+        }
+        "shell_unavailable" => {
+            "rebuild and reinstall the distribution (just distro-build, \
+             just distro-install)"
         }
         "sandbox_apply_failed" => {
             "the message names the path; the helper writes its own \
@@ -378,6 +424,7 @@ mod tests {
             created_at: "1".into(),
             willie_version: "0.1.0".into(),
             resumed_from: None,
+            kind: SessionKind::Agent,
             capabilities: CapabilitySet::default(),
         }
     }
@@ -789,13 +836,13 @@ mod tests {
         for code in [
             "project_not_ready",
             "harness_cannot_resume",
-            "session_already_live",
             "harness_not_installed",
             "git_identity_missing",
             "supervisor_spawn_failed",
             "supervisor_timeout",
             "harness_exec_failed",
             "sandbox_backend_missing",
+            "shell_unavailable",
             "sandbox_apply_failed",
             "sandbox_profile_invalid",
             "sandbox_capability_unsupported",
@@ -814,5 +861,75 @@ mod tests {
                 assert_ne!(r, generic, "{code} has no remediation of its own");
             }
         }
+    }
+
+    /// A spec written before `SessionKind` existed carries no `kind`
+    /// field; it must still parse, defaulting to `Agent` rather than
+    /// failing to deserialise.
+    #[test]
+    fn a_spec_written_before_kinds_reads_as_an_agent_session() {
+        let mut v = serde_json::to_value(spec()).unwrap();
+        v.as_object_mut().unwrap().remove("kind");
+        let back: SessionSpec = serde_json::from_value(v).unwrap();
+        assert_eq!(back.kind, SessionKind::Agent);
+    }
+
+    #[test]
+    fn a_shell_kind_round_trips_as_snake_case() {
+        let v = serde_json::to_value(SessionKind::Shell).unwrap();
+        assert_eq!(v, "shell");
+        let back: SessionKind = serde_json::from_value(v).unwrap();
+        assert_eq!(back, SessionKind::Shell);
+    }
+
+    #[test]
+    fn renamed_folds_into_the_label_and_an_empty_label_clears_it() {
+        let mut s = from_log(&spec(), &[]);
+        apply_event(
+            &mut s,
+            &ev(
+                "1",
+                SessionEventKind::Renamed {
+                    label: Some("auth guard".into()),
+                },
+            ),
+        );
+        assert_eq!(s.label.as_deref(), Some("auth guard"));
+
+        apply_event(
+            &mut s,
+            &ev("2", SessionEventKind::Renamed { label: None }),
+        );
+        assert_eq!(s.label, None);
+
+        apply_event(
+            &mut s,
+            &ev(
+                "3",
+                SessionEventKind::Renamed {
+                    label: Some("auth guard".into()),
+                },
+            ),
+        );
+        apply_event(
+            &mut s,
+            &ev(
+                "4",
+                SessionEventKind::Renamed {
+                    label: Some("   ".into()),
+                },
+            ),
+        );
+        assert_eq!(s.label, None);
+    }
+
+    #[test]
+    fn a_session_omits_absent_label_and_title() {
+        let s = from_log(&spec(), &[]);
+        assert!(s.label.is_none());
+        assert!(s.title.is_none());
+        let v = serde_json::to_value(&s).unwrap();
+        assert!(v.get("label").is_none());
+        assert!(v.get("title").is_none());
     }
 }

@@ -9,10 +9,14 @@ import type {
   PluginStatus,
   ProfileSummary,
   Project,
+  ReadFileResult,
   SandboxProfile,
   Session,
+  SessionKind,
   Snapshot,
   ToolList,
+  TreeResult,
+  UiPrefs,
   UsageSnapshot,
 } from "./proto";
 
@@ -96,7 +100,21 @@ export const projects = {
   setRoots: (roots: string[]) => invoke("set_projects_roots", { roots }),
   discover: () => invoke<Candidate[]>("discover_projects"),
   openInExplorer: (path: string) => invoke("open_in_explorer", { path }),
-  openInEditor: (workspace: string) => invoke("open_in_editor", { workspace }),
+  openInEditor: (workspace: string, file?: string) =>
+    invoke("open_in_editor", { workspace, file }),
+  tree: (id: string, path?: string) =>
+    invoke<TreeResult>("project_tree", { id, path }),
+  readFile: (id: string, path: string) =>
+    invoke<ReadFileResult>("project_read_file", { id, path }),
+};
+
+/* The current-system preference persisted in `engine.toml`'s `[ui]`
+ * table (see `Engine::ui_prefs`/`set_ui_prefs`) — a UI preference, not
+ * daemon truth, so it lives beside `projects` rather than flowing
+ * through `daemon://event`. */
+export const ui = {
+  prefs: () => invoke<UiPrefs>("ui_prefs"),
+  setPrefs: (prefs: UiPrefs) => invoke("set_ui_prefs", { prefs }),
 };
 
 /* Static per-machine fact (is VS Code installed?), checked once when the
@@ -114,10 +132,12 @@ export interface SessionOpened {
 }
 
 export const sessions = {
-  open: (projectId: string) =>
-    invoke<SessionOpened>("session_open", { projectId }),
-  resume: (projectId: string) =>
-    invoke<SessionOpened>("session_resume", { projectId }),
+  open: (projectId: string, kind?: SessionKind) =>
+    invoke<SessionOpened>("session_open", { projectId, kind }),
+  resume: (projectId: string, resumeFrom?: string) =>
+    invoke<SessionOpened>("session_resume", { projectId, resumeFrom }),
+  rename: (id: string, label: string | null) =>
+    invoke<Session>("session_rename", { id, label }),
   attach: (id: string, title: string) =>
     invoke("session_attach", { id, title }),
   stop: (id: string) => invoke("session_stop", { id }),

@@ -3,13 +3,14 @@
 use serde::{Deserialize, Serialize};
 use willie_core::{
     id::{ProjectId, SessionId},
-    session::Session,
+    session::{Session, SessionKind},
 };
 
 pub mod method {
     pub const CREATE: &str = "session.create";
     pub const STOP: &str = "session.stop";
     pub const LIST: &str = "session.list";
+    pub const RENAME: &str = "session.rename";
 }
 
 /// `user.name`/`user.email` read from the Windows git configuration.
@@ -26,6 +27,15 @@ pub struct CreateParams {
     pub git_identity: Option<GitIdentity>,
     #[serde(default)]
     pub resume: bool,
+    /// The finished session to continue. Absent with `resume`, the
+    /// project's most recent terminal session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resume_from: Option<SessionId>,
+    /// An agent conversation or an interactive shell. Defaulted so a
+    /// caller written before shell sessions existed still opens an
+    /// agent session.
+    #[serde(default)]
+    pub kind: SessionKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +51,14 @@ pub struct IdParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionList {
     pub sessions: Vec<Session>,
+}
+
+/// `label` absent or `null` both mean "clear the session's label".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameParams {
+    pub id: SessionId,
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 #[cfg(test)]
@@ -74,5 +92,39 @@ mod tests {
         }))
         .unwrap();
         assert!(p.resume);
+    }
+
+    #[test]
+    fn create_params_default_to_a_fresh_agent_session() {
+        let p: CreateParams = serde_json::from_value(serde_json::json!({
+            "project_id": ProjectId::new()
+        }))
+        .unwrap();
+        assert_eq!(p.kind, SessionKind::Agent);
+        assert!(!p.resume);
+        assert!(p.resume_from.is_none());
+    }
+
+    #[test]
+    fn rename_params_accept_a_null_label() {
+        let p: RenameParams = serde_json::from_value(serde_json::json!({
+            "id": SessionId::new(),
+            "label": null
+        }))
+        .unwrap();
+        assert!(p.label.is_none());
+
+        let p: RenameParams = serde_json::from_value(serde_json::json!({
+            "id": SessionId::new()
+        }))
+        .unwrap();
+        assert!(p.label.is_none());
+
+        let p: RenameParams = serde_json::from_value(serde_json::json!({
+            "id": SessionId::new(),
+            "label": "auth guard"
+        }))
+        .unwrap();
+        assert_eq!(p.label.as_deref(), Some("auth guard"));
     }
 }

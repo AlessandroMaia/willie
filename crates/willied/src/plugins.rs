@@ -395,12 +395,12 @@ fn api_scope(scope: WireScope) -> ApiScope {
     }
 }
 
-fn op(code: &str, message: String, remediation: &str) -> OpError {
-    OpError {
-        code: code.to_owned(),
-        message,
-        remediation: remediation.to_owned(),
-    }
+fn op(
+    code: &'static str,
+    message: String,
+    remediation: &'static str,
+) -> OpError {
+    OpError::new(code, message, remediation)
 }
 
 fn not_found(id: &str) -> OpError {

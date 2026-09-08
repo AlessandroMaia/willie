@@ -1,0 +1,292 @@
+import { PlusIcon, Trash2Icon } from "lucide-react";
+import { useState } from "react";
+import { ProblemAlert } from "@/components/problem-alert";
+import { StatusBadge } from "@/components/status-badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldLabel,
+} from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Item, ItemContent, ItemGroup } from "@/components/ui/item";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import type { Problem } from "@/lib/ipc";
+import type {
+  CapabilityInfo,
+  ExtraPath,
+  Project,
+  SandboxProfile,
+} from "@/lib/proto";
+
+interface SandboxDrawerProps {
+  project: Project | null;
+  catalogue?: CapabilityInfo[];
+  problem: Problem | null;
+  onSave: (profile: SandboxProfile) => void;
+  onCancel: () => void;
+}
+
+/* Every capability but the list one is a boolean override on the
+ * profile. No fixed name list duplicates `Capability::is_implemented`
+ * here: which rows exist, their order and which are editable all come
+ * from the `catalogue` prop alone (`Capability::ALL` order — shipped
+ * first, deferred after), so a capability the enforcement plan later
+ * implements needs no change in this file to become editable. */
+type BooleanCapability = Exclude<CapabilityInfo["capability"], "extra_paths">;
+
+/* This element exists only to carry hover/focus for a deferred row's
+ * tooltip trigger, wrapped around its disabled control; it takes no
+ * other keyboard action itself. Mirrors `app-sidebar.tsx`'s planned
+ * entries: a disabled control receives no pointer or focus events, so
+ * the tooltip trigger cannot be the disabled control itself. */
+// biome-ignore lint/a11y/noNoninteractiveTabindex: see comment above
+const deferredRowTrigger = <div className="block" tabIndex={0} />;
+
+/**
+ * The capability editor, re-housed from a centred dialog into a sheet
+ * from the right: the same catalogue, switches, extra paths and Save
+ * flow, now reached from the Sandbox screen's "Edit capabilities"
+ * button instead of a project row's menu. Capability changes live only
+ * here — no denial row anywhere offers a one-click "allow".
+ */
+export function SandboxDrawer({
+  project,
+  catalogue = [],
+  problem,
+  onSave,
+  onCancel,
+}: SandboxDrawerProps) {
+  /* `project.sandbox` is the default profile the daemon substituted
+   * while its `[sandbox]` table could not be read (see
+   * `sandbox_problem` below) — never a saved override, so it must not
+   * seed `local`: every row instead falls back to the harness's own
+   * default, and Save writes out exactly the table that replaces the
+   * unreadable one. */
+  const [local, setLocal] = useState<SandboxProfile>(() =>
+    project?.sandbox_problem ? {} : (project?.sandbox ?? {}),
+  );
+
+  function setFlag(capability: BooleanCapability, value: boolean) {
+    setLocal((prev) => ({ ...prev, [capability]: value }));
+  }
+
+  function setPaths(paths: ExtraPath[]) {
+    setLocal((prev) => ({ ...prev, extra_paths: paths }));
+  }
+
+  function addPath() {
+    setPaths([...(local.extra_paths ?? []), { path: "", mode: "ro" }]);
+  }
+
+  function removePath(index: number) {
+    setPaths((local.extra_paths ?? []).filter((_, i) => i !== index));
+  }
+
+  function updatePath(index: number, patch: Partial<ExtraPath>) {
+    setPaths(
+      (local.extra_paths ?? []).map((entry, i) =>
+        i === index ? { ...entry, ...patch } : entry,
+      ),
+    );
+  }
+
+  return (
+    <Sheet
+      open={project !== null}
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
+      {/* One row per capability in the catalogue, each with the sentence
+       * that says what it costs, is taller than the sheet. The sheet's
+       * own height stays fixed to the viewport, so the rows scroll
+       * inside it and the footer stays pinned below them. */}
+      <SheetContent className="flex h-full w-full flex-col gap-0 sm:max-w-lg">
+        <SheetHeader>
+          <SheetTitle>Sandbox for “{project?.name}”</SheetTitle>
+          <SheetDescription>
+            What this project's sessions may reach beyond the project itself. A
+            session records the policy it ran under.
+          </SheetDescription>
+        </SheetHeader>
+
+        {/* Sandbox capabilities are monotonic: a repository's own
+         * configuration (`docs/decisions/0007`) can only tighten what
+         * this profile allows, never open something it leaves off. */}
+        <p className="px-4 text-muted-foreground text-xs">
+          Repository configuration can only tighten what this profile allows —
+          never open a capability it leaves off.
+        </p>
+
+        {/* A load problem, not a rejected save: it comes from the project
+         * itself and is present the instant the drawer opens, so it is
+         * rendered straight off `project.sandbox_problem` — distinct from
+         * `problem` below, which only ever answers a Save. Its
+         * remediation already says that saving here replaces the
+         * unreadable table (see `store::load_all`). */}
+        {project?.sandbox_problem && (
+          <div className="px-4">
+            <ProblemAlert problem={project.sandbox_problem} />
+          </div>
+        )}
+
+        <ScrollArea className="min-h-0 flex-1 px-4">
+          <div className="flex flex-col gap-3 py-3 pr-3">
+            {catalogue.map((info) => {
+              if (info.capability === "extra_paths") {
+                return (
+                  <div key="extra_paths" className="flex flex-col gap-2">
+                    <FieldLabel>{info.display_name}</FieldLabel>
+                    <FieldDescription>{info.consequence}</FieldDescription>
+                    <ItemGroup className="gap-1">
+                      {/* Rows have no identity of their own: they are only
+                       * appended and removed, never reordered, so the
+                       * index is stable for the row a user is editing. */}
+                      {(local.extra_paths ?? []).map((entry, index) => {
+                        const modeId = `sandbox-extra-path-${index}-mode`;
+                        return (
+                          // biome-ignore lint/suspicious/noArrayIndexKey: see comment above
+                          <Item key={index} size="xs" variant="outline">
+                            <ItemContent className="flex-row items-center gap-2">
+                              <Input
+                                value={entry.path}
+                                onChange={(e) =>
+                                  updatePath(index, { path: e.target.value })
+                                }
+                                placeholder="/srv/shared"
+                                aria-label={`extra path ${index + 1}`}
+                              />
+                              <Field
+                                orientation="horizontal"
+                                className="w-fit whitespace-nowrap"
+                              >
+                                <Checkbox
+                                  id={modeId}
+                                  checked={entry.mode === "rw"}
+                                  onCheckedChange={(value) =>
+                                    updatePath(index, {
+                                      mode: value === true ? "rw" : "ro",
+                                    })
+                                  }
+                                />
+                                <FieldLabel htmlFor={modeId}>
+                                  read-write
+                                </FieldLabel>
+                              </Field>
+                              <Button
+                                variant="ghost"
+                                size="icon-sm"
+                                aria-label="Remove path"
+                                onClick={() => removePath(index)}
+                              >
+                                <Trash2Icon />
+                              </Button>
+                            </ItemContent>
+                          </Item>
+                        );
+                      })}
+                    </ItemGroup>
+                    <div>
+                      <Button variant="outline" size="sm" onClick={addPath}>
+                        <PlusIcon /> Add path
+                      </Button>
+                    </div>
+                  </div>
+                );
+              }
+
+              const capability = info.capability;
+              const id = `sandbox-${capability}`;
+              const forced = capability === "project_rw";
+              /* An absent override means "whatever the harness decided",
+               * and only the catalogue knows what that is: the trait's
+               * default leaves `agent.state` off where Claude Code turns
+               * it on, so a guess here would show a credential as
+               * mounted for a harness that never asked for it. */
+              const checked = forced
+                ? true
+                : info.implemented
+                  ? (local[capability] ?? info.default_enabled)
+                  : false;
+
+              const content = (
+                <>
+                  <Checkbox
+                    id={id}
+                    checked={checked}
+                    disabled={forced || !info.implemented}
+                    onCheckedChange={(value) =>
+                      setFlag(capability, value === true)
+                    }
+                  />
+                  <FieldContent>
+                    <div className="flex items-center gap-2">
+                      <FieldLabel htmlFor={id}>{info.display_name}</FieldLabel>
+                      {!info.implemented && (
+                        <StatusBadge tone="muted">not available</StatusBadge>
+                      )}
+                    </div>
+                    <FieldDescription>{info.consequence}</FieldDescription>
+                  </FieldContent>
+                </>
+              );
+
+              if (info.implemented) {
+                return (
+                  <Field key={capability} orientation="horizontal">
+                    {content}
+                  </Field>
+                );
+              }
+
+              return (
+                <Tooltip key={capability}>
+                  <TooltipTrigger render={deferredRowTrigger}>
+                    <Field
+                      orientation="horizontal"
+                      className="pointer-events-none"
+                    >
+                      {content}
+                    </Field>
+                  </TooltipTrigger>
+                  <TooltipContent side="right">
+                    This version cannot apply it yet
+                  </TooltipContent>
+                </Tooltip>
+              );
+            })}
+          </div>
+        </ScrollArea>
+
+        {problem && (
+          <div className="px-4">
+            <ProblemAlert problem={problem} />
+          </div>
+        )}
+
+        <SheetFooter className="flex-row justify-end border-t bg-muted/50">
+          <Button variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button onClick={() => onSave(local)}>Save</Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  );
+}

@@ -3,6 +3,7 @@
 //! spawns the supervisor; the supervisor owns the PTY and outlives it.
 
 use std::{
+    collections::HashSet,
     io::{BufRead, BufReader},
     path::PathBuf,
     process::{Command, Stdio},
@@ -16,8 +17,8 @@ use willie_core::{
     project::ProjectState,
     sandbox::{CapabilitySet, SandboxProfile},
     session::{
-        Session, SessionEvent, SessionEventKind, SessionSpec, apply_event,
-        from_log,
+        Session, SessionEvent, SessionEventKind, SessionKind, SessionSpec,
+        SessionState, apply_event, from_log,
     },
 };
 use willie_harness::{Harness, LaunchMode, Resume};
@@ -26,7 +27,7 @@ use willie_plugin_api::CoreEvent;
 
 use crate::{
     harness, identity, jobs::Runner, plugins::PluginHost, projects::OpError,
-    session_store, state, state::State,
+    session_store, session_title, shell, state, state::State,
 };
 
 /// Shared inputs a session operation needs.
@@ -44,6 +45,11 @@ pub struct SessionOps {
     // tests that build session ops without one; the real daemon wires it so
     // a session's start and exit reach the plugins as `CoreEvent`s.
     plugin_host: Option<Arc<Mutex<PluginHost>>>,
+    // Finished sessions whose first prompt could not be read. Their logs
+    // can no longer change, so one failed read is final and the title
+    // scan never looks at them again -- otherwise every snapshot pays
+    // for every session that will never have a title.
+    untitled: Mutex<HashSet<SessionId>>,
 }
 
 impl std::fmt::Debug for SessionOps {
@@ -72,6 +78,7 @@ impl SessionOps {
             clock,
             runner,
             plugin_host: None,
+            untitled: Mutex::new(HashSet::new()),
         }
     }
 
@@ -99,17 +106,15 @@ impl SessionOps {
         &self,
         params: willie_proto::session::CreateParams,
     ) -> Result<Session, OpError> {
-        let (project, live, resumed_from) = {
+        let (project, target) = {
             let s = crate::lock(&self.state);
             let project =
                 s.projects.get(&params.project_id).cloned().ok_or_else(
                     || crate::projects::not_found_err(params.project_id),
                 )?;
-            // Only meaningful when `params.resume`; computed alongside the
+            // The project's most recent TERMINAL session; used only when
+            // `resume` names no target of its own. Computed alongside the
             // project lookup so both read the same lock acquisition.
-            let live = s.sessions.values().any(|se| {
-                se.project_id == params.project_id && se.state.is_live()
-            });
             let resumed_from = s
                 .sessions
                 .values()
@@ -118,7 +123,18 @@ impl SessionOps {
                 })
                 .max_by(|a, b| a.created_at.cmp(&b.created_at))
                 .map(|se| se.id);
-            (project, live, resumed_from)
+            let target = params
+                .resume_from
+                .map(|id| ResumeTarget::Named {
+                    id,
+                    state: s.sessions.get(&id).map(|se| se.state.clone()),
+                })
+                .unwrap_or(if params.resume {
+                    ResumeTarget::Latest(resumed_from)
+                } else {
+                    ResumeTarget::None
+                });
+            (project, target)
         };
         if let Some(problem) = &project.sandbox_problem {
             return Err(OpError::from_problem(problem));
@@ -147,19 +163,52 @@ impl SessionOps {
             &project.sandbox,
             &self.home,
         )?;
-        let (mode, resumed_from) = resume_decision(
-            params.resume,
-            harness::claude().capabilities().resume,
-            live,
-            resumed_from,
-        )?;
-        let installed =
-            harness::detect_claude(&self.home).ok_or_else(|| {
-                OpError::coded(
-                    "harness_not_installed",
-                    "Claude Code is not installed",
-                )
-            })?;
+        // A shell cannot resume a conversation: `Resume::None` makes the
+        // shared decision refuse `resume: true` the same way an agent
+        // harness without resume support would.
+        let harness_resume = match params.kind {
+            SessionKind::Agent => harness::claude().capabilities().resume,
+            SessionKind::Shell => Resume::None,
+        };
+        let (mode, resumed_from) =
+            resume_decision(params.resume, harness_resume, target)?;
+
+        // Agent: detect the installed binary and let the harness build
+        // argv/env. Shell: no binary to detect, but the image must
+        // actually carry zsh -- refused fail-closed, before anything is
+        // written, when it does not.
+        let (launch, harness_id) = match params.kind {
+            SessionKind::Agent => {
+                let installed =
+                    harness::detect_claude(&self.home).ok_or_else(|| {
+                        OpError::coded(
+                            "harness_not_installed",
+                            "Claude Code is not installed",
+                        )
+                    })?;
+                let launch = harness::claude().launch(
+                    &installed.path,
+                    std::path::Path::new(&project.workspace),
+                    &self.home,
+                    mode,
+                );
+                (launch, harness::claude().id().to_owned())
+            }
+            SessionKind::Shell => {
+                if !shell::zsh_present(&zsh_path()) {
+                    return Err(OpError::coded(
+                        "shell_unavailable",
+                        "zsh is not installed in the image",
+                    ));
+                }
+                let launch = shell::shell_launch(
+                    std::path::Path::new(&project.workspace),
+                    &self.home,
+                );
+                (launch, willie_core::session::SHELL_HARNESS.to_owned())
+            }
+        };
+
         let source_linux = crate::projects::source_to_linux(&project.source);
         identity::ensure(
             &self.home,
@@ -170,16 +219,10 @@ impl SessionOps {
 
         let id = SessionId::new();
         let socket = session_socket(&self.run_dir, &id.to_string());
-        let launch = harness::claude().launch(
-            &installed.path,
-            std::path::Path::new(&project.workspace),
-            &self.home,
-            mode,
-        );
         let spec = SessionSpec {
             id,
             project_id: project.id,
-            harness: harness::claude().id().to_owned(),
+            harness: harness_id,
             workspace: project.workspace.clone(),
             socket: socket.to_string_lossy().into_owned(),
             argv: launch.argv,
@@ -187,6 +230,7 @@ impl SessionOps {
             created_at: (self.clock)(),
             willie_version: willie_core::VERSION.to_owned(),
             resumed_from,
+            kind: params.kind,
             capabilities,
         };
         let dir =
@@ -412,11 +456,130 @@ impl SessionOps {
 
     #[must_use]
     pub fn list(&self) -> Vec<Session> {
+        self.title_untitled_agent_sessions();
         crate::lock(&self.state)
             .sessions
             .values()
             .cloned()
             .collect()
+    }
+
+    /// Best-effort: gives every started, untitled `Agent` session its
+    /// title (its first prompt) before the caller reads `state`. The
+    /// harness usually has not written its log yet at `Started` -- the
+    /// first record lands only once the user's first prompt does, maybe
+    /// minutes later -- so this runs lazily here and from the state
+    /// snapshot path instead, rather than once at start. Bounded per
+    /// call: one directory listing and the first 64 KiB of one file per
+    /// untitled session; a session already titled, or one still
+    /// `Creating`, is skipped. Once a title is found it is written into
+    /// `state` and a `session_changed` is emitted; a later call sees
+    /// `title.is_some()` and does nothing more for that session.
+    pub fn title_untitled_agent_sessions(&self) {
+        let given_up = self
+            .untitled
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let candidates: Vec<(SessionId, String, u64, bool)> =
+            crate::lock(&self.state)
+                .sessions
+                .values()
+                .filter(|s| {
+                    s.kind == SessionKind::Agent
+                        && s.title.is_none()
+                        && (s.state.is_live() || s.state.is_terminal())
+                        && !given_up.contains(&s.id)
+                })
+                .map(|s| {
+                    let started_at_secs = s
+                        .started_at
+                        .as_deref()
+                        .or(Some(s.created_at.as_str()))
+                        .and_then(|t| t.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    (
+                        s.id,
+                        s.workspace.clone(),
+                        started_at_secs,
+                        s.state.is_terminal(),
+                    )
+                })
+                .collect();
+
+        for (id, workspace, started_at_secs, finished) in candidates {
+            let Some(title) = session_title::first_prompt_for(
+                &self.home,
+                &workspace,
+                started_at_secs,
+            ) else {
+                if finished {
+                    self.untitled
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(id);
+                }
+                continue;
+            };
+            state::emit(&self.state, &self.out, |s| {
+                let mut session = s
+                    .sessions
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| placeholder(id));
+                session.title = Some(title.clone());
+                s.upsert_session(session)
+            });
+        }
+    }
+
+    /// Applies a user-chosen label: trims it, clears it on a blank or
+    /// absent value, and refuses one over 120 characters before anything
+    /// is touched. Persists a `Renamed` event to the session's own
+    /// append-only log *before* folding it into memory and emitting the
+    /// change, so a crash between the two can never show a label that is
+    /// lost the next time the daemon re-adopts the session from its log.
+    pub fn rename(
+        &self,
+        params: willie_proto::session::RenameParams,
+    ) -> Result<Session, OpError> {
+        let willie_proto::session::RenameParams { id, label } = params;
+        let label =
+            label.map(|l| l.trim().to_owned()).filter(|l| !l.is_empty());
+        if let Some(l) = &label
+            && l.chars().count() > 120
+        {
+            return Err(OpError::new(
+                "invalid_params",
+                "the label is longer than 120 characters",
+                "shorten the name",
+            ));
+        }
+        let mut session = crate::lock(&self.state)
+            .sessions
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| {
+            OpError::coded("session_not_found", "no such session")
+        })?;
+        let event = SessionEvent {
+            at: (self.clock)(),
+            kind: SessionEventKind::Renamed { label },
+        };
+        session_store::append_event(&self.state_dir, &id.to_string(), &event)
+            .map_err(|e| {
+            OpError::new(
+                "state_write_failed",
+                e.to_string(),
+                "check the daemon's state directory permissions and \
+                     try again",
+            )
+        })?;
+        apply_event(&mut session, &event);
+        state::emit(&self.state, &self.out, |s| {
+            s.upsert_session(session.clone())
+        });
+        Ok(session)
     }
 
     /// At start, load every session directory, adopt the ones whose socket
@@ -435,7 +598,7 @@ impl SessionOps {
             match crate::control::connect(&socket).and_then(|mut c| c.status())
             {
                 Ok(status) => {
-                    session.state = willie_core::session::SessionState::Running;
+                    session.state = SessionState::Running;
                     session.pid = Some(status.pid);
                     session.clients = status.clients;
                     state::emit(&self.state, &self.out, |s| {
@@ -470,17 +633,32 @@ fn notify_plugin_host(host: &Option<Arc<Mutex<PluginHost>>>, ev: CoreEvent) {
     }
 }
 
-/// The resume guard and mode decision, pulled out of `create` as a pure
-/// function so it is unit-testable without a harness/state fixture: a
-/// fresh request always launches `Fresh` with no lineage; a resume request
-/// is refused fail-closed when the harness cannot continue a conversation
-/// or when the project already has a live session, and otherwise launches
-/// `Continue` linked to the project's most recent terminal session.
+/// What a `create` names as its resume target, read under the same lock
+/// acquisition as the project lookup so the target's state comes from
+/// one snapshot.
+enum ResumeTarget {
+    /// `resume` is false: nothing is being resumed.
+    None,
+    /// `resume` with no `resume_from`: the project's most recent
+    /// terminal session, if it has one.
+    Latest(Option<SessionId>),
+    /// `resume_from` names a session; its current state, if the session
+    /// still exists in the store.
+    Named {
+        id: SessionId,
+        state: Option<SessionState>,
+    },
+}
+
+/// The resume guard and mode decision, pure so it is unit-testable
+/// without a harness or state fixture. Fail-closed: a resume whose
+/// harness cannot continue, whose named target is unknown, or whose
+/// target is still live is refused rather than launched fresh. The case
+/// table is in `designs/system-scoped-shell.md`.
 fn resume_decision(
     resume: bool,
     harness_resume: Resume,
-    live: bool,
-    latest_terminal: Option<SessionId>,
+    target: ResumeTarget,
 ) -> Result<(LaunchMode, Option<SessionId>), OpError> {
     if !resume {
         return Ok((LaunchMode::Fresh, None));
@@ -491,14 +669,33 @@ fn resume_decision(
             "this harness cannot resume a conversation",
         ));
     }
-    if live {
-        return Err(OpError::coded(
-            "session_already_live",
-            "a session for this project is already running; \
-             use it or stop it first",
-        ));
+    match target {
+        ResumeTarget::Named { state: None, .. } => Err(OpError::new(
+            "resume_target_not_found",
+            "no such session",
+            "choose a session from the Sessions panel",
+        )),
+        ResumeTarget::Named { state: Some(s), .. } if s.is_live() => {
+            Err(OpError::new(
+                "resume_target_live",
+                "that session is already open",
+                "it is already open; switch to its tab",
+            ))
+        }
+        ResumeTarget::Named { id, .. } => Ok((LaunchMode::Continue, Some(id))),
+        ResumeTarget::Latest(id) => Ok((LaunchMode::Continue, id)),
+        ResumeTarget::None => Ok((LaunchMode::Continue, None)),
     }
-    Ok((LaunchMode::Continue, latest_terminal))
+}
+
+/// Where the presence check below looks for zsh. `WILLIE_ZSH_CHECK`
+/// moves ONLY that check -- never the argv, which is always
+/// `shell::ZSH_PATH` inside the sandbox -- so a test can see
+/// `shell_unavailable` by pointing it at a path that cannot exist.
+fn zsh_path() -> PathBuf {
+    std::env::var_os("WILLIE_ZSH_CHECK")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(shell::ZSH_PATH))
 }
 
 /// Layer 1 from the harness, layer 2 from the project record. A policy
@@ -554,13 +751,16 @@ fn placeholder(id: SessionId) -> Session {
         project_id: willie_core::id::ProjectId::nil(),
         harness: String::new(),
         workspace: String::new(),
-        state: willie_core::session::SessionState::Running,
+        kind: SessionKind::Agent,
+        state: SessionState::Running,
         created_at: String::new(),
         started_at: None,
         finished_at: None,
         pid: None,
         clients: 0,
         resumed_from: None,
+        label: None,
+        title: None,
         sandbox: Default::default(),
     }
 }
@@ -599,6 +799,7 @@ mod tests {
     use std::path::Path;
 
     use super::*;
+    use crate::outbound::Outbound;
     use willie_core::sandbox::{ExtraPath, PathMode};
 
     #[test]
@@ -629,43 +830,98 @@ mod tests {
 
     #[test]
     fn a_fresh_request_launches_fresh_with_no_lineage() {
-        let (mode, resumed_from) =
-            resume_decision(false, Resume::ById, true, Some(SessionId::new()))
-                .unwrap();
+        // Even a target naming a live session is ignored: a fresh create
+        // no longer looks at other sessions of the project at all.
+        let (mode, resumed_from) = resume_decision(
+            false,
+            Resume::ById,
+            ResumeTarget::Named {
+                id: SessionId::new(),
+                state: Some(SessionState::Running),
+            },
+        )
+        .unwrap();
         assert_eq!(mode, LaunchMode::Fresh);
         assert_eq!(resumed_from, None);
     }
 
     #[test]
-    fn a_resume_request_launches_continue_linked_to_the_latest_terminal() {
+    fn resume_without_a_target_continues_the_latest_terminal_session() {
         let latest = SessionId::new();
-        let (mode, resumed_from) =
-            resume_decision(true, Resume::ById, false, Some(latest)).unwrap();
+        let (mode, resumed_from) = resume_decision(
+            true,
+            Resume::ById,
+            ResumeTarget::Latest(Some(latest)),
+        )
+        .unwrap();
         assert_eq!(mode, LaunchMode::Continue);
         assert_eq!(resumed_from, Some(latest));
     }
 
     #[test]
     fn resume_is_refused_when_the_harness_cannot_resume() {
-        let err = resume_decision(true, Resume::None, false, None).unwrap_err();
+        let err = resume_decision(true, Resume::None, ResumeTarget::None)
+            .unwrap_err();
         assert_eq!(err.code, "harness_cannot_resume");
     }
 
     #[test]
-    fn resume_is_refused_while_a_session_is_already_live() {
-        let err =
-            resume_decision(true, Resume::ById, true, Some(SessionId::new()))
-                .unwrap_err();
-        assert_eq!(err.code, "session_already_live");
+    fn resume_from_a_terminal_session_continues_it() {
+        let id = SessionId::new();
+        let (mode, resumed_from) = resume_decision(
+            true,
+            Resume::ById,
+            ResumeTarget::Named {
+                id,
+                state: Some(SessionState::Exited {
+                    code: Some(0),
+                    signal: None,
+                }),
+            },
+        )
+        .unwrap();
+        assert_eq!(mode, LaunchMode::Continue);
+        assert_eq!(resumed_from, Some(id));
     }
 
     #[test]
-    fn the_live_guard_is_checked_before_the_lineage_is_used() {
-        // No prior terminal session at all: resume still launches Continue
-        // (the harness's own "nothing to continue" message is the fallback
-        // the design accepts), just with no lineage to record.
+    fn resume_from_a_live_session_is_resume_target_live() {
+        let id = SessionId::new();
+        let err = resume_decision(
+            true,
+            Resume::ById,
+            ResumeTarget::Named {
+                id,
+                state: Some(SessionState::Running),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "resume_target_live");
+    }
+
+    #[test]
+    fn resume_from_an_unknown_session_is_resume_target_not_found() {
+        let err = resume_decision(
+            true,
+            Resume::ById,
+            ResumeTarget::Named {
+                id: SessionId::new(),
+                state: None,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "resume_target_not_found");
+    }
+
+    #[test]
+    fn resume_with_no_target_and_no_prior_session_still_launches_continue() {
+        // No named target and no prior terminal session at all: resume
+        // still launches Continue (the harness's own "nothing to
+        // continue" message is the fallback the design accepts), just
+        // with no lineage to record.
         let (mode, resumed_from) =
-            resume_decision(true, Resume::ById, false, None).unwrap();
+            resume_decision(true, Resume::ById, ResumeTarget::Latest(None))
+                .unwrap();
         assert_eq!(mode, LaunchMode::Continue);
         assert_eq!(resumed_from, None);
     }
@@ -747,6 +1003,337 @@ mod tests {
         assert_eq!(err.code, "sandbox_profile_invalid");
         assert!(err.remediation.contains("absolute"), "{}", err.remediation);
     }
+
+    /// Shared by every `rename` test: a session directory on disk (the
+    /// spec `write_spec` would have written for a real `create`) and the
+    /// matching in-memory `Session`, folded from an empty log the way
+    /// `create` builds its first session.
+    fn rename_fixture(state_dir: &Path) -> (SessionOps, SessionId, Session) {
+        use willie_core::{id::ProjectId, sandbox::CapabilitySet};
+
+        fn clock() -> String {
+            "1".to_owned()
+        }
+
+        let id = SessionId::new();
+        let spec = SessionSpec {
+            id,
+            project_id: ProjectId::new(),
+            harness: "claude-code".into(),
+            workspace: "/w".into(),
+            socket: "/run/willie/sessions/s.sock".into(),
+            argv: vec!["/bin/true".into()],
+            env: Default::default(),
+            created_at: clock(),
+            willie_version: willie_core::VERSION.to_owned(),
+            resumed_from: None,
+            kind: SessionKind::Agent,
+            capabilities: CapabilitySet::default(),
+        };
+        session_store::write_spec(state_dir, &spec).unwrap();
+        let session = from_log(&spec, &[]);
+
+        let state = Arc::new(Mutex::new(State::default()));
+        crate::lock(&state).sessions.insert(id, session.clone());
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            state_dir.to_path_buf(),
+            state_dir.join("run"),
+            state_dir.join("home"),
+            clock,
+            runner,
+        );
+        (ops, id, session)
+    }
+
+    /// A fixture whose id never went through `write_spec`/state insertion.
+    fn unknown_id_ops(state_dir: &Path) -> SessionOps {
+        fn clock() -> String {
+            "1".to_owned()
+        }
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+        SessionOps::new(
+            Arc::clone(&state),
+            out,
+            state_dir.to_path_buf(),
+            state_dir.join("run"),
+            state_dir.join("home"),
+            clock,
+            runner,
+        )
+    }
+
+    /// Renaming sets the in-memory label, appends exactly one `Renamed`
+    /// line the log's last event parses to, and leaves the change visible
+    /// in `state` for the next snapshot/emit to pick up.
+    #[test]
+    fn rename_sets_the_label_persists_the_event_and_emits_a_change() {
+        let state_dir =
+            std::env::temp_dir().join("willie-sess-rename-ok-state");
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let (ops, id, _session) = rename_fixture(&state_dir);
+
+        let session = ops
+            .rename(willie_proto::session::RenameParams {
+                id,
+                label: Some("auth guard".into()),
+            })
+            .unwrap();
+        assert_eq!(session.label.as_deref(), Some("auth guard"));
+
+        // The in-memory session held by `state` agrees.
+        assert_eq!(
+            crate::lock(&ops.state).sessions.get(&id).unwrap().label,
+            Some("auth guard".to_owned())
+        );
+
+        let (_, events) = session_store::load_all(&state_dir)
+            .into_iter()
+            .find(|(spec, _)| spec.id == id)
+            .unwrap();
+        match &events.last().unwrap().kind {
+            SessionEventKind::Renamed { label } => {
+                assert_eq!(label.as_deref(), Some("auth guard"));
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    /// An empty (or all-whitespace) label clears an existing one, both in
+    /// memory and in the persisted event.
+    #[test]
+    fn rename_with_an_empty_label_clears_it() {
+        let state_dir =
+            std::env::temp_dir().join("willie-sess-rename-clear-state");
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let (ops, id, mut session) = rename_fixture(&state_dir);
+        session.label = Some("old".into());
+        crate::lock(&ops.state).sessions.insert(id, session);
+
+        let session = ops
+            .rename(willie_proto::session::RenameParams {
+                id,
+                label: Some("   ".into()),
+            })
+            .unwrap();
+        assert_eq!(session.label, None);
+
+        let (_, events) = session_store::load_all(&state_dir)
+            .into_iter()
+            .find(|(spec, _)| spec.id == id)
+            .unwrap();
+        match &events.last().unwrap().kind {
+            SessionEventKind::Renamed { label } => assert_eq!(*label, None),
+            other => panic!("{other:?}"),
+        }
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    /// An unknown session id is refused before any event is appended.
+    #[test]
+    fn renaming_an_unknown_session_is_session_not_found() {
+        let state_dir =
+            std::env::temp_dir().join("willie-sess-rename-unknown-state");
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let ops = unknown_id_ops(&state_dir);
+
+        let err = ops
+            .rename(willie_proto::session::RenameParams {
+                id: SessionId::new(),
+                label: Some("x".into()),
+            })
+            .unwrap_err();
+        assert_eq!(err.code, "session_not_found");
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    /// A label past the 120-character cap is refused, and nothing is
+    /// persisted or changed.
+    #[test]
+    fn a_label_over_120_chars_is_invalid_params() {
+        let state_dir =
+            std::env::temp_dir().join("willie-sess-rename-toolong-state");
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let (ops, id, _session) = rename_fixture(&state_dir);
+
+        let long = "x".repeat(121);
+        let err = ops
+            .rename(willie_proto::session::RenameParams {
+                id,
+                label: Some(long),
+            })
+            .unwrap_err();
+        assert_eq!(err.code, "invalid_params");
+        assert_eq!(err.remediation, "shorten the name");
+        assert_eq!(
+            crate::lock(&ops.state).sessions.get(&id).unwrap().label,
+            None
+        );
+
+        let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    /// Writes `content` under every registry harness's session-logs
+    /// directory for `workspace`, with its modified time set to
+    /// `mtime_secs` -- what `pick_log_for` reads once `list` looks for an
+    /// untitled agent session's first prompt.
+    fn plant_first_prompt_log(
+        home: &Path,
+        workspace: &str,
+        mtime_secs: u64,
+        content: &str,
+    ) {
+        for h in willie_harness::registry() {
+            let Some(dir) = h.session_logs_dir(home) else {
+                continue;
+            };
+            let logdir = dir.join(h.escape_workspace(workspace));
+            std::fs::create_dir_all(&logdir).unwrap();
+            let path = logdir.join("session.jsonl");
+            std::fs::write(&path, content).unwrap();
+            let file =
+                std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            file.set_modified(
+                std::time::UNIX_EPOCH + Duration::from_secs(mtime_secs),
+            )
+            .unwrap();
+        }
+    }
+
+    /// An untitled, running `Agent` session with a planted harness log
+    /// gets its title from `list()`; a second `list()` call sees
+    /// `title.is_some()` and emits nothing more for it. `state.seq` only
+    /// ever bumps inside `upsert_session`, in lock-step with the
+    /// `session_changed` notification `state::emit` sends alongside it,
+    /// so counting its bumps is counting that emission without racing
+    /// the async `Outbound` writer thread.
+    #[test]
+    fn list_titles_an_untitled_agent_session_once_from_its_first_prompt() {
+        let home = std::env::temp_dir().join("willie-sess-list-title-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+
+        let workspace = "/home/willie/projects/p";
+        let started_at_secs = 1_700_000_000u64;
+        plant_first_prompt_log(
+            &home,
+            workspace,
+            started_at_secs + 5,
+            r#"{"type":"user","message":{"role":"user","content":"fix the login bug"}}"#,
+        );
+
+        fn clock() -> String {
+            "1".to_owned()
+        }
+
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+
+        let id = SessionId::new();
+        let mut session = placeholder(id);
+        session.workspace = workspace.to_owned();
+        session.created_at = started_at_secs.to_string();
+        session.started_at = Some(started_at_secs.to_string());
+        session.state = SessionState::Running;
+        crate::lock(&state).sessions.insert(id, session);
+        assert_eq!(crate::lock(&state).seq, 0);
+
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            std::env::temp_dir().join("willie-sess-list-title-state"),
+            std::env::temp_dir().join("willie-sess-list-title-run"),
+            home.clone(),
+            clock,
+            runner,
+        );
+
+        let first = ops.list();
+        let titled = first.iter().find(|s| s.id == id).unwrap();
+        assert_eq!(titled.title.as_deref(), Some("fix the login bug"));
+        assert_eq!(crate::lock(&state).seq, 1);
+
+        let second = ops.list();
+        let still_titled = second.iter().find(|s| s.id == id).unwrap();
+        assert_eq!(still_titled.title.as_deref(), Some("fix the login bug"));
+        assert_eq!(crate::lock(&state).seq, 1);
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// A finished session whose first prompt cannot be read is given up
+    /// on after one attempt: its log can no longer change, so rescanning
+    /// it on every snapshot for the rest of the daemon's life buys
+    /// nothing -- and a log that appears afterwards is a later session's,
+    /// never this one's title.
+    #[test]
+    fn a_finished_session_without_a_title_is_never_scanned_again() {
+        let home = std::env::temp_dir().join("willie-sess-give-up-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+
+        fn clock() -> String {
+            "1".to_owned()
+        }
+
+        let workspace = "/home/willie/projects/q";
+        let started_at_secs = 1_700_000_000u64;
+
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+
+        let id = SessionId::new();
+        let mut session = placeholder(id);
+        session.workspace = workspace.to_owned();
+        session.created_at = started_at_secs.to_string();
+        session.started_at = Some(started_at_secs.to_string());
+        session.state = SessionState::Exited {
+            code: Some(0),
+            signal: None,
+        };
+        crate::lock(&state).sessions.insert(id, session);
+
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            std::env::temp_dir().join("willie-sess-give-up-state"),
+            std::env::temp_dir().join("willie-sess-give-up-run"),
+            home.clone(),
+            clock,
+            runner,
+        );
+
+        // Nothing to read yet: the scan finds no log and gives up.
+        let first = ops.list();
+        assert_eq!(first.iter().find(|s| s.id == id).unwrap().title, None);
+
+        plant_first_prompt_log(
+            &home,
+            workspace,
+            started_at_secs + 5,
+            r#"{"type":"user","message":{"role":"user","content":"a later prompt"}}"#,
+        );
+
+        let second = ops.list();
+        assert_eq!(second.iter().find(|s| s.id == id).unwrap().title, None);
+
+        let _ = std::fs::remove_dir_all(&home);
+    }
 }
 
 #[cfg(test)]
@@ -758,11 +1345,14 @@ mod create_tests {
         id::ProjectId,
         project::{Project, ProjectState},
         sandbox::SandboxProfile,
+        session::SessionKind,
     };
     use willie_proto::{job::JobKind, session::CreateParams};
 
     use super::SessionOps;
-    use crate::{jobs::Runner, outbound::Outbound, state::State};
+    use crate::{
+        jobs::Runner, outbound::Outbound, session_store, state::State,
+    };
 
     fn clock() -> String {
         "t".to_owned()
@@ -826,6 +1416,8 @@ mod create_tests {
                 project_id: pid,
                 git_identity: None,
                 resume: false,
+                resume_from: None,
+                kind: SessionKind::Agent,
             })
             .unwrap_err();
         assert_eq!(err.code, "project_busy");
@@ -834,16 +1426,35 @@ mod create_tests {
         drop(tx);
     }
 
-    /// The live-session guard trips before `create` ever touches the
-    /// harness or spawns a supervisor, so this exercises the real `create`
-    /// path (not just the extracted decision) without needing a `claude`
-    /// binary on this host.
+    /// Several live sessions per project are now allowed: two fresh
+    /// creates for the same project both succeed, and both end up
+    /// `Running` in state. A fake `claude` (answers `--version`) and a
+    /// fake supervisor (prints one readiness line and exits) stand in
+    /// for the real binaries so this exercises the real `create` path,
+    /// not just the extracted decision.
     #[test]
-    fn create_refuses_a_resume_while_a_session_is_already_live() {
-        use willie_core::{
-            id::SessionId,
-            session::{Session, SessionState},
-        };
+    fn a_fresh_create_is_allowed_while_another_session_is_live() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use willie_proto::session::GitIdentity;
+
+        let home = std::env::temp_dir().join("willie-sess-multi-live-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+        let claude = home.join("claude");
+        std::fs::write(&claude, "#!/bin/sh\necho '1.0.0 (fake)'\n").unwrap();
+        std::fs::set_permissions(
+            &claude,
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+        let fake_sess = home.join("willie-sess-fake");
+        std::fs::write(&fake_sess, "#!/bin/sh\necho 'ok 4242'\n").unwrap();
+        std::fs::set_permissions(
+            &fake_sess,
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
 
         let state = Arc::new(Mutex::new(State::default()));
         let (out, _h) = Outbound::spawn(std::io::sink());
@@ -852,39 +1463,55 @@ mod create_tests {
         let project = ready_project();
         let pid = project.id;
         crate::lock(&state).projects.insert(pid, project);
-        let live = Session {
-            id: SessionId::new(),
-            project_id: pid,
-            harness: "claude-code".into(),
-            workspace: "/w".into(),
-            state: SessionState::Running,
-            created_at: clock(),
-            started_at: None,
-            finished_at: None,
-            pid: Some(1),
-            clients: 0,
-            resumed_from: None,
-            sandbox: Default::default(),
-        };
-        crate::lock(&state).sessions.insert(live.id, live);
 
         let ops = SessionOps::new(
             Arc::clone(&state),
             out,
-            std::env::temp_dir().join("willie-sess-resume-live-state"),
-            std::env::temp_dir().join("willie-sess-resume-live-run"),
-            std::env::temp_dir().join("willie-sess-resume-live-home"),
+            std::env::temp_dir().join("willie-sess-multi-live-state"),
+            std::env::temp_dir().join("willie-sess-multi-live-run"),
+            home,
             clock,
             Arc::clone(&runner),
         );
-        let err = ops
-            .create(CreateParams {
-                project_id: pid,
-                git_identity: None,
-                resume: true,
+        let identity = || {
+            Some(GitIdentity {
+                name: "T".into(),
+                email: "t@x".into(),
             })
-            .unwrap_err();
-        assert_eq!(err.code, "session_already_live");
+        };
+        let make = || CreateParams {
+            project_id: pid,
+            git_identity: identity(),
+            resume: false,
+            resume_from: None,
+            kind: SessionKind::Agent,
+        };
+
+        // SAFETY: this test does not run concurrently with another test
+        // that reads or writes these process-wide variables.
+        unsafe {
+            std::env::set_var("WILLIE_HARNESS_BIN", &claude);
+            std::env::set_var("WILLIE_SESS_BIN", &fake_sess);
+        }
+        let first = ops.create(make());
+        let second = ops.create(make());
+        // SAFETY: same single-threaded scope as the set above.
+        unsafe {
+            std::env::remove_var("WILLIE_HARNESS_BIN");
+            std::env::remove_var("WILLIE_SESS_BIN");
+        }
+        let first = first.unwrap();
+        let second = second.unwrap();
+
+        assert_ne!(first.id, second.id);
+        assert_eq!(first.state, willie_core::session::SessionState::Running);
+        assert_eq!(second.state, willie_core::session::SessionState::Running);
+        let live = crate::lock(&ops.state)
+            .sessions
+            .values()
+            .filter(|s| s.project_id == pid && s.state.is_live())
+            .count();
+        assert_eq!(live, 2);
     }
 
     /// The policy is resolved before the harness is detected and before
@@ -924,6 +1551,8 @@ mod create_tests {
                 project_id: pid,
                 git_identity: None,
                 resume: false,
+                resume_from: None,
+                kind: SessionKind::Agent,
             })
             .unwrap_err();
 
@@ -968,10 +1597,99 @@ mod create_tests {
                 project_id: pid,
                 git_identity: None,
                 resume: false,
+                resume_from: None,
+                kind: SessionKind::Agent,
             })
             .unwrap_err();
 
         assert_eq!(err.code, "sandbox_profile_invalid");
         assert_eq!(err.remediation, "fix the file");
+    }
+
+    /// A shell cannot resume a conversation: `resume: true` on a shell
+    /// create is refused the same way an agent harness without resume
+    /// support would be, before the zsh presence check ever runs.
+    #[test]
+    fn a_shell_session_cannot_be_resumed() {
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+        let project = ready_project();
+        let pid = project.id;
+        crate::lock(&state).projects.insert(pid, project);
+
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            std::env::temp_dir().join("willie-sess-shell-resume-state"),
+            std::env::temp_dir().join("willie-sess-shell-resume-run"),
+            std::env::temp_dir().join("willie-sess-shell-resume-home"),
+            clock,
+            Arc::clone(&runner),
+        );
+        let err = ops
+            .create(CreateParams {
+                project_id: pid,
+                git_identity: None,
+                resume: true,
+                resume_from: None,
+                kind: SessionKind::Shell,
+            })
+            .unwrap_err();
+
+        assert_eq!(err.code, "harness_cannot_resume");
+    }
+
+    /// A shell create is refused fail-closed, before anything is written,
+    /// when the image carries no zsh. `WILLIE_ZSH_CHECK` points the check
+    /// at a path that never exists, so this holds regardless of whether
+    /// the distribution this test runs in has since been rebuilt with
+    /// zsh -- the real `/usr/bin/zsh` cannot serve as its own absent case.
+    #[test]
+    fn a_shell_session_is_refused_when_zsh_is_absent() {
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+        let project = ready_project();
+        let pid = project.id;
+        crate::lock(&state).projects.insert(pid, project);
+
+        let state_dir =
+            std::env::temp_dir().join("willie-sess-shell-nozsh-state");
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            state_dir.clone(),
+            std::env::temp_dir().join("willie-sess-shell-nozsh-run"),
+            std::env::temp_dir().join("willie-sess-shell-nozsh-home"),
+            clock,
+            Arc::clone(&runner),
+        );
+
+        let missing = std::env::temp_dir()
+            .join("willie-sess-shell-nozsh-bin")
+            .join("no-such-zsh");
+        // SAFETY: this test does not run concurrently with another test
+        // that reads or writes this process-wide variable.
+        unsafe { std::env::set_var("WILLIE_ZSH_CHECK", &missing) };
+        let err = ops
+            .create(CreateParams {
+                project_id: pid,
+                git_identity: None,
+                resume: false,
+                resume_from: None,
+                kind: SessionKind::Shell,
+            })
+            .unwrap_err();
+        // SAFETY: same single-threaded scope as the set above.
+        unsafe { std::env::remove_var("WILLIE_ZSH_CHECK") };
+
+        assert_eq!(err.code, "shell_unavailable");
+        assert!(session_store::load_all(&state_dir).is_empty());
+
+        let _ = std::fs::remove_dir_all(&state_dir);
     }
 }

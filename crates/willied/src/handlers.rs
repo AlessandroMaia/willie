@@ -4,12 +4,16 @@
 //! `Response`.
 
 use std::{
+    path::Path,
     sync::{Mutex, MutexGuard, PoisonError},
     time::Instant,
 };
 
 use serde_json::Value;
-use willie_core::id::{JobId, ProjectId};
+use willie_core::{
+    id::{JobId, ProjectId},
+    session::SessionKind,
+};
 use willie_harness::Harness;
 use willie_proto::{
     PROTOCOL_VERSION,
@@ -49,6 +53,13 @@ fn op_error(e: crate::projects::OpError) -> RpcError {
 /// one place an `OpError` becomes a reply.
 fn capability_error(e: willie_core::sandbox::CapabilityError) -> RpcError {
     op_error(e.into())
+}
+
+/// Maps a workspace containment or read failure onto the wire error.
+/// `project.tree` and `project.read_file` share it, the one place a
+/// `WsError` becomes a reply.
+fn ws_error(e: crate::workspace::WsError) -> RpcError {
+    RpcError::new(e.code(), e.message()).with_remediation(e.remediation())
 }
 
 /// Recovers a poisoned lock instead of panicking: one worker's panic must
@@ -170,6 +181,59 @@ pub fn project_list(state: &Mutex<State>) -> Result<Value, RpcError> {
     serde_json::to_value(ProjectList { projects }).map_err(internal)
 }
 
+/// One directory level of a project's workspace (the root when `path` is
+/// absent), each entry annotated with its `git status` flag, plus the
+/// workspace's current branch. `resolve_within` is the one containment
+/// check; `git status` runs once and a failure (or no repository) is
+/// tolerated as an empty flag map — the tree is listed either way.
+pub fn project_tree(state: &Mutex<State>, p: Value) -> Result<Value, RpcError> {
+    let project::TreeParams { id, path } =
+        serde_json::from_value(p).map_err(invalid_params)?;
+    let project = lock(state)
+        .projects
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| op_error(crate::projects::not_found_err(id)))?;
+    let workspace = Path::new(&project.workspace);
+    let rel = path.unwrap_or_default();
+    let dir =
+        crate::workspace::resolve_within(workspace, &rel).map_err(ws_error)?;
+
+    let flags = match crate::git::run(
+        workspace,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    ) {
+        Ok(out) => crate::workspace::parse_porcelain(&out),
+        Err(_) => std::collections::BTreeMap::new(),
+    };
+    let branch = crate::git::current_branch(workspace).ok();
+    let entries = crate::workspace::list_dir(&dir, &flags, &rel);
+    serde_json::to_value(project::TreeResult { entries, branch })
+        .map_err(internal)
+}
+
+/// A workspace file's content, read-only. `resolve_within` is the one
+/// containment check, the same as `project_tree`.
+pub fn project_read_file(
+    state: &Mutex<State>,
+    p: Value,
+) -> Result<Value, RpcError> {
+    let project::ReadFileParams { id, path } =
+        serde_json::from_value(p).map_err(invalid_params)?;
+    let project = lock(state)
+        .projects
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| op_error(crate::projects::not_found_err(id)))?;
+    let workspace = Path::new(&project.workspace);
+    let file =
+        crate::workspace::resolve_within(workspace, &path).map_err(ws_error)?;
+    let (content, truncated) =
+        crate::workspace::read_text(&file).map_err(ws_error)?;
+    serde_json::to_value(project::ReadFileResult { content, truncated })
+        .map_err(internal)
+}
+
 pub fn job_list(state: &Mutex<State>) -> Result<Value, RpcError> {
     let jobs: Vec<Job> = lock(state).jobs.values().cloned().collect();
     serde_json::to_value(serde_json::json!({ "jobs": jobs })).map_err(internal)
@@ -220,6 +284,13 @@ pub fn session_stop(ops: &SessionOps, p: Value) -> Result<Value, RpcError> {
         serde_json::from_value(p).map_err(invalid_params)?;
     ops.stop(id).map_err(op_error)?;
     Ok(Value::Null)
+}
+
+pub fn session_rename(ops: &SessionOps, p: Value) -> Result<Value, RpcError> {
+    let params: willie_proto::session::RenameParams =
+        serde_json::from_value(p).map_err(invalid_params)?;
+    let session = ops.rename(params).map_err(op_error)?;
+    serde_json::to_value(session).map_err(internal)
 }
 
 pub fn session_list(ops: &SessionOps) -> Result<Value, RpcError> {
@@ -407,6 +478,9 @@ fn enrich_usage_targets(state: &Mutex<State>, mut params: Value) -> Value {
     let sessions: Vec<Value> = lock(state)
         .sessions
         .values()
+        // A shell has no harness JSONL log for the usage plugin to
+        // read, so it is not a target it could ever account for.
+        .filter(|s| s.kind == SessionKind::Agent)
         .map(|s| {
             let start = s.created_at.parse::<u64>().unwrap_or(0);
             let end =
@@ -432,15 +506,20 @@ fn enrich_usage_targets(state: &Mutex<State>, mut params: Value) -> Value {
     params
 }
 
-/// Recomputes each project's `source_present` from the filesystem, then
-/// answers with the fresh snapshot, its `plugins` field filled from the
-/// host's live `list()`.
+/// Recomputes each project's `source_present` from the filesystem, gives
+/// every untitled `Agent` session a best-effort title (the harness log a
+/// title reads from often does not exist yet right after `Started`, so
+/// this is the other lazy hook alongside `session.list`), then answers
+/// with the fresh snapshot, its `plugins` field filled from the host's
+/// live `list()`.
 pub fn state_snapshot(
     ops: &Ops,
+    sessions: &SessionOps,
     state: &Mutex<State>,
     host: &Mutex<PluginHost>,
 ) -> Result<Value, RpcError> {
     ops.refresh_source_present();
+    sessions.title_untitled_agent_sessions();
     let mut snapshot: Snapshot = lock(state).snapshot();
     snapshot.plugins = lock_host(host).list();
     serde_json::to_value(snapshot).map_err(internal)
@@ -546,7 +625,7 @@ mod tests {
 
     use willie_core::{
         id::SessionId,
-        session::{Session, SessionState},
+        session::{Session, SessionKind, SessionState},
     };
 
     fn session(
@@ -559,6 +638,7 @@ mod tests {
             project_id,
             harness: "claude-code".into(),
             workspace: "/w".into(),
+            kind: SessionKind::Agent,
             state: SessionState::Running,
             created_at: created_at.into(),
             started_at: None,
@@ -566,6 +646,8 @@ mod tests {
             pid: None,
             clients: 0,
             resumed_from: None,
+            label: None,
+            title: None,
             sandbox: Default::default(),
         }
     }
@@ -684,5 +766,119 @@ mod tests {
         assert!(ids.contains(&id2), "{ids:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A shell session is excluded from usage enrichment: it has no
+    /// harness JSONL log for the plugin to read, unlike the agent
+    /// session alongside it, which still comes through.
+    #[test]
+    fn enrich_usage_targets_excludes_shell_sessions() {
+        let state = Mutex::new(State::default());
+        let (agent_id, shell_id) = (SessionId::new(), SessionId::new());
+        let pid = ProjectId::new();
+        {
+            let mut guard = state.lock().unwrap();
+            guard
+                .sessions
+                .insert(agent_id, session(agent_id, pid, "10"));
+            let mut shell_session = session(shell_id, pid, "20");
+            shell_session.kind = SessionKind::Shell;
+            guard.sessions.insert(shell_id, shell_session);
+        }
+
+        let enriched = enrich_usage_targets(&state, Value::Null);
+
+        let ids: Vec<String> = enriched
+            .get("_sessions")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(|s| s.get("id").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect();
+        assert!(ids.contains(&agent_id.to_string()), "{ids:?}");
+        assert!(!ids.contains(&shell_id.to_string()), "{ids:?}");
+    }
+
+    /// A `Ready` project pointing at a real, on-disk workspace directory
+    /// — unlike `project_with_a_sandbox_problem`'s fictitious `/w`,
+    /// `project.tree` and `project.read_file` need one `resolve_within`
+    /// can canonicalise.
+    fn project_with_workspace(workspace: &Path) -> Project {
+        Project {
+            id: ProjectId::new(),
+            name: "p".into(),
+            slug: "p".into(),
+            source: "C:\\src".into(),
+            workspace: workspace.to_string_lossy().into_owned(),
+            branch: "main".into(),
+            state: ProjectState::Ready,
+            source_present: true,
+            created_at: "t".into(),
+            sandbox: SandboxProfile::default(),
+            sandbox_problem: None,
+        }
+    }
+
+    /// A scratch, on-disk workspace directory for a `project_tree`/
+    /// `project_read_file` test, cleared first so a rerun starts clean.
+    fn scratch_workspace(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "willie-handlers-test-ws-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// `project.tree` with no `path` lists the workspace root: a plain
+    /// directory with one file is enough since a non-repository
+    /// workspace tolerates the `git status` failure as an empty flag map
+    /// and still lists.
+    #[test]
+    fn project_tree_lists_the_workspace_root() {
+        let workspace = scratch_workspace("tree-root");
+        std::fs::write(workspace.join("a.txt"), "hi").unwrap();
+        let project = project_with_workspace(&workspace);
+        let pid = project.id;
+        let state = Mutex::new(State::default());
+        state.lock().unwrap().projects.insert(pid, project);
+
+        let params = serde_json::to_value(project::TreeParams {
+            id: pid,
+            path: None,
+        })
+        .unwrap();
+        let result = project_tree(&state, params).unwrap();
+        let tree: project::TreeResult = serde_json::from_value(result).unwrap();
+
+        assert_eq!(tree.entries.len(), 1, "{:?}", tree.entries);
+        assert_eq!(tree.entries[0].name, "a.txt");
+
+        let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    /// `project.read_file` refuses a path that escapes the workspace
+    /// with `path_outside_workspace`, never reading past
+    /// `resolve_within`.
+    #[test]
+    fn project_read_file_outside_the_workspace_is_refused() {
+        let workspace = scratch_workspace("read-outside");
+        let project = project_with_workspace(&workspace);
+        let pid = project.id;
+        let state = Mutex::new(State::default());
+        state.lock().unwrap().projects.insert(pid, project);
+
+        let params = serde_json::to_value(project::ReadFileParams {
+            id: pid,
+            path: "../outside.txt".into(),
+        })
+        .unwrap();
+        let err = project_read_file(&state, params).unwrap_err();
+
+        assert_eq!(err.code, "path_outside_workspace");
+
+        let _ = std::fs::remove_dir_all(&workspace);
     }
 }
