@@ -2,6 +2,7 @@ import { Outlet, useLocation } from "@tanstack/react-router";
 import { ShellHotkeys } from "@/app/hotkeys";
 import { AppSidebar } from "@/app/shell/app-sidebar";
 import { Header } from "@/app/shell/header";
+import { SetupDrawer } from "@/app/shell/setup-drawer";
 import { StatusBar } from "@/app/shell/status-bar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -40,6 +41,7 @@ export function Shell() {
       </div>
       <StatusBar />
       <ShellHotkeys />
+      <SetupDrawer />
     </SidebarProvider>
   );
 }

@@ -15,19 +15,7 @@ import type { Problem } from "@/lib/ipc";
 import { plugins } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
 import type { PluginStatus } from "@/lib/proto";
-import { ProfilesPanel } from "@/plugins/profiles/profiles-panel";
-import { UsagePanel } from "@/plugins/usage/usage-panel";
 import { useSnapshot } from "@/store/use-snapshot";
-
-/** The profiles plugin's real id (singular — `manifest().id` in
- * `crates/willie-plugins/profiles`), never "profiles": the panel mounts
- * strictly on this literal. */
-const PROFILES_PLUGIN_ID = "profile";
-
-/** The usage plugin's real id (`manifest().id` in
- * `crates/willie-plugins/usage`): the panel mounts strictly on this
- * literal. */
-const USAGE_PLUGIN_ID = "usage";
 
 function scopeLabel(status: PluginStatus): string {
   return status.scope === "global" ? "Global" : "Per-project";
@@ -35,8 +23,9 @@ function scopeLabel(status: PluginStatus): string {
 
 /* A `Global` plugin's `enabled` is a bare flag this screen can flip
  * directly. A `PerProject` plugin's is the set of projects it runs in,
- * decided on each project's own surface (§ the profiles panel) — this
- * screen only reports that fact, it offers no control for it here. */
+ * decided on each project's own screen (its Profiles screen, for the
+ * profiles plugin) — this screen only reports that fact, it offers no
+ * control for it here. */
 function isGloballyEnabled(status: PluginStatus): boolean {
   return "global" in status.enabled && status.enabled.global;
 }
@@ -67,9 +56,6 @@ export function PluginsScreen() {
   useEffect(() => {
     load();
   }, [load]);
-
-  const profilesPlugin = list.find((p) => p.id === PROFILES_PLUGIN_ID);
-  const usagePlugin = list.find((p) => p.id === USAGE_PLUGIN_ID);
 
   async function toggle(status: PluginStatus, next: boolean) {
     setBusyId(status.id);
@@ -131,11 +117,6 @@ export function PluginsScreen() {
           );
         })}
       </ItemGroup>
-
-      {profilesPlugin && !profilesPlugin.degraded && <ProfilesPanel />}
-      {usagePlugin &&
-        isGloballyEnabled(usagePlugin) &&
-        !usagePlugin.degraded && <UsagePanel />}
     </div>
   );
 }

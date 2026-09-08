@@ -10,8 +10,12 @@ import {
 import { Shell } from "@/app/shell/shell";
 import { DashboardScreen } from "@/features/health/dashboard-screen";
 import { PluginsScreen } from "@/features/plugins/plugins-screen";
+import { ProfileStoreScreen } from "@/features/profile-store/profile-store-screen";
+import { ProfilesScreen } from "@/features/profiles/profiles-screen";
 import { ProjectsScreen } from "@/features/projects/projects-screen";
+import { SettingsScreen } from "@/features/settings/settings-screen";
 import { ToolsScreen } from "@/features/tools/tools-screen";
+import { UsageScreen } from "@/features/usage/usage-screen";
 
 /* A stale hash never shows a blank: it lands on the current system's
  * Session screen, the app's new home. */
@@ -19,8 +23,8 @@ function NotFound() {
   return <Navigate to="/session" replace />;
 }
 
-/** What Tasks 10/12/15 replace: a screen this task only gives an
- * address to, not a route that does not resolve. */
+/** What Tasks 12/15 replace: a screen this task only gives an address
+ * to, not a route that does not resolve. */
 function ScreenPlaceholder({ title }: { title: string }) {
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-2">
@@ -36,22 +40,6 @@ function SessionScreen() {
 
 function SandboxScreen() {
   return <ScreenPlaceholder title="Sandbox" />;
-}
-
-function ProfilesScreen() {
-  return <ScreenPlaceholder title="Profiles" />;
-}
-
-function UsageScreen() {
-  return <ScreenPlaceholder title="Usage" />;
-}
-
-function ProfileStoreScreen() {
-  return <ScreenPlaceholder title="Profile store" />;
-}
-
-function SettingsScreen() {
-  return <ScreenPlaceholder title="Settings" />;
 }
 
 const rootRoute = createRootRoute({

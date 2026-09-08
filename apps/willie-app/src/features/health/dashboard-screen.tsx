@@ -111,7 +111,7 @@ export function DashboardScreen() {
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6">
       <header className="flex items-center gap-3">
-        <h1 className="font-semibold text-lg">Dashboard</h1>
+        <h1 className="font-semibold text-lg">Engine</h1>
         <StatusDot tone={toneForHealth(overall)} label={`overall ${overall}`} />
         <span className="font-mono text-muted-foreground text-xs">
           engine v{status.engine_version}

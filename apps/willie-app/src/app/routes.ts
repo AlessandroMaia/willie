@@ -66,6 +66,7 @@ export type SetupPath = `/setup/${SetupEntry}`;
 interface SetupEntryInfo {
   id: SetupEntry;
   label: string;
+  description: string;
   icon: LucideIcon;
   path: SetupPath;
 }
@@ -74,29 +75,45 @@ interface SetupEntryInfo {
  * global, not scoped to any one system, so they carry no shortcut and
  * live outside the sidebar's four screens. */
 export const SETUP_ENTRIES: readonly SetupEntryInfo[] = [
-  { id: "engine", label: "Engine", icon: ActivityIcon, path: "/setup/engine" },
-  { id: "tools", label: "Tools", icon: WrenchIcon, path: "/setup/tools" },
+  {
+    id: "engine",
+    label: "Engine",
+    description: "WSL, the distribution and the daemon's health.",
+    icon: ActivityIcon,
+    path: "/setup/engine",
+  },
+  {
+    id: "tools",
+    label: "Tools",
+    description: "Install and update the managed toolchain.",
+    icon: WrenchIcon,
+    path: "/setup/tools",
+  },
   {
     id: "plugins",
     label: "Plugins",
+    description: "Enable or disable what runs across every system.",
     icon: BlocksIcon,
     path: "/setup/plugins",
   },
   {
     id: "profile-store",
     label: "Profile store",
+    description: "Create and edit configuration profiles.",
     icon: GitBranchIcon,
     path: "/setup/profile-store",
   },
   {
     id: "systems",
     label: "Systems",
+    description: "Add, discover and manage every system.",
     icon: FolderGit2Icon,
     path: "/setup/systems",
   },
   {
     id: "settings",
     label: "Settings",
+    description: "Theme and other app-wide preferences.",
     icon: SettingsIcon,
     path: "/setup/settings",
   },

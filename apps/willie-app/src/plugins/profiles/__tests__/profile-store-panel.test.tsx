@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Change, ProfileSummary, Project, Snapshot } from "@/lib/proto";
+import type { ProfileSummary } from "@/lib/proto";
 
 /* The bridge is the only I/O in the frontend and the only module a test
  * fakes. Mirrors the shape of every other panel/screen test's hoisted
@@ -12,59 +12,27 @@ const ipc = vi.hoisted(() => ({
     create: vi.fn(),
     readFragment: vi.fn(),
     writeFragment: vi.fn(),
-    check: vi.fn(),
-    apply: vi.fn(),
     setRemote: vi.fn(),
     push: vi.fn(),
     pull: vi.fn(),
   },
-  plugins: { list: vi.fn(), enable: vi.fn(), disable: vi.fn() },
-  projects: { snapshot: vi.fn() },
-  onDaemonEvent: vi.fn(async () => () => {}),
 }));
 
 vi.mock("@/lib/ipc", () => ipc);
 
-let ProfilesPanel: typeof import("@/plugins/profiles/profiles-panel").ProfilesPanel;
-
-const emptySnapshot = (): Snapshot => ({
-  seq: 1,
-  projects: [],
-  jobs: [],
-  sessions: [],
-});
-
-function project(overrides: Partial<Project> = {}): Project {
-  return {
-    id: "proj_1",
-    name: "Acme",
-    slug: "acme",
-    source: "C:\\src\\acme",
-    workspace: "/home/willie/projects/acme",
-    branch: "main",
-    state: { state: "ready" },
-    source_present: true,
-    created_at: "1",
-    sandbox: {},
-    ...overrides,
-  };
-}
+let ProfileStorePanel: typeof import("@/plugins/profiles/profile-store-panel").ProfileStorePanel;
 
 function summary(overrides: Partial<ProfileSummary> = {}): ProfileSummary {
   return { name: "acme", fragments_active: [], ...overrides };
 }
 
-/* `useSnapshot` (a module-level singleton store) and the panel's own
- * component both need a fresh module graph, same reasoning as
- * plugins-screen.test.tsx: a snapshot or a list left behind by one
- * test's render would still be there for the next test's first
- * synchronous render. */
 beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
-  ipc.projects.snapshot.mockResolvedValue(emptySnapshot());
   ipc.profiles.readFragment.mockResolvedValue({ content: "" });
-  ({ ProfilesPanel } = await import("@/plugins/profiles/profiles-panel"));
+  ({ ProfileStorePanel } = await import(
+    "@/plugins/profiles/profile-store-panel"
+  ));
 });
 
 /** Renders the panel and selects `name` from the profile list, then
@@ -73,7 +41,7 @@ beforeEach(async () => {
  * anything below them. */
 async function renderAndSelectProfile(name: string) {
   const user = userEvent.setup();
-  render(<ProfilesPanel />);
+  render(<ProfileStorePanel />);
   await user.click(
     await screen.findByRole("button", { name: `Select ${name}` }),
   );
@@ -81,13 +49,13 @@ async function renderAndSelectProfile(name: string) {
   return user;
 }
 
-describe("ProfilesPanel", () => {
+describe("ProfileStorePanel", () => {
   it("lists profiles from profile.list and creates one", async () => {
     ipc.profiles.list.mockResolvedValue([summary({ name: "acme" })]);
     ipc.profiles.create.mockResolvedValue(summary({ name: "beta" }));
     const user = userEvent.setup();
 
-    render(<ProfilesPanel />);
+    render(<ProfileStorePanel />);
 
     expect(await screen.findByText("acme")).toBeDefined();
 
@@ -124,55 +92,6 @@ describe("ProfilesPanel", () => {
     );
   });
 
-  it("runs check against a chosen project and shows the changes", async () => {
-    ipc.profiles.list.mockResolvedValue([summary()]);
-    ipc.projects.snapshot.mockResolvedValue({
-      ...emptySnapshot(),
-      projects: [project()],
-    });
-    const changes: Change[] = [
-      { path: "settings.json", kind: "merge", after: "{}" },
-    ];
-    ipc.profiles.check.mockResolvedValue({ changes });
-
-    const user = await renderAndSelectProfile("acme");
-    await user.selectOptions(screen.getByLabelText("Project"), "proj_1");
-    await user.click(screen.getByRole("button", { name: "Check" }));
-
-    expect(ipc.profiles.check).toHaveBeenCalledWith("acme", "proj_1");
-    expect(await screen.findByText("settings.json")).toBeDefined();
-    expect(screen.getByText(/1 to merge/)).toBeDefined();
-  });
-
-  it("applies and shows the backup path", async () => {
-    ipc.profiles.list.mockResolvedValue([summary()]);
-    ipc.projects.snapshot.mockResolvedValue({
-      ...emptySnapshot(),
-      projects: [project()],
-    });
-    const changes: Change[] = [
-      { path: "settings.json", kind: "merge", after: "{}" },
-    ];
-    ipc.profiles.check.mockResolvedValue({ changes });
-    ipc.profiles.apply.mockResolvedValue({
-      changes,
-      backup_path: "/home/willie/projects/acme/.willie-bak/1",
-    });
-
-    const user = await renderAndSelectProfile("acme");
-    await user.selectOptions(screen.getByLabelText("Project"), "proj_1");
-    await user.click(screen.getByRole("button", { name: "Check" }));
-    await screen.findByText("settings.json");
-    await user.click(screen.getByRole("button", { name: "Confirm & apply" }));
-
-    expect(ipc.profiles.apply).toHaveBeenCalledWith("acme", "proj_1");
-    expect(
-      await screen.findByText(
-        /Backup saved at \/home\/willie\/projects\/acme\/\.willie-bak\/1/,
-      ),
-    ).toBeDefined();
-  });
-
   it("sets a remote and surfaces a profile_sync_conflict on pull", async () => {
     ipc.profiles.list.mockResolvedValue([summary()]);
     ipc.profiles.setRemote.mockResolvedValue({});
@@ -200,5 +119,14 @@ describe("ProfilesPanel", () => {
     expect(
       screen.getByText(/profile `acme` has diverged from its remote/),
     ).toBeDefined();
+  });
+
+  it("never offers a project selector or an apply flow", async () => {
+    ipc.profiles.list.mockResolvedValue([summary()]);
+
+    await renderAndSelectProfile("acme");
+
+    expect(screen.queryByLabelText("Project")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Check" })).toBeNull();
   });
 });

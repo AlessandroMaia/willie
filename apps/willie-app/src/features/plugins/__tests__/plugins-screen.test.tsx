@@ -15,18 +15,6 @@ const emptySnapshot = (): Snapshot => ({
  * fake (see shell.test.tsx, tools-screen.test.tsx). */
 const ipc = vi.hoisted(() => ({
   plugins: { list: vi.fn(), enable: vi.fn(), disable: vi.fn() },
-  usage: { snapshot: vi.fn() },
-  profiles: {
-    list: vi.fn(async () => []),
-    create: vi.fn(),
-    readFragment: vi.fn(),
-    writeFragment: vi.fn(),
-    check: vi.fn(),
-    apply: vi.fn(),
-    setRemote: vi.fn(),
-    push: vi.fn(),
-    pull: vi.fn(),
-  },
   projects: { snapshot: vi.fn() },
   onDaemonEvent: vi.fn(async () => () => {}),
 }));
@@ -43,12 +31,6 @@ beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
   ipc.projects.snapshot.mockResolvedValue(emptySnapshot());
-  ipc.usage.snapshot.mockResolvedValue({
-    providers: [],
-    sessions: [],
-    projects: [],
-    fetched_at: "",
-  });
   ({ PluginsScreen } = await import("@/features/plugins/plugins-screen"));
 });
 
@@ -170,32 +152,20 @@ describe("PluginsScreen", () => {
     expect(screen.queryByText("error")).toBeNull();
   });
 
-  it('mounts the profiles panel below the list when "profile" is enabled and healthy', async () => {
-    ipc.plugins.list.mockResolvedValue([profilesPlugin()]);
+  it("the_plugins_screen_no_longer_mounts_the_panels", async () => {
+    ipc.plugins.list.mockResolvedValue([
+      profilesPlugin(),
+      globalPlugin({ enabled: { global: true } }),
+    ]);
 
     render(<PluginsScreen />);
 
     expect(await screen.findByText("Configuration profiles")).toBeDefined();
-    expect(
-      await screen.findByRole("heading", { name: "Profiles" }),
-    ).toBeDefined();
-  });
-
-  it('never mounts the profiles panel for a degraded "profile" plugin', async () => {
-    ipc.plugins.list.mockResolvedValue([profilesPlugin({ degraded: true })]);
-
-    render(<PluginsScreen />);
-
-    expect(await screen.findByText("Configuration profiles")).toBeDefined();
+    expect(await screen.findByText("Usage")).toBeDefined();
+    /* Neither panel's own heading appears: this screen keeps only the
+     * plugin list and its enable/disable state now — applying a
+     * profile and viewing usage moved to each system's own screens. */
     expect(screen.queryByRole("heading", { name: "Profiles" })).toBeNull();
-  });
-
-  it('never mounts the profiles panel for a plugin whose id is not the literal "profile"', async () => {
-    ipc.plugins.list.mockResolvedValue([perProjectPlugin()]);
-
-    render(<PluginsScreen />);
-
-    expect(await screen.findByText("Profiles")).toBeDefined();
-    expect(screen.queryByRole("heading", { name: "Profiles" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Session usage" })).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ProblemAlert } from "@/components/problem-alert";
 import { StatusBadge } from "@/components/status-badge";
 import {
@@ -13,6 +13,7 @@ import type { Problem } from "@/lib/ipc";
 import { usage } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
 import type { UsageSnapshot } from "@/lib/proto";
+import { useSnapshot } from "@/store/use-snapshot";
 
 /** How often the panel re-fetches while open. Real-time `usage.updated`
  * delivery is deferred, so this poll is the primary refresh — short
@@ -26,14 +27,24 @@ const EMPTY_SNAPSHOT: UsageSnapshot = {
   fetched_at: "",
 };
 
+interface UsagePanelProps {
+  /** Scopes every row below to one system. A usage session row
+   * (`SessionUsage`) carries only its own session id, never a project
+   * id, so the daemon's own session list (`useSnapshot`) is what maps
+   * a row back to the project it belongs to; a project row
+   * (`ProjectUsage`) is already project-scoped and filters directly. */
+  projectId: string;
+}
+
 /**
- * The usage plugin's own screen: a context meter and token total per
- * session, and a per-project token summary, refreshed on a light poll
- * while the panel is open. Reaches the daemon only through
- * `usage.snapshot` (the `usage` bridge in `lib/ipc.ts`) — this module
- * never imports a feature.
+ * The usage plugin's own panel: a context meter and token total per
+ * session, and a per-project token summary, scoped to one system and
+ * refreshed on a light poll while the panel is open. Reaches the
+ * daemon only through `usage.snapshot` (the `usage` bridge in
+ * `lib/ipc.ts`) — this module never imports a feature.
  */
-export function UsagePanel() {
+export function UsagePanel({ projectId }: UsagePanelProps) {
+  const { snapshot: daemonSnapshot } = useSnapshot();
   const [snapshot, setSnapshot] = useState<UsageSnapshot>(EMPTY_SNAPSHOT);
   const [problem, setProblem] = useState<Problem | null>(null);
 
@@ -61,8 +72,23 @@ export function UsagePanel() {
     };
   }, []);
 
+  const projectIdBySession = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const session of daemonSnapshot?.sessions ?? []) {
+      map.set(session.id, session.project_id);
+    }
+    return map;
+  }, [daemonSnapshot]);
+
+  const sessions = snapshot.sessions.filter(
+    (session) => projectIdBySession.get(session.id) === projectId,
+  );
+  const projects = snapshot.projects.filter(
+    (project) => project.id === projectId,
+  );
+
   return (
-    <div className="flex flex-col gap-6 border-t pt-4">
+    <div className="flex flex-col gap-6">
       <header>
         <h2 className="font-semibold text-base">Session usage</h2>
       </header>
@@ -70,7 +96,7 @@ export function UsagePanel() {
       {problem && <ProblemAlert problem={problem} />}
 
       <ItemGroup className="gap-1">
-        {snapshot.sessions.map((session) => {
+        {sessions.map((session) => {
           const pct = session.context_pct ?? null;
           const tone = contextTone(pct);
           return (
@@ -90,7 +116,7 @@ export function UsagePanel() {
       <section className="flex flex-col gap-2">
         <h3 className="font-medium text-sm">Per-project totals</h3>
         <ItemGroup className="gap-1">
-          {snapshot.projects.map((project) => (
+          {projects.map((project) => (
             <Item key={project.id} variant="outline">
               <ItemContent>
                 <ItemTitle>{project.id}</ItemTitle>

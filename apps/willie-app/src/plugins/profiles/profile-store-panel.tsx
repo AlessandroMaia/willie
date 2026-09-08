@@ -13,41 +13,31 @@ import {
   ItemTitle,
 } from "@/components/ui/item";
 import { Spinner } from "@/components/ui/spinner";
-import { EDITABLE_FRAGMENTS, summarizeChanges } from "@/lib/domain/profiles";
+import { EDITABLE_FRAGMENTS } from "@/lib/domain/profiles";
 import type { Problem } from "@/lib/ipc";
-import { plugins, profiles } from "@/lib/ipc";
+import { profiles } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
-import type { Change, ProfileSummary, Project } from "@/lib/proto";
-import { useSnapshot } from "@/store/use-snapshot";
+import type { ProfileSummary } from "@/lib/proto";
 
-/** Which of the panel's own async actions is in flight, so a button can
- * show its own spinner without a second boolean per control. */
-type ApplyAction = "enable" | "check" | "apply";
 type SyncAction = "remote" | "push" | "pull";
 
-interface ProfileDetailProps {
+interface ProfileFragmentsProps {
   name: string;
-  projects: Project[];
 }
 
 /**
- * Everything scoped to one selected profile: its fragment editors, the
- * apply-to-project flow, and the sync controls. Kept apart from the
- * list/create section above it because every piece of state here resets
- * when `name` changes — a different profile shares none of it.
+ * A selected profile's own fragment editors and sync controls — the
+ * store side of the profiles plugin. Applying a profile to a project
+ * lives on `apply-panel.tsx` instead, mounted on that system's own
+ * Profiles screen; everything here resets whenever `name` changes,
+ * since a different profile shares none of it.
  */
-function ProfileDetail({ name, projects }: ProfileDetailProps) {
+function ProfileFragments({ name }: ProfileFragmentsProps) {
   const [fragmentContent, setFragmentContent] = useState<
     Record<string, string>
   >({});
   const [fragmentBusy, setFragmentBusy] = useState<string | null>(null);
   const [fragmentProblem, setFragmentProblem] = useState<Problem | null>(null);
-
-  const [projectId, setProjectId] = useState("");
-  const [checkChanges, setCheckChanges] = useState<Change[] | null>(null);
-  const [backupPath, setBackupPath] = useState<string | null>(null);
-  const [applyBusy, setApplyBusy] = useState<ApplyAction | null>(null);
-  const [applyProblem, setApplyProblem] = useState<Problem | null>(null);
 
   const [remoteUrl, setRemoteUrl] = useState("");
   const [syncBusy, setSyncBusy] = useState<SyncAction | null>(null);
@@ -56,10 +46,6 @@ function ProfileDetail({ name, projects }: ProfileDetailProps) {
 
   useEffect(() => {
     setFragmentProblem(null);
-    setProjectId("");
-    setCheckChanges(null);
-    setBackupPath(null);
-    setApplyProblem(null);
     setRemoteUrl("");
     setSyncProblem(null);
     setSyncMessage(null);
@@ -97,47 +83,6 @@ function ProfileDetail({ name, projects }: ProfileDetailProps) {
       setFragmentProblem(asProblem(error));
     } finally {
       setFragmentBusy(null);
-    }
-  }
-
-  async function runCheck() {
-    setApplyBusy("check");
-    setApplyProblem(null);
-    setBackupPath(null);
-    try {
-      const result = await profiles.check(name, projectId);
-      setCheckChanges(result.changes);
-    } catch (error) {
-      setCheckChanges(null);
-      setApplyProblem(asProblem(error));
-    } finally {
-      setApplyBusy(null);
-    }
-  }
-
-  async function confirmApply() {
-    setApplyBusy("apply");
-    setApplyProblem(null);
-    try {
-      const result = await profiles.apply(name, projectId);
-      setCheckChanges(result.changes);
-      setBackupPath(result.backup_path);
-    } catch (error) {
-      setApplyProblem(asProblem(error));
-    } finally {
-      setApplyBusy(null);
-    }
-  }
-
-  async function enableForProject() {
-    setApplyBusy("enable");
-    setApplyProblem(null);
-    try {
-      await plugins.enable("profile", projectId);
-    } catch (error) {
-      setApplyProblem(asProblem(error));
-    } finally {
-      setApplyBusy(null);
     }
   }
 
@@ -183,8 +128,6 @@ function ProfileDetail({ name, projects }: ProfileDetailProps) {
     }
   }
 
-  const counts = checkChanges ? summarizeChanges(checkChanges) : null;
-
   return (
     <div className="flex flex-col gap-6 border-t pt-4">
       <section className="flex flex-col gap-4">
@@ -217,88 +160,6 @@ function ProfileDetail({ name, projects }: ProfileDetailProps) {
             </Button>
           </Field>
         ))}
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <h3 className="font-medium text-sm">Apply to project</h3>
-        {applyProblem && <ProblemAlert problem={applyProblem} />}
-        <Field className="max-w-xs">
-          <FieldLabel htmlFor="apply-project">Project</FieldLabel>
-          <select
-            id="apply-project"
-            className="h-8 w-full rounded-lg border border-input bg-transparent px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            value={projectId}
-            onChange={(e) => {
-              setProjectId(e.target.value);
-              setCheckChanges(null);
-              setBackupPath(null);
-            }}
-          >
-            <option value="">Choose a project…</option>
-            {projects.map((project) => (
-              <option key={project.id} value={project.id}>
-                {project.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-
-        <div className="flex gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={projectId === "" || applyBusy !== null}
-            onClick={() => void enableForProject()}
-          >
-            {applyBusy === "enable" && <Spinner />} Enable profiles for this
-            project
-          </Button>
-          <Button
-            size="sm"
-            disabled={projectId === "" || applyBusy !== null}
-            onClick={() => void runCheck()}
-          >
-            {applyBusy === "check" && <Spinner />} Check
-          </Button>
-        </div>
-
-        {checkChanges && counts && (
-          <div className="flex flex-col gap-2">
-            <ItemDescription>
-              {counts.create} to create, {counts.merge} to merge,{" "}
-              {counts.overwrite} to overwrite
-            </ItemDescription>
-            <ItemGroup className="gap-1">
-              {checkChanges.map((change) => (
-                <Item key={change.path} variant="outline">
-                  <ItemContent>
-                    <ItemTitle>{change.path}</ItemTitle>
-                    <ItemDescription>{change.kind}</ItemDescription>
-                    <ItemDescription className="whitespace-pre-wrap font-mono text-xs">
-                      {change.after.slice(0, 200)}
-                    </ItemDescription>
-                  </ItemContent>
-                </Item>
-              ))}
-            </ItemGroup>
-            {backupPath === null && (
-              <Button
-                size="sm"
-                className="w-fit"
-                disabled={applyBusy !== null}
-                onClick={() => void confirmApply()}
-              >
-                {applyBusy === "apply" && <Spinner />} Confirm & apply
-              </Button>
-            )}
-          </div>
-        )}
-
-        {backupPath && (
-          <ItemDescription>
-            Applied. Backup saved at {backupPath}
-          </ItemDescription>
-        )}
       </section>
 
       <section className="flex flex-col gap-3">
@@ -351,17 +212,14 @@ function ProfileDetail({ name, projects }: ProfileDetailProps) {
 }
 
 /**
- * The profiles plugin's own screen: list profiles and create one, edit
- * a selected profile's fragments, apply it to a project (with the
- * backup path), and push/pull it to a remote. Everything here reaches
- * the daemon only through `profile.*` (the `profiles` bridge in
- * `lib/ipc.ts`, itself the engine's one guarded `plugin_call`
- * pass-through) — this module never imports a feature.
+ * The profiles plugin's store screen: list profiles and create one,
+ * then edit a selected profile's fragments and sync it to a remote.
+ * Applying a profile to a project is out of scope here — that is
+ * `apply-panel.tsx`, scoped to one system instead. Reaches the daemon
+ * only through `profile.*` (the `profiles` bridge in `lib/ipc.ts`) —
+ * this module never imports a feature.
  */
-export function ProfilesPanel() {
-  const store = useSnapshot();
-  const projects = store.snapshot?.projects ?? [];
-
+export function ProfileStorePanel() {
   const [list, setList] = useState<ProfileSummary[]>([]);
   const [listProblem, setListProblem] = useState<Problem | null>(null);
   const [newName, setNewName] = useState("");
@@ -446,7 +304,7 @@ export function ProfilesPanel() {
         ))}
       </ItemGroup>
 
-      {selected && <ProfileDetail name={selected} projects={projects} />}
+      {selected && <ProfileFragments name={selected} />}
     </div>
   );
 }
