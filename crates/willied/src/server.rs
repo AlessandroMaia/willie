@@ -140,6 +140,10 @@ impl Server {
                 handlers::project_set_sandbox(&self.ops, req.params)
             }
             project::LIST => handlers::project_list(&self.state),
+            project::TREE => handlers::project_tree(&self.state, req.params),
+            project::READ_FILE => {
+                handlers::project_read_file(&self.state, req.params)
+            }
             job::LIST => handlers::job_list(&self.state),
             job::GET => handlers::job_get(&self.state, req.params),
             job::CANCEL => handlers::job_cancel(&self.ops, req.params),

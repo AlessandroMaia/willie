@@ -16,6 +16,8 @@ pub mod method {
     pub const RELOCATE: &str = "project.relocate";
     pub const RENAME: &str = "project.rename";
     pub const SET_SANDBOX: &str = "project.set_sandbox";
+    pub const TREE: &str = "project.tree";
+    pub const READ_FILE: &str = "project.read_file";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,4 +77,50 @@ pub struct SetSandboxParams {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobRef {
     pub job_id: JobId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeParams {
+    pub id: ProjectId,
+    /// Workspace-relative directory to list; absent lists the root.
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntryKind {
+    Dir,
+    File,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeEntry {
+    pub name: String,
+    pub kind: EntryKind,
+    /// `M`/`A`/`D`/`R`/`?`, aggregated up to a directory from any
+    /// changed path beneath it; absent when nothing changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreeResult {
+    pub entries: Vec<TreeEntry>,
+    /// The workspace's current branch, when it resolves; carried here so
+    /// the UI shows it without a second method call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadFileParams {
+    pub id: ProjectId,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReadFileResult {
+    pub content: String,
+    pub truncated: bool,
 }
