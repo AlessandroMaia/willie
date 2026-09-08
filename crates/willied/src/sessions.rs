@@ -26,7 +26,7 @@ use willie_plugin_api::CoreEvent;
 
 use crate::{
     harness, identity, jobs::Runner, plugins::PluginHost, projects::OpError,
-    session_store, state, state::State,
+    session_store, shell, state, state::State,
 };
 
 /// Shared inputs a session operation needs.
@@ -156,18 +156,52 @@ impl SessionOps {
             &project.sandbox,
             &self.home,
         )?;
-        let (mode, resumed_from) = resume_decision(
-            params.resume,
-            harness::claude().capabilities().resume,
-            target,
-        )?;
-        let installed =
-            harness::detect_claude(&self.home).ok_or_else(|| {
-                OpError::coded(
-                    "harness_not_installed",
-                    "Claude Code is not installed",
-                )
-            })?;
+        // A shell cannot resume a conversation: `Resume::None` makes the
+        // shared decision refuse `resume: true` the same way an agent
+        // harness without resume support would.
+        let harness_resume = match params.kind {
+            SessionKind::Agent => harness::claude().capabilities().resume,
+            SessionKind::Shell => Resume::None,
+        };
+        let (mode, resumed_from) =
+            resume_decision(params.resume, harness_resume, target)?;
+
+        // Agent: detect the installed binary and let the harness build
+        // argv/env. Shell: no binary to detect, but the image must
+        // actually carry zsh -- refused fail-closed, before anything is
+        // written, when it does not.
+        let (launch, harness_id) = match params.kind {
+            SessionKind::Agent => {
+                let installed =
+                    harness::detect_claude(&self.home).ok_or_else(|| {
+                        OpError::coded(
+                            "harness_not_installed",
+                            "Claude Code is not installed",
+                        )
+                    })?;
+                let launch = harness::claude().launch(
+                    &installed.path,
+                    std::path::Path::new(&project.workspace),
+                    &self.home,
+                    mode,
+                );
+                (launch, harness::claude().id().to_owned())
+            }
+            SessionKind::Shell => {
+                if !shell::zsh_present(&zsh_path()) {
+                    return Err(OpError::coded(
+                        "shell_unavailable",
+                        "zsh is not installed in the image",
+                    ));
+                }
+                let launch = shell::shell_launch(
+                    std::path::Path::new(&project.workspace),
+                    &self.home,
+                );
+                (launch, "zsh".to_owned())
+            }
+        };
+
         let source_linux = crate::projects::source_to_linux(&project.source);
         identity::ensure(
             &self.home,
@@ -178,16 +212,10 @@ impl SessionOps {
 
         let id = SessionId::new();
         let socket = session_socket(&self.run_dir, &id.to_string());
-        let launch = harness::claude().launch(
-            &installed.path,
-            std::path::Path::new(&project.workspace),
-            &self.home,
-            mode,
-        );
         let spec = SessionSpec {
             id,
             project_id: project.id,
-            harness: harness::claude().id().to_owned(),
+            harness: harness_id,
             workspace: project.workspace.clone(),
             socket: socket.to_string_lossy().into_owned(),
             argv: launch.argv,
@@ -195,7 +223,7 @@ impl SessionOps {
             created_at: (self.clock)(),
             willie_version: willie_core::VERSION.to_owned(),
             resumed_from,
-            kind: SessionKind::Agent,
+            kind: params.kind,
             capabilities,
         };
         let dir =
@@ -585,6 +613,16 @@ fn resume_decision(
         ResumeTarget::Latest(id) => Ok((LaunchMode::Continue, id)),
         ResumeTarget::None => Ok((LaunchMode::Continue, None)),
     }
+}
+
+/// The zsh binary path, overridable via `WILLIE_ZSH_BIN` -- the real
+/// distro always has `/usr/bin/zsh` once it carries this feature, so a
+/// test that wants to see `shell_unavailable` points this at a path that
+/// never exists instead, mirroring `WILLIE_HARNESS_BIN`/`WILLIE_SESS_BIN`.
+fn zsh_path() -> PathBuf {
+    std::env::var_os("WILLIE_ZSH_BIN")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(shell::ZSH_PATH))
 }
 
 /// Layer 1 from the harness, layer 2 from the project record. A policy
@@ -1088,7 +1126,9 @@ mod create_tests {
     use willie_proto::{job::JobKind, session::CreateParams};
 
     use super::SessionOps;
-    use crate::{jobs::Runner, outbound::Outbound, state::State};
+    use crate::{
+        jobs::Runner, outbound::Outbound, session_store, state::State,
+    };
 
     fn clock() -> String {
         "t".to_owned()
@@ -1340,5 +1380,93 @@ mod create_tests {
 
         assert_eq!(err.code, "sandbox_profile_invalid");
         assert_eq!(err.remediation, "fix the file");
+    }
+
+    /// A shell cannot resume a conversation: `resume: true` on a shell
+    /// create is refused the same way an agent harness without resume
+    /// support would be, before the zsh presence check ever runs.
+    #[test]
+    fn a_shell_session_cannot_be_resumed() {
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+        let project = ready_project();
+        let pid = project.id;
+        crate::lock(&state).projects.insert(pid, project);
+
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            std::env::temp_dir().join("willie-sess-shell-resume-state"),
+            std::env::temp_dir().join("willie-sess-shell-resume-run"),
+            std::env::temp_dir().join("willie-sess-shell-resume-home"),
+            clock,
+            Arc::clone(&runner),
+        );
+        let err = ops
+            .create(CreateParams {
+                project_id: pid,
+                git_identity: None,
+                resume: true,
+                resume_from: None,
+                kind: SessionKind::Shell,
+            })
+            .unwrap_err();
+
+        assert_eq!(err.code, "harness_cannot_resume");
+    }
+
+    /// A shell create is refused fail-closed, before anything is written,
+    /// when the image carries no zsh. `WILLIE_ZSH_BIN` points the check at
+    /// a path that never exists, so this holds regardless of whether the
+    /// distribution this test actually runs in has since been rebuilt
+    /// with zsh -- unlike the real `/usr/bin/zsh`, which this feature
+    /// installs, so the check itself cannot serve as its own absent case.
+    #[test]
+    fn a_shell_session_is_refused_when_zsh_is_absent() {
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+        let project = ready_project();
+        let pid = project.id;
+        crate::lock(&state).projects.insert(pid, project);
+
+        let state_dir =
+            std::env::temp_dir().join("willie-sess-shell-nozsh-state");
+        let _ = std::fs::remove_dir_all(&state_dir);
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            state_dir.clone(),
+            std::env::temp_dir().join("willie-sess-shell-nozsh-run"),
+            std::env::temp_dir().join("willie-sess-shell-nozsh-home"),
+            clock,
+            Arc::clone(&runner),
+        );
+
+        let missing = std::env::temp_dir()
+            .join("willie-sess-shell-nozsh-bin")
+            .join("no-such-zsh");
+        // SAFETY: this test does not run concurrently with another test
+        // that reads or writes this process-wide variable.
+        unsafe { std::env::set_var("WILLIE_ZSH_BIN", &missing) };
+        let err = ops
+            .create(CreateParams {
+                project_id: pid,
+                git_identity: None,
+                resume: false,
+                resume_from: None,
+                kind: SessionKind::Shell,
+            })
+            .unwrap_err();
+        // SAFETY: same single-threaded scope as the set above.
+        unsafe { std::env::remove_var("WILLIE_ZSH_BIN") };
+
+        assert_eq!(err.code, "shell_unavailable");
+        assert!(session_store::load_all(&state_dir).is_empty());
+
+        let _ = std::fs::remove_dir_all(&state_dir);
     }
 }

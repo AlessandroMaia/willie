@@ -21,13 +21,17 @@ const ETC: [&str; 7] = [
     "alternatives",
 ];
 
-/// Under `/etc` as well, but a slim image may lack them.
-const ETC_OPTIONAL: [&str; 5] = [
+/// Under `/etc` as well, but a slim image may lack them. `willie/zsh`
+/// holds Willie's own zsh prompt (`ZDOTDIR` for a shell session); an
+/// image built before shell sessions existed has none, and an agent
+/// session never reads it, so it is tolerated absent like the rest.
+const ETC_OPTIONAL: [&str; 6] = [
     "ld.so.cache",
     "localtime",
     "terminfo",
     "gitconfig",
     "os-release",
+    "willie/zsh",
 ];
 
 /// Privilege escalation helpers hidden behind the null device. A user
@@ -342,6 +346,7 @@ mod tests {
             "terminfo",
             "gitconfig",
             "os-release",
+            "willie/zsh",
         ] {
             let p = format!("/etc/{name}");
             assert!(has(&v, &["--ro-bind-try", &p, &p]), "{p}");

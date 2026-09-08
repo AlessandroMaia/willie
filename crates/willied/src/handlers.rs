@@ -9,7 +9,10 @@ use std::{
 };
 
 use serde_json::Value;
-use willie_core::id::{JobId, ProjectId};
+use willie_core::{
+    id::{JobId, ProjectId},
+    session::SessionKind,
+};
 use willie_harness::Harness;
 use willie_proto::{
     PROTOCOL_VERSION,
@@ -414,6 +417,9 @@ fn enrich_usage_targets(state: &Mutex<State>, mut params: Value) -> Value {
     let sessions: Vec<Value> = lock(state)
         .sessions
         .values()
+        // A shell has no harness JSONL log for the usage plugin to
+        // read, so it is not a target it could ever account for.
+        .filter(|s| s.kind == SessionKind::Agent)
         .map(|s| {
             let start = s.created_at.parse::<u64>().unwrap_or(0);
             let end =
@@ -694,5 +700,37 @@ mod tests {
         assert!(ids.contains(&id2), "{ids:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A shell session is excluded from usage enrichment: it has no
+    /// harness JSONL log for the plugin to read, unlike the agent
+    /// session alongside it, which still comes through.
+    #[test]
+    fn enrich_usage_targets_excludes_shell_sessions() {
+        let state = Mutex::new(State::default());
+        let (agent_id, shell_id) = (SessionId::new(), SessionId::new());
+        let pid = ProjectId::new();
+        {
+            let mut guard = state.lock().unwrap();
+            guard
+                .sessions
+                .insert(agent_id, session(agent_id, pid, "10"));
+            let mut shell_session = session(shell_id, pid, "20");
+            shell_session.kind = SessionKind::Shell;
+            guard.sessions.insert(shell_id, shell_session);
+        }
+
+        let enriched = enrich_usage_targets(&state, Value::Null);
+
+        let ids: Vec<String> = enriched
+            .get("_sessions")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(|s| s.get("id").and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect();
+        assert!(ids.contains(&agent_id.to_string()), "{ids:?}");
+        assert!(!ids.contains(&shell_id.to_string()), "{ids:?}");
     }
 }

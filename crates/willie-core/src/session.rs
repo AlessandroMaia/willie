@@ -366,6 +366,10 @@ pub fn remediation_for(code: &str) -> &'static str {
             "the image lacks the namespace helper: rebuild and reinstall \
              the distribution (`just distro-build`, `just distro-install`)"
         }
+        "shell_unavailable" => {
+            "rebuild and reinstall the distribution (just distro-build, \
+             just distro-install)"
+        }
         "sandbox_apply_failed" => {
             "the message names the path; the helper writes its own \
              complaint to the session's terminal, so attach to see it, \
@@ -833,6 +837,7 @@ mod tests {
             "supervisor_timeout",
             "harness_exec_failed",
             "sandbox_backend_missing",
+            "shell_unavailable",
             "sandbox_apply_failed",
             "sandbox_profile_invalid",
             "sandbox_capability_unsupported",

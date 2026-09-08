@@ -153,10 +153,24 @@ pub fn prepare(
     helper: &Path,
     inner_exe: &str,
 ) -> Result<Prepared, PrepareError> {
-    let harness = willie_harness::registry()
-        .into_iter()
-        .find(|h| h.id() == spec.harness)
-        .ok_or_else(|| PrepareError::HarnessUnknown(spec.harness.clone()))?;
+    // A shell is not an installable harness -- `spec.harness` ("zsh")
+    // never names an entry in `willie_harness::registry()`, the tool
+    // manager's own list. It still gets "the same sandbox plan" a
+    // conversation would (the design's own words): the one binding the
+    // plan actually consults, the agent's private state directory, so a
+    // shell borrows the one agent harness this build knows for that
+    // lookup only.
+    let harness: Box<dyn willie_harness::Harness> = match spec.kind {
+        willie_core::session::SessionKind::Shell => {
+            Box::new(willie_harness::ClaudeCode)
+        }
+        willie_core::session::SessionKind::Agent => willie_harness::registry()
+            .into_iter()
+            .find(|h| h.id() == spec.harness)
+            .ok_or_else(|| {
+                PrepareError::HarnessUnknown(spec.harness.clone())
+            })?,
+    };
     let mut plan = plan::plan(spec, harness.as_ref(), inner_exe)
         .map_err(PrepareError::Plan)?;
     if !helper.is_file() {
@@ -1056,6 +1070,51 @@ mod tests {
 
         assert_eq!(err.code(), "spec_invalid");
         assert!(err.to_string().contains("not-a-harness"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A shell session's `harness` ("zsh") never names an entry in the
+    /// tool registry, but it must still prepare -- and get the same
+    /// agent-state bind an agent session would (the design's "same
+    /// sandbox plan"), not `spec_invalid` for a harness id that was
+    /// never meant to be looked up there.
+    #[test]
+    fn a_shell_session_gets_the_same_agent_state_bind_an_agent_session_would() {
+        let root = scratch("shell-agent-state");
+        let helper = root.join("bwrap");
+        touch(&helper);
+        let bin = root.join("zsh");
+        touch(&bin);
+        let inner = inner_bin(&root);
+        let ws = root.join("ws");
+        fs::create_dir_all(&ws).unwrap();
+        // The bind is non-tolerant: `prepare` refuses a policy it cannot
+        // apply rather than silently dropping it, so the source has to
+        // exist on disk, exactly as a real image provisions it.
+        fs::create_dir_all(root.join(".willie/agent-state/claude")).unwrap();
+        let mut spec =
+            spec_under(&root, &bin.to_string_lossy(), &ws.to_string_lossy());
+        spec.harness = "zsh".into();
+        spec.kind = SessionKind::Shell;
+        spec.capabilities.agent_state = true;
+
+        let prepared = prepare(&spec, &helper, &inner.to_string_lossy())
+            .expect("a shell session should prepare like an agent session");
+
+        // Built the same way `plan()` builds it (string concatenation on
+        // `HOME`, not `Path::join`), so this matches on every host: on
+        // Windows, `root`'s own backslashes stay put and only the
+        // literal `/` suffix is forward-slashed, exactly as the bind's
+        // `dest` is.
+        let home = root.to_string_lossy().into_owned();
+        let state_dir = format!("{home}/.willie/agent-state/claude");
+        assert!(
+            prepared.plan.ops.iter().any(
+                |op| matches!(op, plan::Op::Bind { dest, .. } if dest == &state_dir)
+            ),
+            "{:?}",
+            prepared.plan.ops
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
