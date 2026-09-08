@@ -69,7 +69,7 @@ function GovernanceSegment({
       {showUsage && usageRow && clampedPct !== null && (
         <span
           role="img"
-          aria-label={`${pct}% context`}
+          aria-label={`${clampedPct}% context`}
           className="h-1.5 w-10 shrink-0 overflow-hidden rounded-full bg-muted"
         >
           <span

@@ -22,9 +22,11 @@ const READ_CAP_KIB = 512;
  * The read-only file preview beside the tree drawer: a click on a
  * file row opens it here through `projects.readFile` — never through
  * anything that could write it back, VS Code is the only path to a
- * change. It sits over the session pane below the tab strip, sliding
- * to the tree's right edge while the drawer is open and filling the
- * width right of the tree once expanded.
+ * change. Mounted next to the drawer in the shell, sharing its
+ * containing block, so its left edge sits flush against the tree's
+ * right edge while the drawer is open (`| tree | file |`), at the
+ * centre's own left edge while it is closed, and fills everything
+ * right of the tree once expanded.
  */
 export function FilePreview() {
   const { system } = useCurrentSystem();
@@ -128,7 +130,7 @@ export function FilePreview() {
       data-slot="file-preview"
       style={{ left: drawerOpen ? "var(--tree-width)" : "0" }}
       className={cn(
-        "absolute top-0 bottom-0 flex flex-col border-l bg-card transition-[left] duration-200 ease-linear",
+        "absolute inset-y-0 z-10 flex flex-col border-l bg-card shadow-lg transition-[left] duration-200 ease-linear",
         preview.expanded ? "right-0" : "w-[36rem] max-w-full",
       )}
     >

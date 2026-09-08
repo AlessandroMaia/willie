@@ -260,6 +260,11 @@ export function TreeDrawer() {
     <div
       data-slot="tree-drawer"
       aria-hidden={!open}
+      /* Parked off-screen is not gone: without `inert` every row and
+       * the editor button stay in the tab order while the drawer is
+       * closed, and `aria-hidden` over focusable content is itself the
+       * violation. */
+      inert={!open}
       className={cn(
         "absolute inset-y-0 left-0 z-10 flex w-(--tree-width) flex-col border-r bg-sidebar shadow-lg transition-transform duration-200 ease-linear",
         open ? "translate-x-0" : "-translate-x-full",

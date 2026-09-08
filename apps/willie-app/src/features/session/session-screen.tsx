@@ -10,10 +10,14 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
-import { FilePreview } from "@/features/session/file-preview";
 import { SessionTabs } from "@/features/session/session-tabs";
 import { SessionTerminal } from "@/features/session/session-terminal";
-import { finishedOf, liveOf, sessionName } from "@/lib/domain/sessions";
+import {
+  finishedOf,
+  latestResumable,
+  liveOf,
+  sessionName,
+} from "@/lib/domain/sessions";
 import type { Problem } from "@/lib/ipc";
 import { sessions as sessionsApi } from "@/lib/ipc";
 import { asProblem } from "@/lib/problem";
@@ -66,7 +70,7 @@ export function SessionScreen() {
     () => (systemId && sessions ? finishedOf(systemId, sessions) : []),
     [systemId, sessions],
   );
-  const latestFinished = finished[0] ?? null;
+  const resumable = latestResumable(finished);
 
   /* A newly opened session becomes the active tab the moment it lands
    * in the snapshot; when the active tab's own session leaves the live
@@ -133,7 +137,7 @@ export function SessionScreen() {
   }
 
   function resumeLatest(): void {
-    if (latestFinished) resumeSession(latestFinished.id);
+    if (resumable) resumeSession(resumable.id);
   }
 
   function renameSession(id: string, label: string | null): void {
@@ -169,6 +173,20 @@ export function SessionScreen() {
       {problem && <ProblemAlert problem={problem} />}
       {actionProblem && <ProblemAlert problem={actionProblem} />}
 
+      {/* Rendered whatever the live count: the workspace tree's only
+       * toggle lives in this strip, and the tree is exactly what a
+       * user reaches for while deciding what to open. */}
+      <SessionTabs
+        sessions={tabs}
+        finished={finished}
+        activeId={activeId}
+        onSelect={setActiveId}
+        onNewSession={openSession}
+        onNewZsh={openZsh}
+        onRename={renameSession}
+        onResume={resumeSession}
+      />
+
       {tabs.length === 0 ? (
         <Empty>
           <EmptyHeader>
@@ -180,38 +198,25 @@ export function SessionScreen() {
           </EmptyHeader>
           <div className="flex gap-2">
             <Button onClick={openSession}>New session</Button>
-            {latestFinished && (
+            {resumable && (
               <Button variant="outline" onClick={resumeLatest}>
-                Resume {sessionName(latestFinished)}
+                Resume {sessionName(resumable)}
               </Button>
             )}
           </div>
         </Empty>
       ) : (
-        <>
-          <SessionTabs
-            sessions={tabs}
-            finished={finished}
-            activeId={activeId}
-            onSelect={setActiveId}
-            onNewSession={openSession}
-            onNewZsh={openZsh}
-            onRename={renameSession}
-            onResume={resumeSession}
-          />
-          <div className="relative min-h-0 flex-1">
-            {tabs.map((session) => (
-              <div
-                key={session.id}
-                role="tabpanel"
-                hidden={session.id !== activeId}
-              >
-                <SessionTerminal id={session.id} title={sessionName(session)} />
-              </div>
-            ))}
-            <FilePreview />
-          </div>
-        </>
+        <div className="relative min-h-0 flex-1">
+          {tabs.map((session) => (
+            <div
+              key={session.id}
+              role="tabpanel"
+              hidden={session.id !== activeId}
+            >
+              <SessionTerminal id={session.id} title={sessionName(session)} />
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

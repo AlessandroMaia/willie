@@ -262,6 +262,18 @@ describe("SessionScreen", () => {
     expect(ipc.sessions.resume).toHaveBeenCalledWith("proj_1", "sess_done_1");
   });
 
+  /* The workspace tree's only toggle lives in the tab strip, and a
+   * system with nothing live is exactly when someone browses the files
+   * to decide what to open — so the strip outlives its tabs. */
+  it("the_empty_state_still_offers_the_workspace_tree", async () => {
+    render(<SessionScreen />);
+
+    expect(await screen.findByText("No live sessions")).toBeDefined();
+    expect(
+      screen.getByRole("button", { name: "Workspace tree" }),
+    ).toBeDefined();
+  });
+
   it("a_failed_new_session_shows_the_problem_instead_of_failing_silently", async () => {
     const user = userEvent.setup();
     ipc.sessions.open.mockRejectedValueOnce({

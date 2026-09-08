@@ -149,6 +149,52 @@ describe("SessionsPanel", () => {
     expect(screen.getByRole("button", { name: "Open" })).toBeDefined();
     expect(screen.getByRole("button", { name: "Resume" })).toBeDefined();
   });
+
+  /* The harness continues the workspace's most recent conversation, so
+   * a Resume on an older row would silently reopen a different session
+   * than the one it names, and a shell has no conversation at all. */
+  it("only_the_latest_finished_agent_session_offers_resume", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <SessionsPanel
+        live={[]}
+        finished={[
+          session({
+            id: "sess_shell_1",
+            kind: "shell",
+            state: { state: "exited", code: 0, signal: null },
+            finished_at: "300",
+          }),
+          session({
+            id: "sess_done_2",
+            label: "newest agent",
+            state: { state: "exited", code: 0, signal: null },
+            finished_at: "200",
+          }),
+          session({
+            id: "sess_done_1",
+            label: "older agent",
+            state: { state: "exited", code: 0, signal: null },
+            finished_at: "100",
+          }),
+        ]}
+        onOpen={vi.fn()}
+        onResume={vi.fn()}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Sessions" }));
+    await screen.findByText("newest agent");
+
+    expect(screen.getAllByRole("button", { name: "Resume" })).toHaveLength(1);
+    expect(screen.getByText("only the latest can be resumed")).toBeDefined();
+    /* The finished shell is named like its live tab, and says why it
+     * has no Resume rather than offering one the daemon would honour
+     * as a fresh agent session. */
+    expect(screen.getByText("$ zsh")).toBeDefined();
+    expect(screen.getByText("no conversation")).toBeDefined();
+  });
 });
 
 describe("resuming a finished session from the panel", () => {

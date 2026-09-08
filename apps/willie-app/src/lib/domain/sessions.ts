@@ -71,6 +71,19 @@ export function finishedOf(projectId: string, sessions: Session[]): Session[] {
   );
 }
 
+/**
+ * The one finished session a resume can honestly name. `resume_from`
+ * records which session the new one continues, but the harness is
+ * launched with a bare "continue", which always picks the workspace's
+ * most recent conversation — so only the newest finished agent session
+ * is what a resume would actually reopen. A shell has no conversation
+ * to continue at all. Takes a project's finished list, newest first
+ * (`finishedOf`), and returns `null` when it holds no agent session.
+ */
+export function latestResumable(finished: Session[]): Session | null {
+  return finished.find((s) => (s.kind ?? "agent") === "agent") ?? null;
+}
+
 export type Posture = "full" | "reduced" | "unknown";
 
 const EMPTY_SANDBOX: SandboxState = {

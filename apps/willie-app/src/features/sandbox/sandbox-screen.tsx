@@ -198,21 +198,17 @@ export function SandboxScreen() {
             {mechanismLabel(m)}
           </StatusBadge>
         ))}
+        {/* A mechanism the kernel could not offer and one that
+         * degraded read the same here, in the warning tone: the wire
+         * carries mechanism names only, no per-mechanism reason, and a
+         * chip may not hover a line it does not have. */}
         {mechanisms.unavailable.map((m) => (
-          <StatusBadge
-            key={`unavailable-${m}`}
-            tone="warning"
-            title="the kernel on this machine could not offer it"
-          >
+          <StatusBadge key={`unavailable-${m}`} tone="warning">
             {mechanismLabel(m)}
           </StatusBadge>
         ))}
         {mechanisms.degraded.map((m) => (
-          <StatusBadge
-            key={`degraded-${m}`}
-            tone="warning"
-            title="applied, but degraded during a session"
-          >
+          <StatusBadge key={`degraded-${m}`} tone="warning">
             {mechanismLabel(m)}
           </StatusBadge>
         ))}

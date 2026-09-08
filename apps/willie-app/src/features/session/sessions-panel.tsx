@@ -10,7 +10,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
-import { sessionName } from "@/lib/domain/sessions";
+import { latestResumable, sessionName } from "@/lib/domain/sessions";
 import type { Session } from "@/lib/proto";
 import { cn } from "@/lib/utils";
 
@@ -33,7 +33,10 @@ interface SessionsPanelProps {
  * The current system's sessions, live then finished, in a side sheet
  * off its own trigger at the tab strip's right end. Opening or
  * resuming a row closes the sheet, since either one is about to bring
- * a tab into view behind it.
+ * a tab into view behind it. Only one finished row can be resumed —
+ * see `latestResumable`: the harness continues the workspace's most
+ * recent conversation, so a Resume anywhere else would reopen a
+ * different session than the one it names.
  */
 export function SessionsPanel({
   live,
@@ -42,6 +45,8 @@ export function SessionsPanel({
   onResume,
 }: SessionsPanelProps) {
   const [sheetOpen, setSheetOpen] = useState(false);
+
+  const resumable = latestResumable(finished);
 
   function openAndClose(id: string): void {
     onOpen(id);
@@ -121,20 +126,32 @@ export function SessionsPanel({
                   className="flex items-center justify-between gap-2 py-1"
                 >
                   <span className="flex min-w-0 flex-col truncate text-sm">
-                    <span className="truncate">{sessionName(session)}</span>
+                    <span className="truncate">
+                      {session.kind === "shell"
+                        ? "$ zsh"
+                        : sessionName(session)}
+                    </span>
                     {session.finished_at && (
                       <span className="text-muted-foreground text-xs">
                         {relativeTime(session.finished_at)}
                       </span>
                     )}
                   </span>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => resumeAndClose(session.id)}
-                  >
-                    Resume
-                  </Button>
+                  {session.id === resumable?.id ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => resumeAndClose(session.id)}
+                    >
+                      Resume
+                    </Button>
+                  ) : (
+                    <span className="shrink-0 text-muted-foreground text-xs">
+                      {session.kind === "shell"
+                        ? "no conversation"
+                        : "only the latest can be resumed"}
+                    </span>
+                  )}
                 </div>
               ))
             )}

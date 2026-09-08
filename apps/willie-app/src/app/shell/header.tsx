@@ -13,7 +13,7 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { useSetupDrawer } from "@/store/use-setup-drawer";
 
 interface HeaderProps {
-  /** Task 9's `useCurrentSystem()` supplies this; until then the
+  /** The current system's name; absent (no system registered yet) the
    * centre shows the bare app name. */
   systemName?: string;
 }
@@ -152,13 +152,14 @@ function WindowControls() {
   );
 }
 
-/** The 36px frameless title bar: the sidebar and setup drawer toggles
- * on the left, a draggable centre carrying the app and system name,
- * Willie's own window controls on the right. With `decorations:
- * false` (Task 7) this is the only way to move or close the window. */
+/** The frameless title bar: the sidebar and setup drawer toggles on
+ * the left, a draggable centre carrying the app and system name,
+ * Willie's own window controls on the right. With `decorations: false`
+ * this is the only way to move or close the window. Its height is the
+ * `--header-height` token, the same one the shell's grid row reads. */
 export function Header({ systemName }: HeaderProps) {
   return (
-    <header className="flex h-9 shrink-0 items-center gap-1 border-b bg-sidebar px-1">
+    <header className="flex h-(--header-height) shrink-0 items-center gap-1 border-b bg-sidebar px-1">
       <SidebarToggle />
       <SettingsButton />
       <DragRegionTitle systemName={systemName} />

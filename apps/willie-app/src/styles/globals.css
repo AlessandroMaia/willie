@@ -65,6 +65,10 @@
   /* The tree drawer's fixed width — a size token, not a colour, so it
    * needs no dark-mode override. */
   --tree-width: 280px;
+  /* The frameless header's height. The shell's grid row and the header
+   * itself must agree exactly, or the body row is off by the
+   * difference, so both read it from here. */
+  --header-height: 2.25rem;
   --background: oklch(0.99 0.004 85);
   --foreground: oklch(0.16 0.008 60);
   --card: oklch(0.985 0.004 85);

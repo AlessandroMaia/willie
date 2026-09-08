@@ -24,16 +24,17 @@ function isProjectLive(sessions: Session[], projectId: string): boolean {
 
 /**
  * The current system, up top in the sidebar: glyph, name, and its
- * workspace path — a branch joins it only once the tree drawer's root
- * load has resolved one, never a placeholder in the meantime. Its
- * menu is a searchable list of every system, each with the same live
- * dot the trigger shows for the current one, plus "Add system…" which
- * hands off to the setup drawer's Systems section rather than adding
- * one itself.
+ * workspace path with the branch. The branch is the daemon's own
+ * `Project.branch`, read as of the last snapshot; the tree drawer's
+ * live root load overrides it while it is open, since that one is read
+ * at the moment the tree was listed. Its menu is a searchable list of
+ * every system, each with the same live dot the trigger shows for the
+ * current one, plus "Add system…" which hands off to the setup
+ * drawer's Systems section rather than adding one itself.
  */
 export function SystemSelector() {
-  const { system, setSystem } = useCurrentSystem();
-  const { branch } = useTreeDrawer();
+  const { system, setSystem, loading } = useCurrentSystem();
+  const { branch: treeBranch } = useTreeDrawer();
   const { status } = useEngineStatus();
   const daemonRunning = status?.daemon.state === "running";
   const { snapshot } = useSnapshot(daemonRunning);
@@ -63,6 +64,7 @@ export function SystemSelector() {
 
   const collapsed = sidebarState === "collapsed";
   const currentLive = system !== null && isProjectLive(sessions, system.id);
+  const branch = treeBranch ?? system?.branch ?? null;
 
   return (
     <Popover
@@ -86,8 +88,11 @@ export function SystemSelector() {
         </span>
         {!collapsed && (
           <span className="flex min-w-0 flex-1 flex-col items-start text-left">
+            {/* "No system" is a fact about the registry, so it may not
+             * be shown while the saved preference is still being read
+             * — that reads as "you have none" for one paint. */}
             <span className="truncate font-medium text-sm">
-              {system?.name ?? "No system"}
+              {system?.name ?? (loading ? "Loading…" : "No system")}
             </span>
             {system && (
               <span className="truncate text-muted-foreground text-xs">
@@ -126,6 +131,11 @@ export function SystemSelector() {
                   label={live ? "live" : "not running"}
                 />
                 <span className="truncate">{project.name}</span>
+                {project.branch && (
+                  <span className="truncate text-muted-foreground text-xs">
+                    {project.branch}
+                  </span>
+                )}
                 {system?.id === project.id && (
                   <CheckIcon className="ml-auto size-4" />
                 )}

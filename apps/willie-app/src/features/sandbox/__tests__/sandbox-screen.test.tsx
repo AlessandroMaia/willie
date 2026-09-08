@@ -270,7 +270,7 @@ describe("SandboxScreen", () => {
     ).toBe("true");
   });
 
-  it("shows the mechanism chips with a tone per state and the reason on hover", async () => {
+  it("shows_the_mechanism_chips_with_a_tone_per_state", async () => {
     ipc.projects.snapshot.mockResolvedValue(
       snapshot([
         session({
@@ -287,11 +287,20 @@ describe("SandboxScreen", () => {
 
     renderScreen();
 
+    function toneOf(label: string): string | null | undefined {
+      return screen
+        .getByText(label)
+        .closest("[data-tone]")
+        ?.getAttribute("data-tone");
+    }
+
     expect(await screen.findByText("syscall filter")).toBeDefined();
-    const unavailable = screen.getByText("path rules");
-    expect(unavailable.getAttribute("title")).toMatch(/kernel/);
-    const degraded = screen.getByText("limits");
-    expect(degraded.getAttribute("title")).toMatch(/degraded/);
+    expect(toneOf("syscall filter")).toBe("ok");
+    /* Both the unavailable and the degraded mechanism warn, and
+     * neither carries a hover line: the wire has no reason to show. */
+    expect(toneOf("path rules")).toBe("warning");
+    expect(toneOf("limits")).toBe("warning");
+    expect(screen.getByText("path rules").getAttribute("title")).toBeNull();
   });
 
   it("shows the no-system empty state and opens the setup drawer", async () => {

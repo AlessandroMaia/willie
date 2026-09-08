@@ -48,6 +48,21 @@ export function SystemActionsMenu() {
       .catch(() => setEditorAvailable(false));
   }, []);
 
+  /* Every dialog here acts on whichever system is current when its
+   * Confirm is pressed, and Remove deletes the workspace by default.
+   * The current system can re-resolve underneath an open dialog — a
+   * removal by another client makes `resolveCurrent` fall back to the
+   * first project — so a system change closes all three rather than
+   * silently retargeting a confirmation the user already read. */
+  const systemId = system?.id;
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reacts to a system change on purpose — the body has nothing left to read once the dialogs are closed
+  useEffect(() => {
+    setRenaming(false);
+    setRelocating(false);
+    setRemoving(false);
+  }, [systemId]);
+
   function openInExplorer(): void {
     if (!system) return;
     projectsApi.openInExplorer(system.workspace).catch((error: unknown) =>
@@ -192,6 +207,7 @@ export function SystemActionsMenu() {
       </DropdownMenu>
 
       <RenameSystemDialog
+        key={`rename-${systemId}`}
         project={renaming ? system : null}
         name={renameValue}
         problem={renameProblem}
@@ -201,6 +217,7 @@ export function SystemActionsMenu() {
       />
 
       <RelocateProjectDialog
+        key={`relocate-${systemId}`}
         project={relocating ? system : null}
         path={relocatePath}
         problem={relocateProblem}
@@ -211,6 +228,7 @@ export function SystemActionsMenu() {
       />
 
       <RemoveProjectDialog
+        key={`remove-${systemId}`}
         project={removing ? system : null}
         deleteWorkspace={deleteWorkspace}
         problem={removeProblem}

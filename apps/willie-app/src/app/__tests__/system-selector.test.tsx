@@ -140,10 +140,12 @@ describe("the system selector", () => {
     renderSelector();
 
     /* The snapshot resolves on its own; the preference read is the
-     * only thing still pending. Until it settles, the trigger must
-     * show no system at all — never the first project, which
-     * `resolveCurrent` would otherwise pick. */
-    expect(await screen.findByText("No system")).toBeDefined();
+     * only thing still pending. Until it settles the trigger says it
+     * is loading — never "No system", which is a fact about the
+     * registry, and never the first project, which `resolveCurrent`
+     * would otherwise pick. */
+    expect(await screen.findByText("Loading…")).toBeDefined();
+    expect(screen.queryByText("No system")).toBeNull();
     expect(screen.queryByText("willie")).toBeNull();
     expect(screen.queryByText("other-system")).toBeNull();
 
