@@ -126,9 +126,17 @@ export function SessionScreen() {
     void runAction(() => sessionsApi.open(system.id, "shell"));
   }
 
+  function resumeSession(id: string): void {
+    if (!system) return;
+    void runAction(() => sessionsApi.resume(system.id, id));
+  }
+
   function resumeLatest(): void {
-    if (!system || !latestFinished) return;
-    void runAction(() => sessionsApi.resume(system.id, latestFinished.id));
+    if (latestFinished) resumeSession(latestFinished.id);
+  }
+
+  function renameSession(id: string, label: string | null): void {
+    void runAction(() => sessionsApi.rename(id, label));
   }
 
   if (loading) {
@@ -182,10 +190,13 @@ export function SessionScreen() {
         <>
           <SessionTabs
             sessions={tabs}
+            finished={finished}
             activeId={activeId}
             onSelect={setActiveId}
             onNewSession={openSession}
             onNewZsh={openZsh}
+            onRename={renameSession}
+            onResume={resumeSession}
           />
           {tabs.map((session) => (
             <div

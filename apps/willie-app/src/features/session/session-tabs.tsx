@@ -1,5 +1,4 @@
-import { FolderTreeIcon, PanelRightIcon, PlusIcon } from "lucide-react";
-import { TONE_DOT } from "@/components/tone";
+import { FolderTreeIcon, PlusIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -7,7 +6,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { sessionName } from "@/lib/domain/sessions";
+import { RenameTab } from "@/features/session/rename-tab";
+import { SessionsPanel } from "@/features/session/sessions-panel";
 import type { Session } from "@/lib/proto";
 import { cn } from "@/lib/utils";
 
@@ -15,25 +15,34 @@ interface SessionTabsProps {
   /** Every live session of the current system, agent sessions first —
    * the screen owns that ordering, this strip only renders it. */
   sessions: Session[];
+  /** The current system's finished sessions, newest first — forwarded
+   * straight to the Sessions panel; the strip itself never reads them
+   * beyond that. */
+  finished: Session[];
   activeId: string | null;
   onSelect: (id: string) => void;
   onNewSession: () => void;
   onNewZsh: () => void;
+  onRename: (id: string, label: string | null) => void;
+  onResume: (id: string) => void;
 }
 
 /**
  * One tab per live session: an agent tab carries a live dot and the
- * session's own name, a shell tab always reads "$ zsh" — renaming a
- * shell session never changes that label. The tree toggle and the
- * Sessions-panel button on either end are inert placeholders; Tasks 14
- * and 13 wire them up.
+ * session's own name, and renames in place on a double-click; a shell
+ * tab always reads "$ zsh" and never renames. The tree toggle is
+ * still an inert placeholder; Task 14 wires it up. The Sessions panel
+ * at the right end replaces Task 12's disabled placeholder.
  */
 export function SessionTabs({
   sessions,
+  finished,
   activeId,
   onSelect,
   onNewSession,
   onNewZsh,
+  onRename,
+  onResume,
 }: SessionTabsProps) {
   return (
     <div
@@ -51,31 +60,35 @@ export function SessionTabs({
 
       {sessions.map((session) => {
         const active = session.id === activeId;
-        const isShell = session.kind === "shell";
+
+        if (session.kind === "shell") {
+          return (
+            <button
+              key={session.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => onSelect(session.id)}
+              className={cn(
+                "flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-sm",
+                active
+                  ? "bg-muted text-foreground"
+                  : "text-muted-foreground hover:bg-muted/50",
+              )}
+            >
+              $ zsh
+            </button>
+          );
+        }
 
         return (
-          <button
+          <RenameTab
             key={session.id}
-            type="button"
-            role="tab"
-            aria-selected={active}
-            onClick={() => onSelect(session.id)}
-            className={cn(
-              "flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1 text-sm",
-              active
-                ? "bg-muted text-foreground"
-                : "text-muted-foreground hover:bg-muted/50",
-            )}
-          >
-            {isShell ? (
-              "$ zsh"
-            ) : (
-              <>
-                <span className={cn("size-1.5 rounded-full", TONE_DOT.ok)} />
-                {sessionName(session)}
-              </>
-            )}
-          </button>
+            session={session}
+            active={active}
+            onSelect={onSelect}
+            onRename={onRename}
+          />
         );
       })}
 
@@ -95,15 +108,12 @@ export function SessionTabs({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Sessions"
-        disabled
-        className="ml-auto"
-      >
-        <PanelRightIcon />
-      </Button>
+      <SessionsPanel
+        live={sessions}
+        finished={finished}
+        onOpen={onSelect}
+        onResume={onResume}
+      />
     </div>
   );
 }
