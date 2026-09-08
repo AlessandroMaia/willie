@@ -1,8 +1,11 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SystemSelector } from "@/app/shell/system-selector";
+import { SidebarProvider } from "@/components/ui/sidebar";
 import type { EngineStatus } from "@/lib/ipc";
 import type { Project, Snapshot } from "@/lib/proto";
+import { resetStores } from "@/test-support/reset-stores";
 
 const STATUS: EngineStatus = {
   engine_version: "0.1.0",
@@ -67,25 +70,15 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/lib/ipc", () => ipc);
 
-let SystemSelector: typeof import("@/app/shell/system-selector").SystemSelector;
-let SidebarProvider: typeof import("@/components/ui/sidebar").SidebarProvider;
-
 /* `useEngineStatus`, `useSnapshot` and `useCurrentSystem` back onto
- * module-level singleton stores; reset the module graph before every
- * test so none of them carries state from the test before it.
- * `SidebarProvider` is re-imported alongside `SystemSelector` from the
- * same fresh module graph — `useSidebar`'s context is a module-level
- * `createContext()`, so a `SidebarProvider` left over from a stale
- * module instance would not be the same context `SystemSelector`'s
- * `useSidebar()` reads. */
-beforeEach(async () => {
-  vi.resetModules();
+ * module-level singleton stores; reset them before every test so none
+ * carries state from the test before it. */
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.engine.status.mockResolvedValue(STATUS);
   ipc.projects.snapshot.mockResolvedValue(SNAPSHOT);
   ipc.ui.prefs.mockResolvedValue({ current_project: null });
-  ({ SystemSelector } = await import("@/app/shell/system-selector"));
-  ({ SidebarProvider } = await import("@/components/ui/sidebar"));
 });
 
 function renderSelector() {

@@ -2,8 +2,12 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useEffect } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { FilePreview } from "@/features/session/file-preview";
 import type { EngineStatus } from "@/lib/ipc";
 import type { Project, Snapshot } from "@/lib/proto";
+import { useFilePreview } from "@/store/use-file-preview";
+import { useTreeDrawer } from "@/store/use-tree-drawer";
+import { resetStores } from "@/test-support/reset-stores";
 
 const STATUS: EngineStatus = {
   engine_version: "0.1.0",
@@ -61,10 +65,6 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/lib/ipc", () => ipc);
 
-let FilePreview: typeof import("@/features/session/file-preview").FilePreview;
-let useFilePreview: typeof import("@/store/use-file-preview").useFilePreview;
-let useTreeDrawer: typeof import("@/store/use-tree-drawer").useTreeDrawer;
-
 /* Stands in for a tree row's click: opens a file directly through the
  * store, the same call `tree-drawer.tsx` makes on a file row. `open`
  * additionally opens the tree drawer's own store — `useTreeDrawer` is
@@ -91,17 +91,14 @@ function OpenFileHarness({
   return <FilePreview />;
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.engine.status.mockResolvedValue(STATUS);
   ipc.ui.prefs.mockResolvedValue({ current_project: null });
   ipc.projects.snapshot.mockResolvedValue(snapshot());
   ipc.editorAvailable.mockResolvedValue(true);
   ipc.projects.openInEditor.mockResolvedValue(undefined);
-  ({ FilePreview } = await import("@/features/session/file-preview"));
-  ({ useFilePreview } = await import("@/store/use-file-preview"));
-  ({ useTreeDrawer } = await import("@/store/use-tree-drawer"));
 });
 
 describe("the file preview", () => {

@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Session, Snapshot, UsageSnapshot } from "@/lib/proto";
+import { UsagePanel } from "@/plugins/usage/usage-panel";
+import { resetStores } from "@/test-support/reset-stores";
 
 /* The bridge is the only I/O in the frontend and the only module a
  * test fakes. `projects.snapshot`/`onDaemonEvent` back `useSnapshot`,
@@ -14,8 +16,6 @@ const ipc = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/ipc", () => ipc);
-
-let UsagePanel: typeof import("@/plugins/usage/usage-panel").UsagePanel;
 
 function usageSnapshot(overrides: Partial<UsageSnapshot> = {}): UsageSnapshot {
   return {
@@ -43,11 +43,10 @@ function daemonSnapshot(sessions: Session[] = []): Snapshot {
   return { seq: 1, projects: [], jobs: [], sessions };
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.projects.snapshot.mockResolvedValue(daemonSnapshot());
-  ({ UsagePanel } = await import("@/plugins/usage/usage-panel"));
 });
 
 afterEach(() => {
@@ -124,6 +123,24 @@ describe("UsagePanel", () => {
 
     await screen.findByText("Session usage");
     expect(screen.queryByText("sess_1")).toBeNull();
+  });
+
+  /* The map is built from the daemon's own session list; a usage row
+   * for a session that list does not carry (it finished and was pruned,
+   * or the snapshot has not caught up) belongs to no known project, so
+   * it is filtered out rather than attributed to this one. */
+  it("filters out a usage row whose session is absent from the snapshot", async () => {
+    ipc.projects.snapshot.mockResolvedValue(daemonSnapshot([]));
+    ipc.usage.snapshot.mockResolvedValue(
+      usageSnapshot({
+        sessions: [{ id: "sess_gone", tokens: 999, context_pct: 12 }],
+      }),
+    );
+
+    render(<UsagePanel projectId="proj_1" />);
+
+    await screen.findByText("Session usage");
+    expect(screen.queryByText("sess_gone")).toBeNull();
   });
 
   it("shows only the current project's row in the per-project totals", async () => {

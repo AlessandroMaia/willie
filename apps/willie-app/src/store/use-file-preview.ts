@@ -37,6 +37,11 @@ function close(): void {
   setState(null);
 }
 
+/** Back to no file open. Only a test harness calls this. */
+export function resetForTests(): void {
+  close();
+}
+
 export interface FilePreviewHandle {
   preview: FilePreviewState | null;
   openFile: (path: string) => void;

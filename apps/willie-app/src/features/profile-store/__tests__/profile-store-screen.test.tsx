@@ -1,5 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ProfileStoreScreen } from "@/features/profile-store/profile-store-screen";
+import { resetStores } from "@/test-support/reset-stores";
 
 const ipc = vi.hoisted(() => ({
   profiles: {
@@ -15,14 +17,9 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/lib/ipc", () => ipc);
 
-let ProfileStoreScreen: typeof import("@/features/profile-store/profile-store-screen").ProfileStoreScreen;
-
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   vi.clearAllMocks();
-  ({ ProfileStoreScreen } = await import(
-    "@/features/profile-store/profile-store-screen"
-  ));
+  resetStores();
 });
 
 describe("ProfileStoreScreen", () => {

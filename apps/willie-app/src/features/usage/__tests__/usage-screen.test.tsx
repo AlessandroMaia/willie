@@ -1,7 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { UsageScreen } from "@/features/usage/usage-screen";
 import type { EngineStatus } from "@/lib/ipc";
 import type { Project, Session, Snapshot } from "@/lib/proto";
+import { resetStores } from "@/test-support/reset-stores";
 
 const STATUS: EngineStatus = {
   engine_version: "0.1.0",
@@ -63,15 +65,13 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/lib/ipc", () => ipc);
 
-let UsageScreen: typeof import("@/features/usage/usage-screen").UsageScreen;
-
 function snapshot(projects: Project[] = [project()]): Snapshot {
   return { seq: 1, projects, jobs: [], sessions: [session()] };
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.engine.status.mockResolvedValue(STATUS);
   ipc.projects.snapshot.mockResolvedValue(snapshot());
   ipc.ui.prefs.mockResolvedValue({ current_project: null });
@@ -81,7 +81,6 @@ beforeEach(async () => {
     projects: [{ id: "proj_1", tokens: 42 }],
     fetched_at: "2026-09-08T00:00:00Z",
   });
-  ({ UsageScreen } = await import("@/features/usage/usage-screen"));
 });
 
 describe("UsageScreen", () => {

@@ -1,8 +1,10 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ProfilesScreen } from "@/features/profiles/profiles-screen";
 import type { EngineStatus } from "@/lib/ipc";
 import type { Project, Snapshot } from "@/lib/proto";
+import { resetStores } from "@/test-support/reset-stores";
 
 const STATUS: EngineStatus = {
   engine_version: "0.1.0",
@@ -53,20 +55,17 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/lib/ipc", () => ipc);
 
-let ProfilesScreen: typeof import("@/features/profiles/profiles-screen").ProfilesScreen;
-
 function snapshot(projects: Project[] = [project()]): Snapshot {
   return { seq: 1, projects, jobs: [], sessions: [] };
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.engine.status.mockResolvedValue(STATUS);
   ipc.projects.snapshot.mockResolvedValue(snapshot());
   ipc.ui.prefs.mockResolvedValue({ current_project: null });
   ipc.profiles.list.mockResolvedValue([{ name: "acme", fragments_active: [] }]);
-  ({ ProfilesScreen } = await import("@/features/profiles/profiles-screen"));
 });
 
 describe("ProfilesScreen", () => {
@@ -122,6 +121,20 @@ describe("ProfilesScreen", () => {
     expect(ipc.plugins.enable).toHaveBeenCalledWith("profile", "proj_1");
     expect(await screen.findByLabelText("Profile")).toBeDefined();
     expect(ipc.profiles.list.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("a_refusal_that_is_not_plugin_disabled_is_a_problem_not_the_enable_state", async () => {
+    ipc.profiles.list.mockRejectedValue({
+      code: "daemon_transport",
+      message: "the daemon pipe broke",
+      remediation: "click Run doctor",
+    });
+
+    render(<ProfilesScreen />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("daemon_transport");
+    expect(screen.queryByText("Profiles are off for this system")).toBeNull();
   });
 
   it("shows a skeleton, not the empty state, while the current-system preference is still loading", async () => {

@@ -5,14 +5,21 @@ import {
 } from "@/lib/domain/engine-status";
 import { engine } from "@/lib/ipc";
 
+/* Both sides of the bridge are reached through a closure, never read
+ * at module load: importing this store must not touch the bridge, only
+ * acquiring it does. */
 const store = createEngineStatusStore({
   status: () => engine.status(),
-  onStatus: engine.onStatus,
+  onStatus: (cb) => engine.onStatus(cb),
 });
 
 export interface EngineStatusHandle extends EngineStatusState {
   refresh: () => Promise<void>;
 }
+
+/** Drops the last status and every holder. Only a test harness calls
+ * this. */
+export const resetForTests = store.reset;
 
 /**
  * Subscribes to the engine's view of itself. Unlike `useSnapshot`,

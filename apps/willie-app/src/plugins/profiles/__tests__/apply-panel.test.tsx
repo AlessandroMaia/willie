@@ -2,6 +2,8 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Change, ProfileSummary } from "@/lib/proto";
+import { ApplyPanel } from "@/plugins/profiles/apply-panel";
+import { resetStores } from "@/test-support/reset-stores";
 
 /* The bridge is the only I/O in the frontend and the only module a test
  * fakes. Mirrors the shape of every other panel test's hoisted fake
@@ -17,17 +19,14 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/lib/ipc", () => ipc);
 
-let ApplyPanel: typeof import("@/plugins/profiles/apply-panel").ApplyPanel;
-
 function summary(overrides: Partial<ProfileSummary> = {}): ProfileSummary {
   return { name: "acme", fragments_active: [], ...overrides };
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.profiles.list.mockResolvedValue([summary()]);
-  ({ ApplyPanel } = await import("@/plugins/profiles/apply-panel"));
 });
 
 describe("ApplyPanel", () => {

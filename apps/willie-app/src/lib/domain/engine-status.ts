@@ -32,6 +32,11 @@ export interface EngineStatusStore {
   /** Re-reads the status now and resolves after the state has been
    * updated, so a caller can await it right after an action. */
   refresh: () => Promise<void>;
+  /** Forgets every holder and the last status, and invalidates what is
+   * in flight. Only a test harness calls this: unlike a release, which
+   * deliberately keeps the last status on screen, a test must start
+   * from "nothing known yet". */
+  reset: () => void;
 }
 
 /**
@@ -107,6 +112,13 @@ export function createEngineStatusStore(
       };
     },
     refresh: () => refresh(generation),
+    reset() {
+      generation += 1;
+      holders = 0;
+      unlisten?.();
+      unlisten = undefined;
+      set({ status: null, problem: null });
+    },
   };
 }
 

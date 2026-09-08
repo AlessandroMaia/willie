@@ -53,6 +53,14 @@ function ensureLoaded(): void {
     });
 }
 
+/** Back to "nothing read yet", the one `ui.prefs()` read included.
+ * Only a test harness calls this — the app reads the preference once
+ * per launch and never unreads it. */
+export function resetForTests(): void {
+  started = false;
+  setState({ preferred: null, loading: true });
+}
+
 export interface CurrentSystemHandle {
   system: Project | null;
   setSystem: (id: string) => void;

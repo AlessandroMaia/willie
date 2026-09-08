@@ -1,8 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SessionScreen } from "@/features/session/session-screen";
+import { SessionsPanel } from "@/features/session/sessions-panel";
 import type { EngineStatus } from "@/lib/ipc";
 import type { Event, Project, Session, Snapshot } from "@/lib/proto";
+import { useFocusedSession } from "@/store/use-focused-session";
+import { resetStores } from "@/test-support/reset-stores";
 
 const STATUS: EngineStatus = {
   engine_version: "0.1.0",
@@ -65,10 +69,6 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/lib/ipc", () => ipc);
 
-let SessionScreen: typeof import("@/features/session/session-screen").SessionScreen;
-let SessionsPanel: typeof import("@/features/session/sessions-panel").SessionsPanel;
-let useFocusedSession: typeof import("@/store/use-focused-session").useFocusedSession;
-
 function project(): Project {
   return {
     id: "proj_1",
@@ -108,15 +108,12 @@ function FocusedProbe() {
   return <div data-testid="focused">{sessionId ?? "none"}</div>;
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.engine.status.mockResolvedValue(STATUS);
   ipc.ui.prefs.mockResolvedValue({ current_project: null });
   ipc.projects.snapshot.mockResolvedValue(snapshot());
-  ({ SessionScreen } = await import("@/features/session/session-screen"));
-  ({ SessionsPanel } = await import("@/features/session/sessions-panel"));
-  ({ useFocusedSession } = await import("@/store/use-focused-session"));
 });
 
 describe("SessionsPanel", () => {

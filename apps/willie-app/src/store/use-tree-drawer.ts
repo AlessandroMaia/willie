@@ -39,6 +39,12 @@ function setBranch(branch: string | null): void {
   setState({ ...state, branch });
 }
 
+/** Back to closed, with no branch known. Only a test harness calls
+ * this. */
+export function resetForTests(): void {
+  setState({ open: false, branch: null });
+}
+
 export interface TreeDrawerHandle extends TreeDrawerState {
   toggle: () => void;
   close: () => void;

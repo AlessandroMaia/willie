@@ -2,13 +2,14 @@ import { createMemoryHistory } from "@tanstack/react-router";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { App } from "@/app/app";
+import { createAppRouter } from "@/app/router";
 import type { EngineStatus } from "@/lib/ipc";
 import type { Snapshot } from "@/lib/proto";
+import { resetStores } from "@/test-support/reset-stores";
 
-/* The Session screen (Task 12) hosts a real `SessionTerminal` for every
- * live session, and this suite resets the module graph for every test
- * (see the `beforeEach` below) — without this, the real `@xterm/xterm`
- * would be re-imported and re-initialised from scratch on every case.
+/* The Session screen hosts a real `SessionTerminal` for every live
+ * session, and jsdom has no canvas for `@xterm/xterm` to render into.
  * A fake stands in, same shape `session-screen.test.tsx` uses. */
 vi.mock("@xterm/xterm", () => {
   class FakeTerminal {
@@ -140,21 +141,16 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 
-let App: typeof import("@/app/app").App;
-let createAppRouter: typeof import("@/app/router").createAppRouter;
-
 /* `useEngineStatus`, `useSnapshot` and `useCurrentSystem` back onto
- * module-level singleton stores; reset the module graph before every
- * test so none of them carries state from the test before it (same
- * reasoning as shell.test.tsx). */
-beforeEach(async () => {
-  vi.resetModules();
+ * module-level singleton stores; reset them before every test so none
+ * carries state from the test before it (same reasoning as
+ * shell.test.tsx). */
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.engine.status.mockResolvedValue(STATUS);
   ipc.projects.snapshot.mockResolvedValue(SNAPSHOT);
   ipc.ui.prefs.mockResolvedValue({ current_project: null });
-  ({ App } = await import("@/app/app"));
-  ({ createAppRouter } = await import("@/app/router"));
 });
 
 function renderApp(path = "/session") {
@@ -192,7 +188,12 @@ describe("the setup drawer", () => {
     await vi.waitFor(() =>
       expect(router.state.location.pathname).toBe("/setup/tools"),
     );
-    /* The drawer closed: none of its rows are on screen any more. */
-    expect(screen.queryByRole("button", { name: /Engine/ })).toBeNull();
+    /* The drawer closed: none of its rows are on screen any more.
+     * Awaited, not asserted straight after the navigation — the sheet
+     * leaves the DOM one frame later, when its closing transition
+     * ends. */
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("button", { name: /Engine/ })).toBeNull(),
+    );
   });
 });

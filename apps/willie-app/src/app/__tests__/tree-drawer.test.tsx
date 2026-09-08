@@ -1,9 +1,14 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { TreeDrawer } from "@/app/shell/tree-drawer";
 import { TONE_TEXT } from "@/components/tone";
+import { FilePreview } from "@/features/session/file-preview";
 import type { EngineStatus } from "@/lib/ipc";
 import type { Project, Snapshot, TreeEntry } from "@/lib/proto";
+import { useCurrentSystem } from "@/store/use-current-system";
+import { useTreeDrawer } from "@/store/use-tree-drawer";
+import { resetStores } from "@/test-support/reset-stores";
 
 const STATUS: EngineStatus = {
   engine_version: "0.1.0",
@@ -95,11 +100,6 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/lib/ipc", () => ipc);
 
-let TreeDrawer: typeof import("@/app/shell/tree-drawer").TreeDrawer;
-let FilePreview: typeof import("@/features/session/file-preview").FilePreview;
-let useTreeDrawer: typeof import("@/store/use-tree-drawer").useTreeDrawer;
-let useCurrentSystem: typeof import("@/store/use-current-system").useCurrentSystem;
-
 /* A probe rendered alongside the real components: the toggle button
  * `session-tabs.tsx` normally hosts and the system selector's own
  * system switch, standing in here so the drawer can be opened and the
@@ -121,9 +121,9 @@ function Harness() {
   );
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.engine.status.mockResolvedValue(STATUS);
   ipc.ui.prefs.mockResolvedValue({ current_project: null });
   ipc.projects.snapshot.mockResolvedValue(snapshot());
@@ -134,10 +134,6 @@ beforeEach(async () => {
     if (path === "src") return { entries: SRC_ENTRIES };
     throw new Error(`unexpected path: ${path}`);
   });
-  ({ TreeDrawer } = await import("@/app/shell/tree-drawer"));
-  ({ FilePreview } = await import("@/features/session/file-preview"));
-  ({ useTreeDrawer } = await import("@/store/use-tree-drawer"));
-  ({ useCurrentSystem } = await import("@/store/use-current-system"));
 });
 
 describe("the tree drawer", () => {

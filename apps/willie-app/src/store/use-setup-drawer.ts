@@ -33,6 +33,11 @@ function close(): void {
   setState({ open: false, entry: null });
 }
 
+/** Back to closed, on no entry. Only a test harness calls this. */
+export function resetForTests(): void {
+  close();
+}
+
 export interface SetupDrawerHandle extends SetupDrawerState {
   openAt: (entry?: SetupEntry) => void;
   close: () => void;

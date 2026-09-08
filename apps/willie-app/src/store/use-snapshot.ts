@@ -2,10 +2,17 @@ import { useEffect, useSyncExternalStore } from "react";
 import { createStore, type StoreState } from "@/lib/domain/daemon-snapshot";
 import { onDaemonEvent, projects } from "@/lib/ipc";
 
+/* Both sides of the bridge are reached through a closure, never read
+ * at module load: importing this store must not touch the bridge, only
+ * acquiring it does. */
 const store = createStore({
   snapshot: () => projects.snapshot(),
-  onEvent: onDaemonEvent,
+  onEvent: (cb) => onDaemonEvent(cb),
 });
+
+/** Drops the held snapshot and every holder. Only a test harness calls
+ * this. */
+export const resetForTests = store.reset;
 
 /**
  * Subscribes to the one store. `enabled` is the Dashboard's gate:

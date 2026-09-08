@@ -2,13 +2,14 @@ import { createMemoryHistory } from "@tanstack/react-router";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { App } from "@/app/app";
+import { createAppRouter } from "@/app/router";
 import type { EngineStatus } from "@/lib/ipc";
 import type { Snapshot } from "@/lib/proto";
+import { resetStores } from "@/test-support/reset-stores";
 
-/* The Session screen (Task 12) hosts a real `SessionTerminal` for every
- * live session, and this suite resets the module graph for every test
- * (see the `beforeEach` below) — without this, the real `@xterm/xterm`
- * would be re-imported and re-initialised from scratch on every case.
+/* The Session screen hosts a real `SessionTerminal` for every live
+ * session, and jsdom has no canvas for `@xterm/xterm` to render into.
  * A fake stands in, same shape `session-screen.test.tsx` uses. */
 vi.mock("@xterm/xterm", () => {
   class FakeTerminal {
@@ -140,21 +141,15 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 
-let App: typeof import("@/app/app").App;
-let createAppRouter: typeof import("@/app/router").createAppRouter;
-
 /* `useEngineStatus`, `useSnapshot` and `useCurrentSystem` back onto
  * module-level singleton stores, so a value left behind by one test's
  * render would otherwise still be there for the next test's first
- * synchronous render. Reset the module graph and re-import the entry
- * points fresh for every case, so no test depends on running before or
- * after another. */
-beforeEach(async () => {
-  vi.resetModules();
+ * synchronous render. Reset them for every case, so no test depends on
+ * running before or after another. */
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.ui.prefs.mockResolvedValue({ current_project: null });
-  ({ App } = await import("@/app/app"));
-  ({ createAppRouter } = await import("@/app/router"));
 });
 
 function renderApp(path = "/", status: EngineStatus = STATUS) {

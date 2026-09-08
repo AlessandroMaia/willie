@@ -22,6 +22,12 @@ function getState(): string | null {
   return focusedId;
 }
 
+/** Back to "no tab focused". Only a test harness calls this; the
+ * Session screen clears the focus itself when it unmounts. */
+export function resetForTests(): void {
+  setState(null);
+}
+
 export interface FocusedSessionHandle {
   session: Session | null;
   sessionId: string | null;

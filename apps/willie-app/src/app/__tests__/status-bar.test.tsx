@@ -1,12 +1,14 @@
 import { act, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { App } from "@/app/app";
+import { createAppRouter } from "@/app/router";
 import type { EngineStatus } from "@/lib/ipc";
 import type { Session, Snapshot, UsageSnapshot } from "@/lib/proto";
+import { useFocusedSession } from "@/store/use-focused-session";
+import { resetStores } from "@/test-support/reset-stores";
 
-/* The Session screen (Task 12) hosts a real `SessionTerminal` for every
- * live session, and this suite resets the module graph for every test
- * (see the `beforeEach` below) — without this, the real `@xterm/xterm`
- * would be re-imported and re-initialised from scratch on every case.
+/* The Session screen hosts a real `SessionTerminal` for every live
+ * session, and jsdom has no canvas for `@xterm/xterm` to render into.
  * A fake stands in, same shape `session-screen.test.tsx` uses. */
 vi.mock("@xterm/xterm", () => {
   class FakeTerminal {
@@ -180,26 +182,17 @@ vi.mock("@tauri-apps/api/window", () => ({
   }),
 }));
 
-let App: typeof import("@/app/app").App;
-let createAppRouter: typeof import("@/app/router").createAppRouter;
-let useFocusedSession: typeof import("@/store/use-focused-session").useFocusedSession;
-
 /* `useFocusedSession`, `useEngineStatus` and `useSnapshot` back onto
- * module-level singleton stores, so the module graph is reset and
- * re-imported fresh for every case, same as shell.test.tsx — and the
- * `useFocusedSession` import here resolves to the very same singleton
- * the rendered app's status bar reads, since both come from the one
- * module cache built by this test's `vi.resetModules()`. */
-beforeEach(async () => {
-  vi.resetModules();
+ * module-level singleton stores, reset before every case, same as
+ * shell.test.tsx — and the `useFocusedSession` imported here is the
+ * very same singleton the rendered app's status bar reads. */
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.ui.prefs.mockResolvedValue({ current_project: null });
   ipc.engine.status.mockResolvedValue(STATUS);
   ipc.projects.snapshot.mockResolvedValue(SNAPSHOT);
   ipc.usage.snapshot.mockResolvedValue(EMPTY_USAGE);
-  ({ App } = await import("@/app/app"));
-  ({ createAppRouter } = await import("@/app/router"));
-  ({ useFocusedSession } = await import("@/store/use-focused-session"));
 });
 
 /* Every test that switches to fake timers must hand real ones back —
@@ -265,7 +258,7 @@ describe("the footer's governance segment", () => {
     expect(link.getAttribute("href")).toBe("/sandbox?session=sess_1");
   });
 
-  it("hides governance and never polls usage away from the Session screen", async () => {
+  it("governance_hides_and_usage_stops_polling_away_from_the_session_screen", async () => {
     await renderApp("/sandbox");
 
     focus("sess_1");
@@ -321,7 +314,7 @@ describe("the footer's system aggregate", () => {
     expect(ipc.usage.snapshot).not.toHaveBeenCalled();
   });
 
-  it("shows nothing on the sandbox screen before a system exists", async () => {
+  it("the_sandbox_screen_shows_no_segment_before_a_system_exists", async () => {
     await renderApp("/sandbox");
 
     expect(screen.queryByText(/^sandbox:/)).toBeNull();

@@ -8,8 +8,11 @@ import {
 import { act, render, renderHook, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { SandboxScreen } from "@/features/sandbox/sandbox-screen";
 import type { EngineStatus } from "@/lib/ipc";
 import type { CapabilityInfo, Project, Session, Snapshot } from "@/lib/proto";
+import { useCurrentSystem } from "@/store/use-current-system";
+import { resetStores } from "@/test-support/reset-stores";
 
 const STATUS: EngineStatus = {
   engine_version: "0.1.0",
@@ -39,9 +42,6 @@ const ipc = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/ipc", () => ipc);
-
-let SandboxScreen: typeof import("@/features/sandbox/sandbox-screen").SandboxScreen;
-let useCurrentSystem: typeof import("@/store/use-current-system").useCurrentSystem;
 
 function project(over: Partial<Project> = {}): Project {
   return {
@@ -95,20 +95,17 @@ const CATALOGUE: CapabilityInfo[] = [
   },
 ];
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   vi.clearAllMocks();
+  resetStores();
   ipc.engine.status.mockResolvedValue(STATUS);
   ipc.ui.prefs.mockResolvedValue({ current_project: null });
   ipc.projects.snapshot.mockResolvedValue(snapshot());
   ipc.sandbox.catalogue.mockResolvedValue(CATALOGUE);
-  ({ SandboxScreen } = await import("@/features/sandbox/sandbox-screen"));
-  ({ useCurrentSystem } = await import("@/store/use-current-system"));
 });
 
 /* `useCurrentSystem` backs onto a module-level singleton, the same one
- * `SandboxScreen` reads — imported fresh above right after
- * `vi.resetModules()`, so this probe's `setSystem` reaches the exact
+ * `SandboxScreen` reads, so this probe's `setSystem` reaches the exact
  * store instance the rendered screen is subscribed to. Mirrors
  * `status-bar.test.tsx`'s `focus()` helper. */
 function switchSystem(id: string) {
