@@ -72,8 +72,8 @@ export interface CurrentSystemHandle {
 
 /**
  * The one system every screen is scoped to: the persisted
- * `current_project` (Task 7's `ui.prefs`) resolved against the
- * daemon's live project list — gated on the daemon actually running,
+ * `current_project` (`ui.prefs`, saved in `engine.toml`) resolved
+ * against the daemon's live project list — gated on the daemon running,
  * the same invariant `useSnapshot` asks every other caller to hold, so
  * this is never what boots Willie — and persisted back through
  * `ui.setPrefs` whenever the user picks a different one.

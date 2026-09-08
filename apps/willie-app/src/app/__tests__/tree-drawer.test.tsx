@@ -80,8 +80,8 @@ const ROOT_ENTRIES: TreeEntry[] = [
 const SRC_ENTRIES: TreeEntry[] = [{ name: "index.ts", kind: "file" }];
 
 /* The bridge is the only I/O the drawer or the preview may reach:
- * everything `useCurrentSystem` needs on mount plus the tree/file/
- * editor calls Task 14 adds. */
+ * everything `useCurrentSystem` needs on mount plus the tree, file
+ * and editor calls. */
 const ipc = vi.hoisted(() => ({
   engine: { status: vi.fn(), onStatus: vi.fn(async () => () => {}) },
   projects: {

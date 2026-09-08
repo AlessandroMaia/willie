@@ -71,9 +71,9 @@ interface SetupEntryInfo {
   path: SetupPath;
 }
 
-/** The setup drawer's own entries (Task 10 builds the drawer itself):
- * global, not scoped to any one system, so they carry no shortcut and
- * live outside the sidebar's four screens. */
+/** The setup drawer's own entries: global, not scoped to any one
+ * system, so they carry no shortcut and live outside the sidebar's
+ * four screens. */
 export const SETUP_ENTRIES: readonly SetupEntryInfo[] = [
   {
     id: "engine",

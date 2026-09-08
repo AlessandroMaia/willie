@@ -147,96 +147,6 @@
       }
     },
     {
-      "includes": ["src/features/projects/**"],
-      "linter": {
-        "rules": {
-          "style": {
-            "noRestrictedImports": {
-              "level": "error",
-              "options": {
-                "patterns": [
-                  {
-                    "group": [
-                      "@/app/*",
-                      "@/features/sessions/*",
-                      "@/features/health/*",
-                      "**/app/**",
-                      "../sessions/**",
-                      "../health/**",
-                      "**/features/sessions/**",
-                      "**/features/health/**"
-                    ],
-                    "message": "features/projects never imports app/ or another feature (sessions, health). What projects and another feature share moves down into components/, store/ or lib/."
-                  }
-                ]
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "includes": ["src/features/sessions/**"],
-      "linter": {
-        "rules": {
-          "style": {
-            "noRestrictedImports": {
-              "level": "error",
-              "options": {
-                "patterns": [
-                  {
-                    "group": [
-                      "@/app/*",
-                      "@/features/projects/*",
-                      "@/features/health/*",
-                      "**/app/**",
-                      "../projects/**",
-                      "../health/**",
-                      "**/features/projects/**",
-                      "**/features/health/**"
-                    ],
-                    "message": "features/sessions never imports app/ or another feature (projects, health). What sessions and another feature share moves down into components/, store/ or lib/."
-                  }
-                ]
-              }
-            }
-          }
-        }
-      }
-    },
-    {
-      "includes": ["src/features/session/**"],
-      "linter": {
-        "rules": {
-          "style": {
-            "noRestrictedImports": {
-              "level": "error",
-              "options": {
-                "patterns": [
-                  {
-                    "group": [
-                      "@/app/*",
-                      "@/features/projects/*",
-                      "@/features/sessions/*",
-                      "@/features/health/*",
-                      "**/app/**",
-                      "../projects/**",
-                      "../sessions/**",
-                      "../health/**",
-                      "**/features/projects/**",
-                      "**/features/sessions/**",
-                      "**/features/health/**"
-                    ],
-                    "message": "features/session never imports app/ or another feature (projects, sessions, health). What session and another feature share moves down into components/, store/ or lib/."
-                  }
-                ]
-              }
-            }
-          }
-        }
-      }
-    },
-    {
       "includes": ["src/features/health/**"],
       "linter": {
         "rules": {
@@ -248,15 +158,241 @@
                   {
                     "group": [
                       "@/app/*",
-                      "@/features/projects/*",
-                      "@/features/sessions/*",
+                      "@/app/**",
                       "**/app/**",
+                      "@/features/plugins/**",
+                      "../plugins/**",
+                      "../../plugins/**",
+                      "@/features/profile-store/**",
+                      "../profile-store/**",
+                      "../../profile-store/**",
+                      "@/features/profiles/**",
+                      "../profiles/**",
+                      "../../profiles/**",
+                      "@/features/projects/**",
                       "../projects/**",
-                      "../sessions/**",
-                      "**/features/projects/**",
-                      "**/features/sessions/**"
+                      "../../projects/**",
+                      "@/features/sandbox/**",
+                      "../sandbox/**",
+                      "../../sandbox/**",
+                      "@/features/session/**",
+                      "../session/**",
+                      "../../session/**",
+                      "@/features/settings/**",
+                      "../settings/**",
+                      "../../settings/**",
+                      "@/features/tools/**",
+                      "../tools/**",
+                      "../../tools/**",
+                      "@/features/usage/**",
+                      "../usage/**",
+                      "../../usage/**"
                     ],
-                    "message": "features/health never imports app/ or another feature (projects, sessions). What health and another feature share moves down into components/, store/ or lib/."
+                    "message": "features/health never imports app/ or another feature. What health and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/plugins/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/app/**",
+                      "**/app/**",
+                      "@/features/health/**",
+                      "../health/**",
+                      "../../health/**",
+                      "@/features/profile-store/**",
+                      "../profile-store/**",
+                      "../../profile-store/**",
+                      "@/features/profiles/**",
+                      "../profiles/**",
+                      "../../profiles/**",
+                      "@/features/projects/**",
+                      "../projects/**",
+                      "../../projects/**",
+                      "@/features/sandbox/**",
+                      "../sandbox/**",
+                      "../../sandbox/**",
+                      "@/features/session/**",
+                      "../session/**",
+                      "../../session/**",
+                      "@/features/settings/**",
+                      "../settings/**",
+                      "../../settings/**",
+                      "@/features/tools/**",
+                      "../tools/**",
+                      "../../tools/**",
+                      "@/features/usage/**",
+                      "../usage/**",
+                      "../../usage/**"
+                    ],
+                    "message": "features/plugins never imports app/ or another feature. What plugins and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/profile-store/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/app/**",
+                      "**/app/**",
+                      "@/features/health/**",
+                      "../health/**",
+                      "../../health/**",
+                      "@/features/plugins/**",
+                      "../plugins/**",
+                      "../../plugins/**",
+                      "@/features/profiles/**",
+                      "../profiles/**",
+                      "../../profiles/**",
+                      "@/features/projects/**",
+                      "../projects/**",
+                      "../../projects/**",
+                      "@/features/sandbox/**",
+                      "../sandbox/**",
+                      "../../sandbox/**",
+                      "@/features/session/**",
+                      "../session/**",
+                      "../../session/**",
+                      "@/features/settings/**",
+                      "../settings/**",
+                      "../../settings/**",
+                      "@/features/tools/**",
+                      "../tools/**",
+                      "../../tools/**",
+                      "@/features/usage/**",
+                      "../usage/**",
+                      "../../usage/**"
+                    ],
+                    "message": "features/profile-store never imports app/ or another feature. What profile-store and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/profiles/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/app/**",
+                      "**/app/**",
+                      "@/features/health/**",
+                      "../health/**",
+                      "../../health/**",
+                      "@/features/plugins/**",
+                      "../plugins/**",
+                      "../../plugins/**",
+                      "@/features/profile-store/**",
+                      "../profile-store/**",
+                      "../../profile-store/**",
+                      "@/features/projects/**",
+                      "../projects/**",
+                      "../../projects/**",
+                      "@/features/sandbox/**",
+                      "../sandbox/**",
+                      "../../sandbox/**",
+                      "@/features/session/**",
+                      "../session/**",
+                      "../../session/**",
+                      "@/features/settings/**",
+                      "../settings/**",
+                      "../../settings/**",
+                      "@/features/tools/**",
+                      "../tools/**",
+                      "../../tools/**",
+                      "@/features/usage/**",
+                      "../usage/**",
+                      "../../usage/**"
+                    ],
+                    "message": "features/profiles never imports app/ or another feature. What profiles and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/projects/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/app/**",
+                      "**/app/**",
+                      "@/features/health/**",
+                      "../health/**",
+                      "../../health/**",
+                      "@/features/plugins/**",
+                      "../plugins/**",
+                      "../../plugins/**",
+                      "@/features/profile-store/**",
+                      "../profile-store/**",
+                      "../../profile-store/**",
+                      "@/features/profiles/**",
+                      "../profiles/**",
+                      "../../profiles/**",
+                      "@/features/sandbox/**",
+                      "../sandbox/**",
+                      "../../sandbox/**",
+                      "@/features/session/**",
+                      "../session/**",
+                      "../../session/**",
+                      "@/features/settings/**",
+                      "../settings/**",
+                      "../../settings/**",
+                      "@/features/tools/**",
+                      "../tools/**",
+                      "../../tools/**",
+                      "@/features/usage/**",
+                      "../usage/**",
+                      "../../usage/**"
+                    ],
+                    "message": "features/projects never imports app/ or another feature. What projects and another feature share moves down into components/, store/ or lib/."
                   }
                 ]
               }
@@ -277,21 +413,241 @@
                   {
                     "group": [
                       "@/app/*",
-                      "@/features/projects/*",
-                      "@/features/sessions/*",
-                      "@/features/session/*",
-                      "@/features/health/*",
+                      "@/app/**",
                       "**/app/**",
-                      "../projects/**",
-                      "../sessions/**",
-                      "../session/**",
+                      "@/features/health/**",
                       "../health/**",
-                      "**/features/projects/**",
-                      "**/features/sessions/**",
-                      "**/features/session/**",
-                      "**/features/health/**"
+                      "../../health/**",
+                      "@/features/plugins/**",
+                      "../plugins/**",
+                      "../../plugins/**",
+                      "@/features/profile-store/**",
+                      "../profile-store/**",
+                      "../../profile-store/**",
+                      "@/features/profiles/**",
+                      "../profiles/**",
+                      "../../profiles/**",
+                      "@/features/projects/**",
+                      "../projects/**",
+                      "../../projects/**",
+                      "@/features/session/**",
+                      "../session/**",
+                      "../../session/**",
+                      "@/features/settings/**",
+                      "../settings/**",
+                      "../../settings/**",
+                      "@/features/tools/**",
+                      "../tools/**",
+                      "../../tools/**",
+                      "@/features/usage/**",
+                      "../usage/**",
+                      "../../usage/**"
                     ],
-                    "message": "features/sandbox never imports app/ or another feature (projects, sessions, session, health). What sandbox and another feature share moves down into components/, store/ or lib/."
+                    "message": "features/sandbox never imports app/ or another feature. What sandbox and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/session/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/app/**",
+                      "**/app/**",
+                      "@/features/health/**",
+                      "../health/**",
+                      "../../health/**",
+                      "@/features/plugins/**",
+                      "../plugins/**",
+                      "../../plugins/**",
+                      "@/features/profile-store/**",
+                      "../profile-store/**",
+                      "../../profile-store/**",
+                      "@/features/profiles/**",
+                      "../profiles/**",
+                      "../../profiles/**",
+                      "@/features/projects/**",
+                      "../projects/**",
+                      "../../projects/**",
+                      "@/features/sandbox/**",
+                      "../sandbox/**",
+                      "../../sandbox/**",
+                      "@/features/settings/**",
+                      "../settings/**",
+                      "../../settings/**",
+                      "@/features/tools/**",
+                      "../tools/**",
+                      "../../tools/**",
+                      "@/features/usage/**",
+                      "../usage/**",
+                      "../../usage/**"
+                    ],
+                    "message": "features/session never imports app/ or another feature. What session and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/settings/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/app/**",
+                      "**/app/**",
+                      "@/features/health/**",
+                      "../health/**",
+                      "../../health/**",
+                      "@/features/plugins/**",
+                      "../plugins/**",
+                      "../../plugins/**",
+                      "@/features/profile-store/**",
+                      "../profile-store/**",
+                      "../../profile-store/**",
+                      "@/features/profiles/**",
+                      "../profiles/**",
+                      "../../profiles/**",
+                      "@/features/projects/**",
+                      "../projects/**",
+                      "../../projects/**",
+                      "@/features/sandbox/**",
+                      "../sandbox/**",
+                      "../../sandbox/**",
+                      "@/features/session/**",
+                      "../session/**",
+                      "../../session/**",
+                      "@/features/tools/**",
+                      "../tools/**",
+                      "../../tools/**",
+                      "@/features/usage/**",
+                      "../usage/**",
+                      "../../usage/**"
+                    ],
+                    "message": "features/settings never imports app/ or another feature. What settings and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/tools/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/app/**",
+                      "**/app/**",
+                      "@/features/health/**",
+                      "../health/**",
+                      "../../health/**",
+                      "@/features/plugins/**",
+                      "../plugins/**",
+                      "../../plugins/**",
+                      "@/features/profile-store/**",
+                      "../profile-store/**",
+                      "../../profile-store/**",
+                      "@/features/profiles/**",
+                      "../profiles/**",
+                      "../../profiles/**",
+                      "@/features/projects/**",
+                      "../projects/**",
+                      "../../projects/**",
+                      "@/features/sandbox/**",
+                      "../sandbox/**",
+                      "../../sandbox/**",
+                      "@/features/session/**",
+                      "../session/**",
+                      "../../session/**",
+                      "@/features/settings/**",
+                      "../settings/**",
+                      "../../settings/**",
+                      "@/features/usage/**",
+                      "../usage/**",
+                      "../../usage/**"
+                    ],
+                    "message": "features/tools never imports app/ or another feature. What tools and another feature share moves down into components/, store/ or lib/."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["src/features/usage/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": [
+                      "@/app/*",
+                      "@/app/**",
+                      "**/app/**",
+                      "@/features/health/**",
+                      "../health/**",
+                      "../../health/**",
+                      "@/features/plugins/**",
+                      "../plugins/**",
+                      "../../plugins/**",
+                      "@/features/profile-store/**",
+                      "../profile-store/**",
+                      "../../profile-store/**",
+                      "@/features/profiles/**",
+                      "../profiles/**",
+                      "../../profiles/**",
+                      "@/features/projects/**",
+                      "../projects/**",
+                      "../../projects/**",
+                      "@/features/sandbox/**",
+                      "../sandbox/**",
+                      "../../sandbox/**",
+                      "@/features/session/**",
+                      "../session/**",
+                      "../../session/**",
+                      "@/features/settings/**",
+                      "../settings/**",
+                      "../../settings/**",
+                      "@/features/tools/**",
+                      "../tools/**",
+                      "../../tools/**"
+                    ],
+                    "message": "features/usage never imports app/ or another feature. What usage and another feature share moves down into components/, store/ or lib/."
                   }
                 ]
               }

@@ -37,10 +37,10 @@ export interface FocusedSessionHandle {
 /**
  * The one session the shell treats as focused: only the id is
  * module-level state, the same style as `use-current-system`; the
- * session object itself always comes fresh off the daemon snapshot; so
+ * session object itself always comes fresh off the daemon snapshot, so
  * a session that changes underneath (sandbox denials, state) is never
- * stale here. Task 12 calls `setFocused` from the active session tab;
- * nothing does yet, so `session` stays null until then.
+ * stale here. The Session screen's active tab is the only caller of
+ * `setFocused`; with no tab focused, `session` is null.
  */
 export function useFocusedSession(): FocusedSessionHandle {
   const sessionId = useSyncExternalStore(subscribe, getState);

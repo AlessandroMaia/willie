@@ -134,8 +134,8 @@ const ipc = vi.hoisted(() => ({
 
 vi.mock("@/lib/ipc", () => ipc);
 
-/* The header's window controls talk to this module directly (Task 8),
- * not through the ipc bridge above; every test here renders the full
+/* The header's window controls talk to this module directly, not
+ * through the ipc bridge above; every test here renders the full
  * shell, so it needs a stub too, even though none of these tests
  * assert on it (header.test.tsx does). */
 vi.mock("@tauri-apps/api/window", () => ({
@@ -190,7 +190,7 @@ describe("the shell", () => {
       expect(router.state.location.pathname).toBe("/sandbox"),
     );
     /* This suite's snapshot has no projects, so the real Sandbox screen
-     * (Task 15) shows its own "no system yet" empty state rather than a
+     * shows its own "no system yet" empty state rather than a
      * system header — proof enough that the route actually resolved to
      * the screen, not a stale placeholder. */
     expect(await screen.findByText("No system yet")).toBeDefined();

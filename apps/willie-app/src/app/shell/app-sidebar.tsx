@@ -17,8 +17,8 @@ import {
 
 /** The system-scoped shell's sidebar: the current system (its selector
  * and "…" actions) up top, then the four screens every system has.
- * Nothing global lives here any more — that moved to the setup
- * drawer (Task 10). */
+ * Nothing global belongs here — everything machine-wide lives behind
+ * the header's settings button. */
 export function AppSidebar() {
   const pathname = useLocation({ select: (location) => location.pathname });
 
@@ -31,7 +31,7 @@ export function AppSidebar() {
 
       <SidebarContent>
         <SidebarGroup>
-          <SidebarGroupLabel>Telas</SidebarGroupLabel>
+          <SidebarGroupLabel>Screens</SidebarGroupLabel>
           <SidebarMenu>
             {ROUTES.map((entry) => (
               <SidebarMenuItem key={entry.id}>

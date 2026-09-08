@@ -31,9 +31,9 @@ interface SessionTabsProps {
 /**
  * One tab per live session: an agent tab carries a live dot and the
  * session's own name, and renames in place on a double-click; a shell
- * tab always reads "$ zsh" and never renames. The tree toggle opens
- * Task 14's workspace tree drawer. The Sessions panel at the right end
- * replaces Task 12's disabled placeholder.
+ * tab always reads "$ zsh" and never renames. The tree toggle at the
+ * left end is the workspace tree drawer's only control, and the
+ * Sessions panel sits at the right end.
  */
 export function SessionTabs({
   sessions,

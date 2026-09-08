@@ -46,7 +46,7 @@ export interface SetupDrawerHandle extends SetupDrawerState {
 /**
  * The setup drawer's own open flag and which entry it should land on,
  * a module-level singleton so the header's button and the drawer
- * itself (Task 10) agree on one state without a shared ancestor.
+ * itself agree on one state without a shared ancestor.
  */
 export function useSetupDrawer(): SetupDrawerHandle {
   const snapshot = useSyncExternalStore(subscribe, getState);
