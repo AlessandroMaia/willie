@@ -247,13 +247,14 @@ Never `wsl --mount` (administrator) and never a second distribution.
 
 ### 3.1 Model
 
-`Session { id: ULID (sess_…), project_id, harness: "claude-code",
-capabilities: CapabilitySet, args, created_at, state }`.
+`Session { id: ULID (sess_…), project_id, harness: "claude-code" (or
+"zsh" for a shell session), kind: agent | shell, capabilities:
+CapabilitySet, args, created_at, state, label?, title? }`.
 States: `creating → running → exited(code) | failed(reason)`, with a
 transient `stopping`. Truth: `/var/lib/willie/sessions/<id>/spec.json`
 (immutable after creation) and `events.jsonl` (append-only: `created`,
 `sandbox_applied{mechanisms,unavailable}`, `started{pid}`,
-`attached{client}`, `detached`, `resized{cols,rows}`,
+`renamed{label}`, `attached{client}`, `detached`, `resized{cols,rows}`,
 `sandbox_denied{class,name,count}`, `sandbox_degraded{mechanism,message}`,
 `stop_requested{by}`, `exited{code,signal}`, `failed{reason}`). SQLite is
 a rebuildable index (`willie reindex`).
@@ -327,13 +328,74 @@ in the project's workspace — instead of `LaunchMode::Fresh`; the new
 session records which finished session it continues in `resumed_from`.
 It reuses this same create path end to end, including the open/terminal
 flow above, so a resumed session attaches, stops and streams to the
-embedded terminal like any other. Fail-closed: `harness_cannot_resume`
-when the harness's `Resume` capability is `None`, `session_already_live`
-when the project already has a live session (continuing elsewhere would
-double-drive the same transcript). This is continue-latest and
-project-scoped — it always targets the project's most recently finished
-session; resuming an arbitrary older session by id (`Resume::ById`) is a
-documented follow-up.
+embedded terminal like any other. `resume_from` optionally names which
+finished session to continue; absent, the daemon targets the project's
+most recent terminal session (continue-latest, the original behaviour,
+unchanged). Fail-closed: `harness_cannot_resume` when the target
+harness's `Resume` capability is `None` (always true of a `Shell`
+session, which has no conversation to continue); `resume_target_not_found`
+when a named target does not exist; `resume_target_live` when it is
+still running or stopping — it already has a tab, so continuing it
+elsewhere would double-drive the same transcript.
+
+**Several live sessions.** A project may now have more than one live
+session at once: a fresh `session.create` no longer looks at the
+project's other sessions at all, so `session_already_live` is retired —
+kept in `docs/PROTOCOL.md`'s code table only so a client that matched on
+it knows why it stopped appearing. This is safe because each session
+runs in its own private sandbox home while the shared `agent.state` bind
+(§3.3) carries the login and the harness's own per-session logs — one
+file per conversation — so two conversations in one workspace never
+collide; the usage plugin already matches a session to its log by
+workspace and time window (decision 0025).
+
+**Shell sessions.** `SessionKind` (`willie_core::session`) distinguishes
+an agent conversation from an interactive shell, `#[serde(default)]` so
+a spec written before this existed re-adopts as `Agent`. A `Shell`
+session runs the same project checks, the same resolved
+`CapabilitySet`, the same supervisor and the same sandbox as an agent
+one, but its launch is built by the daemon (`willied::shell`) rather
+than by a harness: `/usr/bin/zsh -l` in the project's workspace,
+`ZDOTDIR=/etc/willie/zsh` pointing at Willie's own prompt
+(`distro/zsh/.zshrc`: history in `$HOME/.zsh_history`, a two-line prompt
+naming the branch) and the same environment allowlist a harness gets.
+Its `harness` field reads `"zsh"`, never a registry harness id; it
+cannot resume (`harness_cannot_resume`) and is excluded from the usage
+plugin's session enrichment (§4.3) — it keeps no harness-readable log to
+match. `willie-sess`'s `prepare()`
+(`crates/willie-sess/src/sandbox/mod.rs`) branches on `SessionKind` only
+to pick whose rules govern the one bind the plan actually consults for
+a shell, the agent's own state directory: a shell is not an installable
+harness and names none in `willie_harness::registry()`, so it borrows
+`ClaudeCode`'s for that lookup alone. `/etc/willie/zsh` joins the rest
+of `/etc` as a read-only, tolerated-absent bind (`ETC_OPTIONAL` in
+`willie-linux::sandbox::bwrap`, `--ro-bind-try`), so an image built
+before this feature — with no such directory — still starts every
+other session normally; on such an image a shell create is refused
+fail-closed with `shell_unavailable`, checked
+against `/usr/bin/zsh` itself, before anything is spawned. Because
+`$HOME` is the same private tmpfs every session gets by default (§3.3,
+`home.persistent` off), a shell's own history does not survive past its
+session — a product follow-up, not an oversight.
+
+**Names.** A session gets a display name from two independent sources.
+`title` is its first prompt, read lazily and best-effort: `willied`'s
+`session_title` module (`crates/willied/src/session_title.rs`) looks for
+the newest `*.jsonl` under the matching harness's session-logs directory
+modified at or after the session started, reads its first user-turn
+record and trims the text to 80 characters; a title that cannot be
+found stays absent rather than guessed, and the UI shows the session's
+short id instead. The read is deliberately lazy — from `session.list`
+and from the state-snapshot path, rather than once at `Started` — since
+the harness usually has not written its log yet that early; it is
+bounded to the first 64 KiB of one file per untitled session per call,
+and never depends on a plugin being enabled. `label` is what the user
+typed: `session.rename { id, label }` appends a `Renamed { label }`
+event to the session's own log before updating the in-memory record and
+emitting `session_changed`, so a crash between the two never loses it;
+an empty or all-whitespace label clears it, one over 120 characters is
+refused. The UI shows `label ?? title ?? short id` everywhere a session
+is named.
 
 **App closed.** Daemon exits; supervisors and terminal tabs continue; on
 reopen the restart flow restores supervision.
@@ -346,28 +408,33 @@ itself. Like every other change, `session_changed` reaches the webview
 over `daemon://event`, the same stream as `project_changed` and
 `job_changed` — in the same spirit as decision 0014 (the daemon rides
 the session socket as a control client), the app in turn only ever
-talks to the daemon over its own RPC pipe. The **Sessions** screen
-lists running
-sessions (state, harness, attached clients, *Attach*, *Stop* with no
-confirmation) and the twenty most recently finished; a project's row
-gets an **Open session** button (enabled once the project is `ready`), a
-**Resume** button (enabled once the project is `ready`, has a finished
-session and no live session) that continues its last conversation, and a
-badge with its live-session count; the Dashboard's harness doctor
-check gets an **Install** button that shows the install job's last log
-line while it runs. A session's terminal is a Windows Terminal tab
-Willie composes and hands off by default, or — an "Open in app" action
-on the Sessions row — rendered inside the Willie window itself: the
-engine spawns `willie attach <id> --host` and bridges its stdio to an
-`xterm.js` terminal, one active at a time (opening another session in
-the app first detaches the current one; the session left behind keeps
-running). The bridge writes encoded `input`/`resize` frames to the
-child's stdin (a small `willie-proto::hostterm` dialect) and reads raw
-session output from its stdout; `attach --host` re-frames the input for
-the wire protocol the same way the tty-mode client does. This embedded
-path reuses the same session socket as the Windows-Terminal-tab path —
-consistent with decision 0014 — and coexists with it rather than
-replacing it. Shipping it also fixed `terminal::locate_wt`, which used
+talks to the daemon over its own RPC pipe. The system-scoped **Session
+screen** (§5.1) replaced the old Sessions screen: a tab per live agent
+session and per live shell, `+` to start either, and a **Sessions
+panel** (a Sheet) listing every live session with *Open* (focuses its
+tab) and recently finished ones with *Resume* (`resume_from` names the
+exact one, adding a new live tab). The old gating that required *no*
+live session before a project's row offered Resume is gone along with
+the one-live-session rule itself (see Several live sessions above) —
+Resume and a fresh session now coexist freely; stopping a session still
+asks the daemon with no confirmation. Double-clicking a tab's name
+turns it into an inline field that calls `session.rename` on Enter, Esc
+cancels, blur commits. The Setup → Engine screen (the former Dashboard)
+keeps the harness doctor check's **Install** button, showing the
+install job's last log line while it runs. A session's terminal is a
+Windows Terminal tab Willie composes and hands off by default
+(`session_open`/`session_resume`, unchanged), and every live tab on the
+Session screen also renders inside the Willie window itself — no longer
+an opt-in "Open in app" action on a Sessions row, since every Session-
+screen tab is the embedded terminal: the engine spawns
+`willie attach <id> --host` and bridges its stdio to an `xterm.js`
+terminal (`crates/willie-engine/src/embed.rs`). The bridge writes
+encoded `input`/`resize` frames to the child's stdin (a small
+`willie-proto::hostterm` dialect) and reads raw session output from its
+stdout; `attach --host` re-frames the input for the wire protocol the
+same way the tty-mode client does. This embedded path reuses the same
+session socket as the Windows-Terminal-tab path — consistent with
+decision 0014. Shipping it also fixed `terminal::locate_wt`, which used
 to *execute* `wt.exe --version` to detect Windows Terminal and flashed a
 stray window on every open; it now resolves `wt.exe` by file presence
 only, on `PATH` and under `%LOCALAPPDATA%\Microsoft\WindowsApps`, and
@@ -668,10 +735,12 @@ decision 0025.
 - The **same** protocol runs on stdio (engine), on the Unix socket (CLI)
   and, later, on TCP loopback.
 - Namespaces: `daemon.*` (hello, health, doctor, shutdown) · `project.*`
-  (list, add, remove, update) · `session.*` (create, stop, list, get,
-  attach_info) · `tool.*` (list, install, update) · `profile.*` (list,
-  check, apply) · `usage.*` (snapshot) · `plugin.*` (list, enable,
-  disable).
+  (list, add, remove, sync_to_windows, update_from_windows, relocate,
+  rename, set_sandbox, tree, read_file) · `session.*` (create, stop,
+  list, rename) · `sandbox.*` (explain) · `tool.*` (list, install,
+  update) · `profile.*` (list, create, read_fragment, write_fragment,
+  check, apply, set_remote, push, pull) · `usage.*` (snapshot) ·
+  `plugin.*` (list, enable, disable).
 - Errors: `{ code, message, remediation }` — actionable message, named
   remediation.
 
@@ -679,21 +748,85 @@ decision 0025.
 
 ### 5.1 UI (Tauri 2 + React/TS/Vite)
 
-| Screen        | Contents                                                                                                   |
-| ------------- | ---------------------------------------------------------------------------------------------------------- |
-| Dashboard     | engine/distro/daemon traffic light with expandable `doctor`; active sessions; usage summary                |
-| Projects      | add from a root (discover) or a path; ext4 workspace; send/update to the Windows checkout; relocate a moved source; open the workspace in Explorer or in VS Code (Remote-WSL, when installed) |
-| Sessions      | active/history (state, project, duration); *stop*; *open in Windows Terminal* (re-attach); *explain sandbox* |
-| Tools         | detected in the distribution, version; install/update from the official source with confirmation and log  |
-| Plugins       | enable/disable globally and per project; **Usage** and **Profiles** panels                                 |
-| Settings      | machine (detected proxy/CA, re-sync), updates, tray                                                        |
-| Tray          | icon with the main window's percentage; menu: open, new session in a recent project, mute alerts, quit     |
+The window is frameless (`"decorations": false`, `"shadow": true` —
+Windows 11 still draws the rounded corners and drop shadow of a
+decorated window): a 36 px header replaces the native title bar,
+composed entirely by Willie (`app/shell/header.tsx`). Left to right: a
+sidebar-toggle button (also `Ctrl+B`), a settings button that opens the
+setup drawer, a centre `div` marked `data-tauri-drag-region` showing
+"Willie · &lt;system&gt;", and three window controls
+(`getCurrentWindow().minimize()`/`.toggleMaximize()`/`.close()`, the
+`core:window:allow-*` capabilities) reflecting `isMaximized()` on mount
+and on every resize.
 
-The shell is a collapsible sidebar with the six screens (Tools,
-Plugins and Settings disabled until they exist), a status bar with
-engine health, the daemon version and the live session count, and
-`Ctrl+1..3` / `Ctrl+B` shortcuts (inside the embedded terminal only
-`Ctrl+1..3` reach the shell; `Ctrl+B` stays with the session).
+**The sidebar is the work context, not a menu of destinations.** On
+top, a system selector (glyph, name, `workspace · branch` once the tree
+has loaded the branch, a live dot when any of the system's sessions is
+live) opens a searchable list of every system plus "Add system…";
+beside it, a "…" menu holds one system's actions — Open in VS Code
+(WSL), Open in Explorer, Update from Windows, Rename, Relocate, Remove.
+Below that, every system carries the same four screens, `Ctrl+1`–
+`Ctrl+4` (inside the embedded terminal only these reach the shell;
+`Ctrl+B` stays with the session):
+
+| Screen   | Contents                                                                                            |
+| -------- | ----------------------------------------------------------------------------------------------------- |
+| Session  | one tab per live agent session and per live shell, `+` to start either, a Sessions panel to resume a finished session or focus a live tab; the workspace tree as a drawer with a read-only file preview beside it |
+| Sandbox  | the system's posture aggregated over its sessions, three counts, the chronological denial history filterable by session; capabilities are edited in a drawer |
+| Profiles | the existing profiles panel (§4.2), scoped to the current system                                   |
+| Usage    | the existing usage panel (§4.3), scoped to the current system                                       |
+
+The workspace tree and file preview read through one seam:
+`project.tree`/`project.read_file` resolve every path via
+`workspace::resolve_within` (`crates/willied/src/workspace.rs`) — the
+single containment check a workspace-relative path passes through
+anywhere in the daemon, canonicalising both the workspace and the
+target so a symlink cannot walk out of it — refusing an outside path
+(`path_outside_workspace`) and a non-regular file (`file_not_text`; see
+`docs/PROTOCOL.md`). A file's preview is read-only and capped at 512
+KiB; editing is VS Code's job, one click away.
+
+**Everything machine-wide lives behind the header's settings button**,
+a drawer (`app/shell/setup-drawer.tsx`) listing six entries that each
+navigate to a `/setup/*` route and keep their existing content: Engine
+(today's health view, formerly Dashboard), Tools, Plugins (no longer
+mounting the Profiles/Usage panels — those are the system screens
+above), Profile store, Systems (the project registry: add, discover,
+roots — its per-row session and sandbox actions moved to the sidebar's
+"…" menu and the system screens), and Settings (theme). The
+pre-redesign paths (`/dashboard`, `/projects`, `/sessions`, `/tools`,
+`/plugins`) all redirect to their new homes, so a saved location keeps
+working. The tray keeps its existing icon and menu (open, new session
+in a recent project, mute alerts, quit), unaffected by this redesign.
+
+The selected system is a UI preference, not daemon state: `engine.toml`
+carries an optional `[ui] current_project`
+(`crates/willie-engine/src/config.rs`), read and written through two
+engine methods (`ui_prefs`/`set_ui_prefs`); a preference naming a
+project that no longer exists falls back to the first project, and the
+preference is rewritten. Every system screen reads the current system
+from this preference, never from a route parameter, so switching
+systems keeps the screen in place.
+
+A thin footer keeps engine health, the first problem, the daemon
+version and the live-session count, and — while a session tab is
+focused on the Session screen — a governance segment: that session's
+sandbox posture, denied count and a context meter, linking to the
+Sandbox screen filtered to it. A shell session carries no sandbox
+report worth narrating this way (it is not a harness conversation), so
+the segment is hidden for one; on the Sandbox screen itself the segment
+instead shows the system's own aggregate posture and denied count.
+
+**Not persisted:** the theme choice — `store/use-theme.ts` is a
+module-level singleton that resets to "system" on every launch — a
+named follow-up, not an oversight. **Not scoped to one system yet:**
+the Profiles screen's daemon-side gate (`plugin_disabled` until *any*
+project has enabled the plugin, not specifically the one showing) — the
+screen renders that as "Profiles are off for this system" plus an
+Enable button, a frontend-only accommodation; the daemon-side semantics
+change (scoping the gate to the shown system) is a named follow-up, so
+`docs/PROTOCOL.md`'s wording about a disabled plugin refusing every call
+stays true today.
 
 Closing the window minimises to the tray; *quit* stops the daemon
 (sessions in Windows Terminal continue). Daemon truth flows through one
@@ -713,11 +846,13 @@ mirrors, the Tauri bridge, the pure domain modules and both stores'
 state machines; `plugins/<id>/` holds the plugin panels. Imports only
 point down: `app → features → components`, `app` and `features` may
 read `store`, everything may read `lib`, and a feature never imports
-another feature; `lib` returns facts, never a tone. The linter fails
-`just check` on a violation. Tokens live in `styles/globals.css` and
-nowhere else; the theme follows the system preference through `.dark`
-on the root. Rationale: `designs/frontend-foundations.md` and
-`designs/frontend-visual-system.md`.
+another feature — a dialog more than one feature reuses lives in
+`components/` instead; `lib` returns facts, never a tone. The linter
+fails `just check` on a violation. Tokens live in `styles/globals.css`
+and nowhere else; the theme follows the system preference through
+`.dark` on the root by default, or a pinned light/dark chosen on the
+Settings screen. Rationale: `designs/frontend-foundations.md`,
+`designs/frontend-visual-system.md` and `designs/system-scoped-shell.md`.
 
 ### 5.2 Build and development (all from Windows)
 

@@ -7,6 +7,18 @@ Code first) inside it under an OS sandbox, and gives per-project control
 over sessions, configuration and usage from a desktop app. Willie does not
 talk to LLM APIs itself; it prepares, launches, observes and governs.
 
+The desktop app frames one system (a registered project) at a time: a
+frameless window with its own header, a sidebar naming the current
+system and offering its four screens — Session, Sandbox, Profiles,
+Usage — while the engine's health, installed tools, plugins, the
+profile store and app settings live behind a settings button, reached
+when they are needed rather than shown alongside daily work. A system's
+Session screen holds one tab per live session — several can run at
+once — agent conversations and a styled interactive shell side by side,
+with the workspace's files a drawer away and a read-only preview beside
+them; a Sandbox screen shows that system's sandbox posture and denial
+history first, with the capability switches themselves in a drawer.
+
 ## Status
 
 Pre-alpha. The first slice (F0) is delivered: the distribution image

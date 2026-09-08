@@ -242,7 +242,13 @@ run in the workspace per call, parsed by a pure function into a map of
 path → flag, so a directory shows a flag when anything under it changed.
 `project.read_file` reads at most 512 KiB (`truncated: true` past that),
 refuses a file whose first 8 KiB contain a NUL byte with `file_not_text`,
-and returns UTF-8 with invalid sequences replaced.
+and returns UTF-8 with invalid sequences replaced. The check
+canonicalises and then opens by path rather than by file descriptor, so
+a writer inside the workspace racing a symlink swap between those two
+steps is an accepted residual (the fix, if ever wanted, is opening path
+component by component, or comparing the opened file's device/inode
+afterwards); a target that is not a regular file — a directory, a
+FIFO — is refused the same way, as `file_not_text`.
 
 The tree drawer slides from under the sidebar over the left edge of the
 centre (toggled by the button at the left of the tab strip, Esc closes),

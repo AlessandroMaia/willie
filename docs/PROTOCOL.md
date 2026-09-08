@@ -66,8 +66,8 @@ Notification (daemon → client), recognised by having no `id`:
 Long operations (`add`, `remove`, `sync_to_windows`, `update_from_windows`,
 `relocate`) validate on the calling thread, then run their git work as a
 background job: the reply carries a `JobRef`/`AddResult` and the outcome
-arrives later as a `state.event`. `rename` and `set_sandbox` are
-synchronous.
+arrives later as a `state.event`. `rename`, `set_sandbox`, `tree` and
+`read_file` are synchronous.
 
 | Method | Params | Result |
 | --- | --- | --- |
@@ -79,6 +79,8 @@ synchronous.
 | `project.relocate` | `RelocateParams { id, windows_path }` | `JobRef { job_id }` |
 | `project.rename` | `RenameParams { id, name }` | `Project` |
 | `project.set_sandbox` | `SetSandboxParams { project_id, profile }` | `Project` |
+| `project.tree` | `TreeParams { id, path? }` | `TreeResult { entries: [TreeEntry], branch? }` |
+| `project.read_file` | `ReadFileParams { id, path }` | `ReadFileResult { content, truncated }` |
 
 A `Project` is `{ id, name, slug, source, workspace, branch, state,
 source_present, created_at, sandbox, sandbox_problem? }`; `state` is
@@ -97,6 +99,26 @@ could not be read; the project then loads with the default profile, and
 until the profile is replaced through `set_sandbox`. It is recomputed on
 every load, never trusted from disk.
 
+`project.tree` lists one directory level of the workspace: `path`
+(workspace-relative) absent lists the root. Each `TreeEntry` is `{ name,
+kind: "dir"|"file", git? }`, directories first then files, each group
+sorted case-insensitively, `.git` skipped; `git` is one of `M`/`A`/`D`/
+`R`/`?`, aggregated onto a directory from any changed path beneath it,
+absent when nothing changed. `TreeResult.branch` carries the
+workspace's current branch when it resolves, so the UI shows it without
+a second call. `project.read_file` reads one file capped at 512 KiB
+(`truncated: true` past that; content is never refused for size alone)
+and returns it as UTF-8 with invalid sequences replaced. Both methods
+resolve `path` through `workspace::resolve_within` — the one
+containment check a workspace-relative path passes through anywhere in
+the daemon — refusing an absolute path, a `..` component, or (after
+canonicalising both sides, so a symlink cannot hide it) a result outside
+the workspace with `path_outside_workspace`; a target that is not a
+regular file (a directory, a FIFO) or whose first 8 KiB contain a NUL
+byte is `file_not_text`; any other read failure is
+`workspace_read_failed` (see Workspace read codes below). An unknown
+`id` is the existing `project_not_found`.
+
 ## `job.*`
 | Method | Params | Result |
 | --- | --- | --- |
@@ -113,16 +135,26 @@ log_tail }`; `project_id` is absent for a job that belongs to no project
 ## `session.*`
 | Method | Params | Result |
 | --- | --- | --- |
-| `session.create` | `CreateParams { project_id, git_identity? { name, email }, resume? }` | `CreateResult { session }` — the session, already `running`, or an error if it could not start |
+| `session.create` | `CreateParams { project_id, git_identity? { name, email }, resume?, resume_from?, kind? }` | `CreateResult { session }` — the session, already `running`, or an error if it could not start |
 | `session.stop` | `{ id }` | `null` — asks the supervisor to stop; the outcome arrives as a `session_changed` event |
 | `session.list` | `{}` | `SessionList { sessions: [Session] }` |
+| `session.rename` | `RenameParams { id, label? }` | `Session` — the session with its label set or cleared |
 
-A `Session` is `{ id, project_id, harness, workspace, state, created_at,
-started_at?, finished_at?, pid?, clients, resumed_from?, sandbox }`;
-`state` is `creating`, `running`, `stopping`, `exited { code?, signal? }`
-or `failed { code, message, remediation }`. `sandbox` is `{ applied:
-[string], unavailable: [string], denied: [{ class, name, count,
-first_at, last_at }], degraded: [string] }` — the mechanisms the
+A `Session` is `{ id, project_id, harness, workspace, kind, state,
+created_at, started_at?, finished_at?, pid?, clients, resumed_from?,
+label?, title?, sandbox }`; `state` is `creating`, `running`, `stopping`,
+`exited { code?, signal? }` or `failed { code, message, remediation }`.
+`kind` is `"agent"` or `"shell"` (`#[serde(default)]`, so a session
+logged before shell sessions existed re-adopts as `"agent"`); a shell
+session's `harness` reads `"zsh"`, never a registry harness id. `label`
+is what the user typed — `session.rename` sets or clears it — and
+`title` is the session's first prompt, resolved lazily and best-effort
+by the daemon once the harness has written it (see `session_title` in
+`docs/ARCHITECTURE.md` §3.2); both are absent (omitted from the JSON,
+never `null`) until something sets them, and the UI shows `label ??
+title ?? short id` everywhere a session is named. `sandbox` is
+`{ applied: [string], unavailable: [string], denied: [{ class, name,
+count, first_at, last_at }], degraded: [string] }` — the mechanisms the
 session's sandbox applied and the required-optional ones the kernel did
 not offer (e.g. `landlock` on a kernel with no Landlock ABI or only
 ABI 1); what it refused, one row per (`class`, `name`), folded from
@@ -143,16 +175,33 @@ engine composes `wsl.exe … willie attach <id>` itself. An unknown
 `project_id` fails with the existing `project_not_found` code (see
 Project problem codes below), not a new one.
 
-`CreateParams.resume` (default `false`) asks the daemon to continue the
-project's most recent conversation instead of starting fresh: the harness
-launches with its continue flag in the workspace, and the new session's
-`resumed_from` names the finished session it continues. This is
-continue-latest and project-scoped — there is no way yet to resume a
-specific older session by id. See `harness_cannot_resume` and
-`session_already_live` in the session codes below for its fail-closed
-guards; the existing `project_not_found`/`project_not_ready`/
+`CreateParams.resume` (default `false`) asks the daemon to continue a
+finished conversation instead of starting fresh: the harness launches
+with its continue flag in the workspace, and the new session's
+`resumed_from` names the session it continues. `resume_from` (optional)
+names which finished session to continue; absent, the daemon targets the
+project's most recent terminal session (continue-latest, the original
+behaviour, unchanged). `kind` (default `"agent"`) chooses an agent
+conversation or an interactive shell; see the Shell sessions paragraph of
+`docs/ARCHITECTURE.md` §3.2 for what a `"shell"` session runs. See
+`harness_cannot_resume`, `resume_target_not_found` and
+`resume_target_live` in the session codes below for `resume`'s
+fail-closed guards; the existing `project_not_found`/`project_not_ready`/
 `project_busy`/`harness_not_installed` guards apply to a resume request
-unchanged.
+unchanged. **`session_already_live` is retired**: a project may now have
+several live sessions at once, so a fresh `session.create` no longer
+looks at the project's other sessions at all — only a resume that names
+a target already live is refused, with `resume_target_live`.
+
+`session.rename`'s `RenameParams { id, label }` sets or clears a
+session's `label`: `label` absent or `null` both mean "clear it"; a
+label is trimmed and one that is empty or all whitespace also clears it,
+and one over 120 characters is refused as `invalid_params` before
+anything is written. The daemon appends a `Renamed { label }`
+`SessionEventKind` to the session's own append-only log before updating
+its in-memory record and emitting `session_changed`, so a crash between
+the two can never leave a label a restart's re-adoption then forgets. An
+unknown `id` is `session_not_found`.
 
 ## `sandbox.*`
 | Method | Params | Result |
@@ -321,10 +370,13 @@ usage adds no error code of its own.
 A caller sends no params of its own: the daemon's `usage.*` route
 (`willied::handlers::usage_handle`, mirroring `profile.*`'s
 `_workspace`/`_harness_settings` injection) strips any caller-supplied
-`_sessions`/`_home` and fills its own — `_sessions`, every session the
-daemon knows as `{ id, project_id, workspace, window: [start, end] }`
-(`end` is `null` for a still-live session), and `_home`, the distro home
-directory — before the plugin ever runs. The plugin never resolves a
+`_sessions`/`_home` and fills its own — `_sessions`, every **Agent**
+session the daemon knows as `{ id, project_id, workspace, window: [start,
+end] }` (`end` is `null` for a still-live session), and `_home`, the
+distro home directory — before the plugin ever runs. A `Shell` session
+is excluded, not reported at zero: it keeps no harness-readable
+transcript for the plugin to match against a time window, so it is not a
+target the plugin could ever account for. The plugin never resolves a
 session, a project or a harness path itself; it only sees what the
 daemon hands it, the same seam `profile.*` uses.
 
@@ -463,6 +515,21 @@ to the same add/relocate flow as the codes around it.
 | `interrupted` | two cases: (1) a project is still `preparing` when the daemon starts — an `add` whose clone never finished, turned `Failed{interrupted}` by the start-up sweep; (2) `job.cancel` (or a daemon shutdown, if the process survives long enough) trips a job's cancel flag after its work has already started — the job only notices at its next cancellation checkpoint, and reports `interrupted` for any job kind | the cancel flag is already tripped *before* the job's work starts — that produces `cancelled`, not `interrupted`; an app close mid-`sync_to_windows`/`update_from_windows`/`relocate` whose process exits before the next checkpoint runs leaves no code at all — job records are never persisted, so that job simply vanishes and the project is left exactly as it was | per kind: for `add`, there is no retry — remove the project and add it again; for every other kind, just retry the operation |
 | `cancelled` | the job's cancel flag was already tripped when its work was about to start, so the runner ended it `failed { code: "cancelled" }` without ever running it | the flag trips after the work has begun — that is `interrupted`, reported at the job's next cancellation checkpoint; the job had already finished when cancel was called — a no-op, the job keeps its real outcome | start the operation again if it is still needed |
 
+## Workspace read codes
+
+These are the codes `project.tree`/`project.read_file` carry when the
+requested path itself is the problem, distinct from the project-state
+codes above (an unknown `project_id` on either method is still the
+`project_not_found` above, checked first). All three come from
+`willied::workspace::WsError`, the one type `resolve_within` and
+`read_text` return.
+
+| Code | When | When not | Remediation |
+| --- | --- | --- | --- |
+| `path_outside_workspace` | `resolve_within` refuses the given `path`: it is absolute, contains a `..` component, or — after canonicalising both sides, so a symlink cannot hide it — the resolved file does not start with the canonicalised workspace | the path resolves inside the workspace, however deeply nested | name a path inside the project's workspace |
+| `file_not_text` | `project.read_file`'s target is not a regular file (a directory, a FIFO) — checked from a `stat` alone, before the file is ever opened, so a FIFO with no writer cannot block the read — or its first 8 KiB contain a NUL byte | the file is text, however large — past 512 KiB it is only truncated (`truncated: true`), never refused | this file is binary; open it in VS Code instead |
+| `workspace_read_failed` | reading the resolved path failed for a reason other than containment or the binary sniff — an I/O error, `WsError::Io` | the failure is containment (`path_outside_workspace`) or the binary sniff (`file_not_text`), both checked first | check the workspace and try again |
+
 ## Session and tool codes
 
 These are the codes a `session.*`/`tool.*` refusal carries, whether they
@@ -485,9 +552,12 @@ a profile the UI edits.
 | Code | When | Remediation |
 | --- | --- | --- |
 | `project_not_ready` | `session.create` on a project that is `preparing` or `failed` | wait for the project to be ready, or fix its failure first |
-| `harness_cannot_resume` | `session.create { resume: true }` and the harness's `Resume` capability is `None` | open a fresh session instead; this harness cannot continue a conversation |
-| `session_already_live` | `session.create { resume: true }` while the project already has a live session | use the running session, or stop it first, then resume |
+| `harness_cannot_resume` | `session.create { resume: true }` and the target harness's `Resume` capability is `None` — always true of a `kind: "shell"` create, since a shell has no conversation to continue | open a fresh session instead; this harness cannot continue a conversation |
+| `resume_target_not_found` | `session.create { resume: true, resume_from }` names a session id the daemon has no record of | the id exists — checked next, against its current state | choose a session from the Sessions panel |
+| `resume_target_live` | `resume_from` names a session that is still `running` or `stopping` — it already has a live tab, so continuing it elsewhere would double-drive the same transcript | the target is terminal (`exited`/`failed`) — that resumes it | it is already open; switch to its tab |
+| `session_already_live` | **Retired, no longer produced.** Several live sessions per project are now allowed: a fresh `session.create` no longer looks at the project's other sessions at all, and a *named* resume target that is still live is refused with `resume_target_live` instead. Kept here so a client that matched on this code knows why it stopped appearing | a client that branched on this code can remove that branch |
 | `harness_not_installed` | no harness binary on the session `PATH` (or `--version` fails) | click Install on the Dashboard |
+| `shell_unavailable` | `session.create { kind: "shell" }` and the image has no `/usr/bin/zsh` — checked fail-closed before anything is written or spawned | rebuild and reinstall the distribution (`just distro-build`, `just distro-install`) |
 | `git_identity_missing` | none of the identity sources — an existing `~/.gitconfig`, the Windows identity, the source checkout's — yields a name and e-mail | set `git config --global user.name` and `user.email` on Windows, then open the session again |
 | `sandbox_capability_unsupported` | `session.create` on a project whose sandbox profile enables a capability this version cannot apply | remove it from the project's sandbox settings; the message names it |
 | `sandbox_profile_invalid` | `session.create` on a project whose sandbox profile lists an `extra_paths` entry that is not absolute, contains a `..` component (refused outright, never resolved), or — compared textually, after collapsing repeated separators and `.` components — names, reaches into, or is an ancestor of what the base closes or a deferred capability grants: the whole filesystem; `/mnt` itself, a bare drive letter under it (a whole drive is `mnt.all`), or anything under it whose first component is not a drive letter, the same family `/run` closes; `/init`; `/run`; the kernel's interfaces; the system directories; `/opt/willie`; `/var/lib/willie`; the managed tool roots and package caches; the home directory and the private temporary directory themselves, though a path inside either is still grantable; `~/.willie`; `~/.ssh`; `~/.claude`; `~/.claude.json`; `~/.gitconfig`. An ancestor of any of these — `/home`, `/var`, `/opt` among them, none of which is itself on the list — is refused too, because it would contain what it is an ancestor of; the message names the path and the reason. An unknown key or a wrong type in the `[sandbox]` table also carries this code, set once at load: the daemon parses the record's other fields separately from its `sandbox` sub-table, so a `[sandbox]` that fails to become a `SandboxProfile` no longer takes the whole record down with it — the project loads with the default profile and this code recorded as its `sandbox_problem` (shown on the Projects screen), and `session.create`/`sandbox.explain` refuse with it until the profile is replaced through `set_sandbox`, which clears it; a record that fails to parse at all, or whose *other* fields do not match `Project`, is still skipped at start-up (`willied: skipping unreadable project …` on stderr) with no coded error. Also: at launch, an `extra_paths` entry that cannot be resolved on disk, or that resolves through a symbolic link into a location the guard refuses — the daemon's guard is textual, so this is the same rule applied to the path that will actually be mounted | the message names the path; correct it in the project's sandbox settings |
