@@ -4,6 +4,7 @@ import { AppSidebar } from "@/app/shell/app-sidebar";
 import { Header } from "@/app/shell/header";
 import { SetupDrawer } from "@/app/shell/setup-drawer";
 import { StatusBar } from "@/app/shell/status-bar";
+import { TreeDrawer } from "@/app/shell/tree-drawer";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { useCurrentSystem } from "@/store/use-current-system";
@@ -27,7 +28,14 @@ export function Shell() {
        * exactly this row instead of the whole window. */}
       <div className="flex min-h-0 will-change-transform">
         <AppSidebar />
-        <SidebarInset className="flex min-h-0 flex-col">
+        <SidebarInset className="flex min-h-0 flex-col overflow-hidden">
+          {/* `SidebarInset` is already `relative` (components/ui/sidebar.tsx),
+           * so it is the tree drawer's containing block: `left: 0` there
+           * always hugs the sidebar's true current edge, expanded or
+           * icon-collapsed, without reading any sidebar-width token.
+           * `overflow-hidden` here keeps the drawer's parked (closed)
+           * position from ever peeking out from under the sidebar. */}
+          <TreeDrawer />
           {/* The router only resets the window's scroll on navigation,
            * but the screen scrolls inside this viewport, not the window;
            * keying it by path remounts it fresh so a new screen always

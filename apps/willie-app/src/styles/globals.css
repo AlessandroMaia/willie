@@ -62,6 +62,9 @@
   color-scheme: light;
   --font-mono-stack: "Cascadia Mono", Consolas, ui-monospace, monospace;
   --radius: 0.625rem;
+  /* The tree drawer's fixed width — a size token, not a colour, so it
+   * needs no dark-mode override. */
+  --tree-width: 280px;
   --background: oklch(0.99 0.004 85);
   --foreground: oklch(0.16 0.008 60);
   --card: oklch(0.985 0.004 85);

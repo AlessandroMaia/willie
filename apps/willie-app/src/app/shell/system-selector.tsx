@@ -16,6 +16,7 @@ import { useCurrentSystem } from "@/store/use-current-system";
 import { useEngineStatus } from "@/store/use-engine-status";
 import { useSetupDrawer } from "@/store/use-setup-drawer";
 import { useSnapshot } from "@/store/use-snapshot";
+import { useTreeDrawer } from "@/store/use-tree-drawer";
 
 function isProjectLive(sessions: Session[], projectId: string): boolean {
   return sessions.some((s) => s.project_id === projectId && isLive(s));
@@ -23,14 +24,16 @@ function isProjectLive(sessions: Session[], projectId: string): boolean {
 
 /**
  * The current system, up top in the sidebar: glyph, name, and its
- * workspace path — never a branch, which only Task 14's tree drawer
- * can supply honestly. Its menu is a searchable list of every system,
- * each with the same live dot the trigger shows for the current one,
- * plus "Add system…" which hands off to the setup drawer's Systems
- * section rather than adding one itself.
+ * workspace path — a branch joins it only once the tree drawer's root
+ * load has resolved one, never a placeholder in the meantime. Its
+ * menu is a searchable list of every system, each with the same live
+ * dot the trigger shows for the current one, plus "Add system…" which
+ * hands off to the setup drawer's Systems section rather than adding
+ * one itself.
  */
 export function SystemSelector() {
   const { system, setSystem } = useCurrentSystem();
+  const { branch } = useTreeDrawer();
   const { status } = useEngineStatus();
   const daemonRunning = status?.daemon.state === "running";
   const { snapshot } = useSnapshot(daemonRunning);
@@ -89,6 +92,7 @@ export function SystemSelector() {
             {system && (
               <span className="truncate text-muted-foreground text-xs">
                 {system.workspace}
+                {branch && ` · ${branch}`}
               </span>
             )}
           </span>

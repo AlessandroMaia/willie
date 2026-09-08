@@ -10,6 +10,7 @@ import { RenameTab } from "@/features/session/rename-tab";
 import { SessionsPanel } from "@/features/session/sessions-panel";
 import type { Session } from "@/lib/proto";
 import { cn } from "@/lib/utils";
+import { useTreeDrawer } from "@/store/use-tree-drawer";
 
 interface SessionTabsProps {
   /** Every live session of the current system, agent sessions first —
@@ -30,9 +31,9 @@ interface SessionTabsProps {
 /**
  * One tab per live session: an agent tab carries a live dot and the
  * session's own name, and renames in place on a double-click; a shell
- * tab always reads "$ zsh" and never renames. The tree toggle is
- * still an inert placeholder; Task 14 wires it up. The Sessions panel
- * at the right end replaces Task 12's disabled placeholder.
+ * tab always reads "$ zsh" and never renames. The tree toggle opens
+ * Task 14's workspace tree drawer. The Sessions panel at the right end
+ * replaces Task 12's disabled placeholder.
  */
 export function SessionTabs({
   sessions,
@@ -44,6 +45,8 @@ export function SessionTabs({
   onRename,
   onResume,
 }: SessionTabsProps) {
+  const { open: treeOpen, toggle: toggleTree } = useTreeDrawer();
+
   return (
     <div
       role="tablist"
@@ -53,7 +56,8 @@ export function SessionTabs({
         variant="ghost"
         size="icon-sm"
         aria-label="Workspace tree"
-        disabled
+        aria-pressed={treeOpen}
+        onClick={toggleTree}
       >
         <FolderTreeIcon />
       </Button>

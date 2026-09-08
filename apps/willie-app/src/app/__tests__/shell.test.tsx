@@ -279,4 +279,17 @@ describe("the shell", () => {
     expect(screen.queryByText(/live session/)).toBeNull();
     expect(ipc.projects.snapshot).not.toHaveBeenCalled();
   });
+
+  it("the_drawer_hugs_the_centre_pane_regardless_of_the_sidebar_width", async () => {
+    renderApp();
+    await screen.findByRole("link", { name: /Session/ });
+
+    const inset = document.querySelector('[data-slot="sidebar-inset"]');
+    const drawer = document.querySelector('[data-slot="tree-drawer"]');
+
+    expect(inset).not.toBeNull();
+    expect(drawer).not.toBeNull();
+    expect(inset && drawer && inset.contains(drawer)).toBe(true);
+    expect(drawer?.className).toContain("left-0");
+  });
 });

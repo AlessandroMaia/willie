@@ -10,6 +10,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty";
 import { Skeleton } from "@/components/ui/skeleton";
+import { FilePreview } from "@/features/session/file-preview";
 import { SessionTabs } from "@/features/session/session-tabs";
 import { SessionTerminal } from "@/features/session/session-terminal";
 import { finishedOf, liveOf, sessionName } from "@/lib/domain/sessions";
@@ -198,15 +199,18 @@ export function SessionScreen() {
             onRename={renameSession}
             onResume={resumeSession}
           />
-          {tabs.map((session) => (
-            <div
-              key={session.id}
-              role="tabpanel"
-              hidden={session.id !== activeId}
-            >
-              <SessionTerminal id={session.id} title={sessionName(session)} />
-            </div>
-          ))}
+          <div className="relative min-h-0 flex-1">
+            {tabs.map((session) => (
+              <div
+                key={session.id}
+                role="tabpanel"
+                hidden={session.id !== activeId}
+              >
+                <SessionTerminal id={session.id} title={sessionName(session)} />
+              </div>
+            ))}
+            <FilePreview />
+          </div>
         </>
       )}
     </div>
