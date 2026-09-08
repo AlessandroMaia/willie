@@ -32,7 +32,7 @@ allowed with one click.
 | Reframe the sidebar as one system's work context (a selector plus that system's four screens) vs. keep six equal-weight top-level destinations and only reorganise their content | matches the thing done every day — pick a system, work in it — and removes the split between session facts and sandbox facts scattered across two of the six | a larger frontend change: routes, the shell's own layout and every screen's mount point move, not just their contents |
 | Put Engine, Tools, Plugins, Profile store, Systems and Settings behind the header's settings button vs. keep them as sidebar entries beside the four system screens | keeps the sidebar exclusively about the system in front of the user; setup is rare, daily work is not | one more click to reach configuration that used to be one click away; a returning user must relearn where things live (mitigated by redirecting every old route) |
 | Allow several live sessions per project vs. keep the one-live-session rule and force a stop before starting a second conversation | a second task no longer costs the first its progress; each session already runs in its own private sandbox home, so nothing about the sandbox model has to change to allow it | gives up the daemon's simplest guarantee — at most one live session to reason about per project — for a resume flow that must now name its target explicitly (`resume_from`) rather than assume "the" session |
-| Run an interactive shell under the very same sandbox as an agent conversation vs. a separate, looser policy for it, or no shell at all | one policy to reason about and one code path (`prepare()`'s existing kind branch) instead of two; a shell is exactly as trusted as the agent conversation it sits beside in the same tab strip | it must borrow the agent harness's own `agent.state` bind to reach a login and its logs, coupling a shell session's sandbox to a decision made for an agent; its history, written into the same private tmpfs home every session gets, does not survive past the session |
+| Run an interactive shell under the very same sandbox as an agent conversation vs. a separate, looser policy for it, or no shell at all | one policy to reason about and one code path (`prepare()`'s kind branch) instead of two; a shell is exactly as trusted as the agent conversation it sits beside in the same tab strip | it must borrow the agent harness's own `agent.state` bind to reach a login and its logs, coupling a shell session's sandbox to a decision made for an agent; its history, written into the same private tmpfs home every session gets, does not survive past the session |
 | A read-only file preview beside the tree vs. an editable one, or none at all (send every look at a file to VS Code) | the tree becomes useful without leaving the app, and read-only keeps the daemon's new surface small — two read-only methods, no write path to reason about, no conflict with an editor open on the same file | a user who wants to fix a typo must still switch to VS Code; the preview is deliberately never the whole editing story |
 | A denial row that only informs vs. one with a one-click "allow" action | allowing a capability is a security decision that deserves the whole catalogue in view (the capabilities drawer), not a reflex taken from a list of things that already went wrong | seeing exactly what broke and fixing it costs two screens' worth of navigation instead of one |
 | The first-prompt title resolved lazily inside the daemon vs. behind the profiles/usage plugin surface | a session's display name never depends on a plugin being enabled — every session gets a title for free, the same guarantee the label (typed by the user) already has | one more piece of harness-log-reading logic lives in `willied` itself, alongside the (separately plugin-owned) usage reader that reads the same kind of log for a different purpose |
@@ -52,11 +52,13 @@ The one-live-session-per-project rule is lifted: a fresh
 `session.create` no longer inspects the project's other sessions at
 all, so `session_already_live` is retired (`resume_target_live` takes
 over its one remaining job, refusing a resume that names a target
-already open). This is safe precisely because nothing about the
-sandbox model had to change for it — each session already ran in its
-own private home, and the harness writes one log file per conversation,
-which the usage plugin already matched by workspace and time window
-(decision 0025) before this task ever began. An interactive shell
+already open). This is safe in the sandbox: nothing about the model had
+to change for it — each session already ran in its own private home, and
+the harness writes one log file per conversation, so two conversations
+in one workspace never collide on disk. It is *not* free for
+attribution: the title reader and the usage plugin (decision 0025) both
+match a session to a log by workspace and time window, which no longer
+identifies one session when two are live at once in the same workspace. An interactive shell
 (`zsh`) is introduced as a session kind, not a separate feature: it
 runs through the same `prepare()`, the same resolved `CapabilitySet`
 and the same supervisor as an agent conversation, borrowing only the
@@ -92,6 +94,17 @@ depends on one being enabled.
   *which* finished session to continue (`resume_from`), and a client
   that only ever expected "the" one live session per project has one
   fewer invariant to lean on.
+- Two mechanisms that leaned on that invariant are now approximate:
+  a session's first-prompt title and its usage row are both matched by
+  workspace and time window, so two sessions live at once in one
+  workspace may share a title and show identical token and context
+  figures. `resume_from` has the same shape of gap — it records and
+  validates the lineage, but the harness is launched with a bare
+  continue and reopens the workspace's most recent conversation, so the
+  UI offers Resume on the newest finished agent session only. All three
+  want the same thing: a per-session log identity (the harness's own
+  conversation id, claimed by the session that owns it), which is the
+  next slice, not this one.
 - A shell session is exactly as sandboxed as an agent conversation,
   which also means it is exactly as limited: no persisted history, no
   reach beyond the workspace and the shared managed tools any agent

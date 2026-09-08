@@ -179,9 +179,16 @@ Project problem codes below), not a new one.
 finished conversation instead of starting fresh: the harness launches
 with its continue flag in the workspace, and the new session's
 `resumed_from` names the session it continues. `resume_from` (optional)
-names which finished session to continue; absent, the daemon targets the
-project's most recent terminal session (continue-latest, the original
-behaviour, unchanged). `kind` (default `"agent"`) chooses an agent
+names the finished session the new one records as its lineage, and is
+validated against it (`resume_target_not_found`, `resume_target_live`);
+absent, the daemon records the project's most recent terminal session.
+**It does not choose which conversation the harness reopens.** The
+launch is Claude Code's bare `--continue`, which always continues the
+workspace's most recent conversation, so naming an older session records
+the lineage and reopens the newest transcript. The Sessions panel offers
+Resume on the workspace's newest finished agent session only, for that
+reason; per-session targeting needs a conversation id the harness can be
+launched with, which is its own change. `kind` (default `"agent"`) chooses an agent
 conversation or an interactive shell; see the Shell sessions paragraph of
 `docs/ARCHITECTURE.md` §3.2 for what a `"shell"` session runs. See
 `harness_cannot_resume`, `resume_target_not_found` and
@@ -553,11 +560,11 @@ a profile the UI edits.
 | --- | --- | --- |
 | `project_not_ready` | `session.create` on a project that is `preparing` or `failed` | wait for the project to be ready, or fix its failure first |
 | `harness_cannot_resume` | `session.create { resume: true }` and the target harness's `Resume` capability is `None` — always true of a `kind: "shell"` create, since a shell has no conversation to continue | open a fresh session instead; this harness cannot continue a conversation |
-| `resume_target_not_found` | `session.create { resume: true, resume_from }` names a session id the daemon has no record of | the id exists — checked next, against its current state | choose a session from the Sessions panel |
-| `resume_target_live` | `resume_from` names a session that is still `running` or `stopping` — it already has a live tab, so continuing it elsewhere would double-drive the same transcript | the target is terminal (`exited`/`failed`) — that resumes it | it is already open; switch to its tab |
+| `resume_target_not_found` | `session.create { resume: true, resume_from }` names a session id the daemon has no record of. Not for a target that exists — its state is checked next, and a live one is `resume_target_live` | choose a session from the Sessions panel |
+| `resume_target_live` | `resume_from` names a session that is still `running` or `stopping` — it already has a live tab, so continuing it elsewhere would double-drive the same transcript. Not for a terminal target (`exited`/`failed`): that one resumes | it is already open; switch to its tab |
 | `session_already_live` | **Retired, no longer produced.** Several live sessions per project are now allowed: a fresh `session.create` no longer looks at the project's other sessions at all, and a *named* resume target that is still live is refused with `resume_target_live` instead. Kept here so a client that matched on this code knows why it stopped appearing | a client that branched on this code can remove that branch |
 | `harness_not_installed` | no harness binary on the session `PATH` (or `--version` fails) | click Install on the Dashboard |
-| `shell_unavailable` | `session.create { kind: "shell" }` and the image has no `/usr/bin/zsh` — checked fail-closed before anything is written or spawned | rebuild and reinstall the distribution (`just distro-build`, `just distro-install`) |
+| `shell_unavailable` | `session.create { kind: "shell" }` and the image has no `/usr/bin/zsh` — checked fail-closed before anything is written or spawned. Not for an installed zsh that fails to start: that is `harness_exec_failed`, reported by the supervisor | rebuild and reinstall the distribution (`just distro-build`, `just distro-install`) |
 | `git_identity_missing` | none of the identity sources — an existing `~/.gitconfig`, the Windows identity, the source checkout's — yields a name and e-mail | set `git config --global user.name` and `user.email` on Windows, then open the session again |
 | `sandbox_capability_unsupported` | `session.create` on a project whose sandbox profile enables a capability this version cannot apply | remove it from the project's sandbox settings; the message names it |
 | `sandbox_profile_invalid` | `session.create` on a project whose sandbox profile lists an `extra_paths` entry that is not absolute, contains a `..` component (refused outright, never resolved), or — compared textually, after collapsing repeated separators and `.` components — names, reaches into, or is an ancestor of what the base closes or a deferred capability grants: the whole filesystem; `/mnt` itself, a bare drive letter under it (a whole drive is `mnt.all`), or anything under it whose first component is not a drive letter, the same family `/run` closes; `/init`; `/run`; the kernel's interfaces; the system directories; `/opt/willie`; `/var/lib/willie`; the managed tool roots and package caches; the home directory and the private temporary directory themselves, though a path inside either is still grantable; `~/.willie`; `~/.ssh`; `~/.claude`; `~/.claude.json`; `~/.gitconfig`. An ancestor of any of these — `/home`, `/var`, `/opt` among them, none of which is itself on the list — is refused too, because it would contain what it is an ancestor of; the message names the path and the reason. An unknown key or a wrong type in the `[sandbox]` table also carries this code, set once at load: the daemon parses the record's other fields separately from its `sandbox` sub-table, so a `[sandbox]` that fails to become a `SandboxProfile` no longer takes the whole record down with it — the project loads with the default profile and this code recorded as its `sandbox_problem` (shown on the Projects screen), and `session.create`/`sandbox.explain` refuse with it until the profile is replaced through `set_sandbox`, which clears it; a record that fails to parse at all, or whose *other* fields do not match `Project`, is still skipped at start-up (`willied: skipping unreadable project …` on stderr) with no coded error. Also: at launch, an `extra_paths` entry that cannot be resolved on disk, or that resolves through a symbolic link into a location the guard refuses — the daemon's guard is textual, so this is the same rule applied to the path that will actually be mounted | the message names the path; correct it in the project's sandbox settings |

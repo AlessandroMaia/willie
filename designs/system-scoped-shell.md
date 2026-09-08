@@ -280,9 +280,13 @@ session" (`session.create { project_id }`) and "New zsh" (`kind:
 field; Enter calls `session.rename`, Esc cancels, blur commits.
 
 The Sessions panel is a Sheet: live sessions with "Open" (focus the tab),
-finished ones with the name, when they finished and "Resume"
-(`session.create { project_id, resume: true, resume_from }`), which adds
-a live tab and focuses it. With no live session the centre shows an empty
+finished ones with the name and when they finished. "Resume"
+(`session.create { project_id, resume: true, resume_from }`) adds a live
+tab and focuses it, and is offered on the newest finished *agent*
+session only: `resume_from` records and validates the lineage, but the
+harness is launched with a bare continue and always reopens the
+workspace's most recent conversation, so a Resume anywhere else would
+name one session and open another. The other rows say so. With no live session the centre shows an empty
 state: "New session" and, when a finished one exists, "Resume
 <its name>".
 
@@ -301,8 +305,11 @@ screen it shows the system's aggregate.
 Monitoring first. The header names the system and holds "Edit
 capabilities". Below it, the posture as chips: every mechanism in the
 union of the system's sessions' `sandbox.applied` in the ok tone, every
-one in the union of `unavailable` or `degraded` in the warning tone with
-its reason on hover. Three counts: syscalls denied, terminal sequences
+one in the union of `unavailable` or `degraded` in the warning tone. The
+chips carry the mechanism name only: `SandboxState` puts mechanism names
+on the wire, not the `sandbox_degraded` event's message, so there is no
+per-mechanism reason to show on hover. Three counts: syscalls denied,
+terminal sequences
 denied, sessions covered. Then the history: every `Denied` of every
 session of the system flattened into rows — class, name with a one-line
 explanation from a small table keyed by class and name (unknown names get

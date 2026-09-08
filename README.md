@@ -11,8 +11,9 @@ The desktop app frames one system (a registered project) at a time: a
 frameless window with its own header, a sidebar naming the current
 system and offering its four screens — Session, Sandbox, Profiles,
 Usage — while the engine's health, installed tools, plugins, the
-profile store and app settings live behind a settings button, reached
-when they are needed rather than shown alongside daily work. A system's
+profile store, the systems registry and app settings live behind a
+settings button, reached when they are needed rather than shown
+alongside daily work. A system's
 Session screen holds one tab per live session — several can run at
 once — agent conversations and a styled interactive shell side by side,
 with the workspace's files a drawer away and a read-only preview beside

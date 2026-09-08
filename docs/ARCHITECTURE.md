@@ -346,8 +346,15 @@ it knows why it stopped appearing. This is safe because each session
 runs in its own private sandbox home while the shared `agent.state` bind
 (§3.3) carries the login and the harness's own per-session logs — one
 file per conversation — so two conversations in one workspace never
-collide; the usage plugin already matches a session to its log by
-workspace and time window (decision 0025).
+collide on disk. **Attribution is another matter.** Both the title
+reader and the usage plugin match a session to a log by workspace and
+time window, with no per-session claim on the file: for one session at a
+time that is exact, but two *concurrent* sessions in one workspace have
+overlapping windows and can therefore share a title and report identical
+token and context figures. The session data itself is never wrong; only
+the log a session is credited with can be another's. A per-session log
+identity — the conversation id the harness writes, recorded when the
+session claims it — is the fix, and is not in this cut.
 
 **Shell sessions.** `SessionKind` (`willie_core::session`) distinguishes
 an agent conversation from an interactive shell, `#[serde(default)]` so
@@ -357,8 +364,9 @@ session runs the same project checks, the same resolved
 one, but its launch is built by the daemon (`willied::shell`) rather
 than by a harness: `/usr/bin/zsh -l` in the project's workspace,
 `ZDOTDIR=/etc/willie/zsh` pointing at Willie's own prompt
-(`distro/zsh/.zshrc`: history in `$HOME/.zsh_history`, a two-line prompt
-naming the branch) and the same environment allowlist a harness gets.
+(`distro/zsh/.zshrc`: history in `$HOME/.zsh_history`, a one-line prompt
+of three coloured segments — user@willie, the working directory, the
+branch) and the same environment allowlist a harness gets.
 Its `harness` field reads `"zsh"`, never a registry harness id; it
 cannot resume (`harness_cannot_resume`) and is excluded from the usage
 plugin's session enrichment (§4.3) — it keeps no harness-readable log to
@@ -385,7 +393,12 @@ the newest `*.jsonl` under the matching harness's session-logs directory
 modified at or after the session started, reads its first user-turn
 record and trims the text to 80 characters; a title that cannot be
 found stays absent rather than guessed, and the UI shows the session's
-short id instead. The read is deliberately lazy — from `session.list`
+short id instead. The match is per workspace, not per session: with two
+untitled sessions live in one workspace, both resolve to whichever log
+was written last and can end up with the same first prompt (see Several
+live sessions above). A finished session whose prompt cannot be read is
+given up on after one attempt — its log can no longer change — so the
+scan does not grow with the session history. The read is deliberately lazy — from `session.list`
 and from the state-snapshot path, rather than once at `Started` — since
 the harness usually has not written its log yet that early; it is
 bounded to the first 64 KiB of one file per untitled session per call,
@@ -681,10 +694,16 @@ daemon-ignorant. For each session the plugin resolves the first
 registry harness that keeps logs under `_home`
 (`Harness::session_logs_dir`), turns the session's `workspace` into that
 harness's log directory name (`Harness::escape_workspace`), lists its
-`*.jsonl` files, and picks the one whose modified time falls inside the
-session's window — this *is* sources 2 and 3 together: the daemon's own
-session index already carries the workspace and time window a separate
-`events.jsonl` match would otherwise have to recover. A bounded tail (64
+`*.jsonl` files, and picks the *first* one whose modified time falls
+inside the session's window — this *is* sources 2 and 3 together: the
+daemon's own session index already carries the workspace and time window
+a separate `events.jsonl` match would otherwise have to recover. The
+window is the only discriminator, so two sessions live at once in one
+workspace overlap and resolve to the same file: both rows then report
+that one conversation's tokens and context fill. Correct for one session
+at a time, misattributed for concurrent ones, until a session claims its
+log by the harness's own conversation id (§3.2, Several live
+sessions). A bounded tail (64
 KiB) of the picked file is read; the newest line carrying a usage block
 (top-level `usage`, or `message.usage` for an assistant turn; a
 `isSidechain: true` record skipped) sums `input + cache_creation_input +
