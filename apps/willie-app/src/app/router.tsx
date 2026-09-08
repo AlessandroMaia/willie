@@ -11,13 +11,47 @@ import { Shell } from "@/app/shell/shell";
 import { DashboardScreen } from "@/features/health/dashboard-screen";
 import { PluginsScreen } from "@/features/plugins/plugins-screen";
 import { ProjectsScreen } from "@/features/projects/projects-screen";
-import { SessionsScreen } from "@/features/sessions/sessions-screen";
 import { ToolsScreen } from "@/features/tools/tools-screen";
 
-/* A stale hash (an old bookmark, a screen that no longer exists) never
- * shows a blank: it lands on the Dashboard like a fresh start. */
+/* A stale hash never shows a blank: it lands on the current system's
+ * Session screen, the app's new home. */
 function NotFound() {
-  return <Navigate to="/dashboard" replace />;
+  return <Navigate to="/session" replace />;
+}
+
+/** What Tasks 10/12/15 replace: a screen this task only gives an
+ * address to, not a route that does not resolve. */
+function ScreenPlaceholder({ title }: { title: string }) {
+  return (
+    <div className="mx-auto flex max-w-4xl flex-col gap-2">
+      <h1 className="font-semibold text-lg">{title}</h1>
+      <p className="text-muted-foreground text-sm">Coming soon.</p>
+    </div>
+  );
+}
+
+function SessionScreen() {
+  return <ScreenPlaceholder title="Session" />;
+}
+
+function SandboxScreen() {
+  return <ScreenPlaceholder title="Sandbox" />;
+}
+
+function ProfilesScreen() {
+  return <ScreenPlaceholder title="Profiles" />;
+}
+
+function UsageScreen() {
+  return <ScreenPlaceholder title="Usage" />;
+}
+
+function ProfileStoreScreen() {
+  return <ScreenPlaceholder title="Profile store" />;
+}
+
+function SettingsScreen() {
+  return <ScreenPlaceholder title="Settings" />;
 }
 
 const rootRoute = createRootRoute({
@@ -29,47 +63,130 @@ const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
   beforeLoad: () => {
-    throw redirect({ to: "/dashboard" });
+    throw redirect({ to: "/session" });
   },
 });
 
-const dashboardRoute = createRoute({
+const sessionRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/dashboard",
+  path: "/session",
+  component: SessionScreen,
+});
+
+const sandboxRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sandbox",
+  component: SandboxScreen,
+});
+
+const profilesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/profiles",
+  component: ProfilesScreen,
+});
+
+const usageRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/usage",
+  component: UsageScreen,
+});
+
+const setupEngineRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/setup/engine",
   component: DashboardScreen,
 });
 
-const projectsRoute = createRoute({
+const setupToolsRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/projects",
-  component: ProjectsScreen,
-});
-
-const sessionsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/sessions",
-  component: SessionsScreen,
-});
-
-const toolsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/tools",
+  path: "/setup/tools",
   component: ToolsScreen,
 });
 
-const pluginsRoute = createRoute({
+const setupPluginsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/setup/plugins",
+  component: PluginsScreen,
+});
+
+const setupProfileStoreRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/setup/profile-store",
+  component: ProfileStoreScreen,
+});
+
+const setupSystemsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/setup/systems",
+  component: ProjectsScreen,
+});
+
+const setupSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/setup/settings",
+  component: SettingsScreen,
+});
+
+/* The old five-screen paths, kept as redirects so a bookmark or a
+ * stale hash from before the system-scoped shell still lands
+ * somewhere real. */
+const dashboardRedirect = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/dashboard",
+  beforeLoad: () => {
+    throw redirect({ to: "/setup/engine" });
+  },
+});
+
+const projectsRedirect = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/projects",
+  beforeLoad: () => {
+    throw redirect({ to: "/setup/systems" });
+  },
+});
+
+const sessionsRedirect = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/sessions",
+  beforeLoad: () => {
+    throw redirect({ to: "/session" });
+  },
+});
+
+const toolsRedirect = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/tools",
+  beforeLoad: () => {
+    throw redirect({ to: "/setup/tools" });
+  },
+});
+
+const pluginsRedirect = createRoute({
   getParentRoute: () => rootRoute,
   path: "/plugins",
-  component: PluginsScreen,
+  beforeLoad: () => {
+    throw redirect({ to: "/setup/plugins" });
+  },
 });
 
 const routeTree = rootRoute.addChildren([
   indexRoute,
-  dashboardRoute,
-  projectsRoute,
-  sessionsRoute,
-  toolsRoute,
-  pluginsRoute,
+  sessionRoute,
+  sandboxRoute,
+  profilesRoute,
+  usageRoute,
+  setupEngineRoute,
+  setupToolsRoute,
+  setupPluginsRoute,
+  setupProfileStoreRoute,
+  setupSystemsRoute,
+  setupSettingsRoute,
+  dashboardRedirect,
+  projectsRedirect,
+  sessionsRedirect,
+  toolsRedirect,
+  pluginsRedirect,
 ]);
 
 /** Hash history by default: it survives a dev-server reload and needs

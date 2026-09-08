@@ -2,85 +2,104 @@ import {
   ActivityIcon,
   BlocksIcon,
   FolderGit2Icon,
+  GaugeIcon,
+  GitBranchIcon,
+  LayersIcon,
   type LucideIcon,
   SettingsIcon,
+  ShieldIcon,
   TerminalIcon,
   WrenchIcon,
 } from "lucide-react";
+import type { SetupEntry } from "@/lib/domain/setup-entries";
 
-export type ScreenPath =
-  | "/dashboard"
-  | "/projects"
-  | "/sessions"
-  | "/tools"
-  | "/plugins";
+export type { SetupEntry };
 
-interface AvailableEntry {
+export type ScreenPath = "/session" | "/sandbox" | "/profiles" | "/usage";
+
+export interface NavEntry {
   id: string;
   label: string;
   icon: LucideIcon;
-  available: true;
   path: ScreenPath;
   /** In the shortcuts library's syntax; `Mod` is Ctrl on Windows. */
   shortcut: string;
 }
 
-interface PlannedEntry {
-  id: string;
-  label: string;
-  icon: LucideIcon;
-  available: false;
-}
-
-export type NavEntry = AvailableEntry | PlannedEntry;
-
-/** One row per screen the sidebar shows, in order. A screen that does
- * not exist yet is a row with `available: false`: it has an address
- * and no route, so the shell renders it disabled and registers no
- * shortcut for it. The router (`app/router.tsx`) owns the screens
- * themselves; this list never imports a feature. */
+/** The sidebar's four screens: every system has all of them, so
+ * unlike the old five-entry sidebar none is ever disabled. The router
+ * (`app/router.tsx`) owns the screens themselves; this list never
+ * imports a feature. */
 export const ROUTES: readonly NavEntry[] = [
   {
-    id: "dashboard",
-    label: "Dashboard",
-    icon: ActivityIcon,
-    available: true,
-    path: "/dashboard",
+    id: "session",
+    label: "Session",
+    icon: TerminalIcon,
+    path: "/session",
     shortcut: "Mod+1",
   },
   {
-    id: "projects",
-    label: "Projects",
-    icon: FolderGit2Icon,
-    available: true,
-    path: "/projects",
+    id: "sandbox",
+    label: "Sandbox",
+    icon: ShieldIcon,
+    path: "/sandbox",
     shortcut: "Mod+2",
   },
   {
-    id: "sessions",
-    label: "Sessions",
-    icon: TerminalIcon,
-    available: true,
-    path: "/sessions",
+    id: "profiles",
+    label: "Profiles",
+    icon: LayersIcon,
+    path: "/profiles",
     shortcut: "Mod+3",
   },
   {
-    id: "tools",
-    label: "Tools",
-    icon: WrenchIcon,
-    available: true,
-    path: "/tools",
+    id: "usage",
+    label: "Usage",
+    icon: GaugeIcon,
+    path: "/usage",
     shortcut: "Mod+4",
   },
+];
+
+export type SetupPath = `/setup/${SetupEntry}`;
+
+interface SetupEntryInfo {
+  id: SetupEntry;
+  label: string;
+  icon: LucideIcon;
+  path: SetupPath;
+}
+
+/** The setup drawer's own entries (Task 10 builds the drawer itself):
+ * global, not scoped to any one system, so they carry no shortcut and
+ * live outside the sidebar's four screens. */
+export const SETUP_ENTRIES: readonly SetupEntryInfo[] = [
+  { id: "engine", label: "Engine", icon: ActivityIcon, path: "/setup/engine" },
+  { id: "tools", label: "Tools", icon: WrenchIcon, path: "/setup/tools" },
   {
     id: "plugins",
     label: "Plugins",
     icon: BlocksIcon,
-    available: true,
-    path: "/plugins",
-    shortcut: "Mod+5",
+    path: "/setup/plugins",
   },
-  { id: "settings", label: "Settings", icon: SettingsIcon, available: false },
+  {
+    id: "profile-store",
+    label: "Profile store",
+    icon: GitBranchIcon,
+    path: "/setup/profile-store",
+  },
+  {
+    id: "systems",
+    label: "Systems",
+    icon: FolderGit2Icon,
+    path: "/setup/systems",
+  },
+  {
+    id: "settings",
+    label: "Settings",
+    icon: SettingsIcon,
+    path: "/setup/settings",
+  },
 ];
 
 /** "Mod+1" → "Ctrl+1": Willie runs on Windows only. */

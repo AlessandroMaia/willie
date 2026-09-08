@@ -1,6 +1,8 @@
 import { FolderGit2Icon } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { ProblemAlert } from "@/components/problem-alert";
+import { RelocateProjectDialog } from "@/components/system-dialogs/relocate-project-dialog";
+import { RemoveProjectDialog } from "@/components/system-dialogs/remove-project-dialog";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -15,8 +17,6 @@ import { Spinner } from "@/components/ui/spinner";
 import { toast } from "@/components/ui/toast";
 import { DiscoverPanel } from "@/features/projects/discover-panel";
 import { ProjectRow } from "@/features/projects/project-row";
-import { RelocateProjectDialog } from "@/features/projects/relocate-project-dialog";
-import { RemoveProjectDialog } from "@/features/projects/remove-project-dialog";
 import { RootsPanel } from "@/features/projects/roots-panel";
 import { SandboxDialog } from "@/features/projects/sandbox-dialog";
 import { latestJobFor } from "@/lib/domain/jobs";

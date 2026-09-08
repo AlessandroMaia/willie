@@ -1,8 +1,9 @@
 import { useSyncExternalStore } from "react";
+import type { SetupEntry } from "@/lib/domain/setup-entries";
 
 interface SetupDrawerState {
   open: boolean;
-  entry: string | null;
+  entry: SetupEntry | null;
 }
 
 type Listener = () => void;
@@ -24,7 +25,7 @@ function getState(): SetupDrawerState {
   return state;
 }
 
-function openAt(entry?: string): void {
+function openAt(entry?: SetupEntry): void {
   setState({ open: true, entry: entry ?? null });
 }
 
@@ -33,7 +34,7 @@ function close(): void {
 }
 
 export interface SetupDrawerHandle extends SetupDrawerState {
-  openAt: (entry?: string) => void;
+  openAt: (entry?: SetupEntry) => void;
   close: () => void;
 }
 

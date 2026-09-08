@@ -1,5 +1,5 @@
 import { createMemoryHistory } from "@tanstack/react-router";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EngineStatus } from "@/lib/ipc";
@@ -42,8 +42,8 @@ const SNAPSHOT: Snapshot = {
 };
 
 /* The bridge is the only I/O in the frontend and the only module a
- * test fakes. Every function the three screens may call on mount is
- * here; the rest are inert. */
+ * test fakes. Every function the shell or its four screens may call
+ * on mount is here; the rest are inert. */
 const ipc = vi.hoisted(() => ({
   engine: {
     status: vi.fn(),
@@ -91,6 +91,10 @@ const ipc = vi.hoisted(() => ({
   onDaemonEvent: vi.fn(async () => () => {}),
   onSessionOutput: vi.fn(async () => () => {}),
   editorAvailable: vi.fn(async () => true),
+  ui: {
+    prefs: vi.fn(async () => ({ current_project: null })),
+    setPrefs: vi.fn(),
+  },
 }));
 
 vi.mock("@/lib/ipc", () => ipc);
@@ -112,14 +116,16 @@ vi.mock("@tauri-apps/api/window", () => ({
 let App: typeof import("@/app/app").App;
 let createAppRouter: typeof import("@/app/router").createAppRouter;
 
-/* `useEngineStatus` and `useSnapshot` back onto module-level singleton
- * stores, so a status left behind by one test's render would otherwise
- * still be there for the next test's first synchronous render. Reset
- * the module graph and re-import the entry points fresh for every
- * case, so no test depends on running before or after another. */
+/* `useEngineStatus`, `useSnapshot` and `useCurrentSystem` back onto
+ * module-level singleton stores, so a value left behind by one test's
+ * render would otherwise still be there for the next test's first
+ * synchronous render. Reset the module graph and re-import the entry
+ * points fresh for every case, so no test depends on running before or
+ * after another. */
 beforeEach(async () => {
   vi.resetModules();
   vi.clearAllMocks();
+  ipc.ui.prefs.mockResolvedValue({ current_project: null });
   ({ App } = await import("@/app/app"));
   ({ createAppRouter } = await import("@/app/router"));
 });
@@ -135,46 +141,46 @@ function renderApp(path = "/", status: EngineStatus = STATUS) {
 }
 
 describe("the shell", () => {
-  it("opens on the Dashboard and marks it active in the sidebar", async () => {
+  it("opens on Session and marks it active in the sidebar", async () => {
     renderApp();
 
-    const link = await screen.findByRole("link", { name: /Dashboard/ });
+    const link = await screen.findByRole("link", { name: /Session/ });
 
     expect(link.getAttribute("aria-current")).toBe("page");
-    expect(link.getAttribute("href")).toBe("/dashboard");
+    expect(link.getAttribute("href")).toBe("/session");
   });
 
   it("navigates by clicking a sidebar entry", async () => {
     const user = userEvent.setup();
     const router = renderApp();
-    await screen.findByRole("link", { name: /Dashboard/ });
+    await screen.findByRole("link", { name: /Session/ });
 
-    await user.click(screen.getByRole("link", { name: /Projects/ }));
+    await user.click(screen.getByRole("link", { name: /Sandbox/ }));
 
     await vi.waitFor(() =>
-      expect(router.state.location.pathname).toBe("/projects"),
+      expect(router.state.location.pathname).toBe("/sandbox"),
     );
     expect(
-      await screen.findByRole("heading", { name: "Projects" }),
+      await screen.findByRole("heading", { name: "Sandbox" }),
     ).toBeDefined();
   });
 
-  it("navigates with Mod+3", async () => {
+  it("navigates with Mod+2", async () => {
     const user = userEvent.setup();
     const router = renderApp();
-    await screen.findByRole("link", { name: /Dashboard/ });
+    await screen.findByRole("link", { name: /Session/ });
 
-    await user.keyboard("{Control>}3{/Control}");
+    await user.keyboard("{Control>}2{/Control}");
 
     await vi.waitFor(() =>
-      expect(router.state.location.pathname).toBe("/sessions"),
+      expect(router.state.location.pathname).toBe("/sandbox"),
     );
   });
 
   it("toggles the sidebar exactly once on Mod+B", async () => {
     const user = userEvent.setup();
     renderApp();
-    await screen.findByRole("link", { name: /Dashboard/ });
+    await screen.findByRole("link", { name: /Session/ });
     const sidebar = document.querySelector("[data-slot='sidebar'][data-state]");
     expect(sidebar?.getAttribute("data-state")).toBe("expanded");
 
@@ -183,59 +189,52 @@ describe("the shell", () => {
     expect(sidebar?.getAttribute("data-state")).toBe("collapsed");
   });
 
-  it("shows the planned screens disabled, with no route", async () => {
+  it("the_sidebar_has_the_four_screens_with_ctrl_1_to_4", async () => {
     renderApp();
-    await screen.findByRole("link", { name: /Dashboard/ });
+    await screen.findByRole("link", { name: /Session/ });
 
-    const settingsButton = screen.getByRole("button", { name: /Settings/ });
-    expect((settingsButton as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByRole("button", { name: /Tools/ })).toBeNull();
-    expect(screen.getByRole("link", { name: /Tools/ })).toBeDefined();
-    expect(screen.queryByRole("button", { name: /Plugins/ })).toBeNull();
-    expect(screen.getByRole("link", { name: /Plugins/ })).toBeDefined();
+    const expected: [RegExp, string][] = [
+      [/Session/, "Ctrl+1"],
+      [/Sandbox/, "Ctrl+2"],
+      [/Profiles/, "Ctrl+3"],
+      [/Usage/, "Ctrl+4"],
+    ];
+
+    for (const [name, shortcut] of expected) {
+      const link = screen.getByRole("link", { name });
+      expect(within(link).getByText(shortcut)).toBeDefined();
+    }
   });
 
-  it("navigates to Plugins with Mod+5", async () => {
-    const user = userEvent.setup();
-    const router = renderApp();
-    await screen.findByRole("link", { name: /Dashboard/ });
-
-    await user.keyboard("{Control>}5{/Control}");
-
-    await vi.waitFor(() =>
-      expect(router.state.location.pathname).toBe("/plugins"),
-    );
-    expect(
-      await screen.findByRole("heading", { name: "Plugins" }),
-    ).toBeDefined();
-  });
-
-  it("shows a tooltip on hover for a planned entry", async () => {
-    const user = userEvent.setup();
-    renderApp();
-    await screen.findByRole("link", { name: /Dashboard/ });
-
-    const wrapper = screen.getByRole("button", { name: /Settings/ })
-      .parentElement as HTMLElement;
-    await user.hover(wrapper);
-
-    expect(await screen.findByText("Not available yet")).toBeDefined();
-
-    /* Closes the tooltip and waits out its own transition before the
-     * test ends, so no pending state update from it echoes into
-     * whichever test runs next. */
-    await user.unhover(wrapper);
-    await vi.waitFor(() =>
-      expect(screen.queryByText("Not available yet")).toBeNull(),
-    );
-  });
-
-  it("sends a stale hash to the Dashboard", async () => {
+  it("sends a stale hash to the current system's Session home", async () => {
     const router = renderApp("/settings");
 
     await vi.waitFor(() =>
-      expect(router.state.location.pathname).toBe("/dashboard"),
+      expect(router.state.location.pathname).toBe("/session"),
     );
+  });
+
+  it("old_routes_redirect_to_their_new_homes", async () => {
+    const cases: [string, string][] = [
+      ["/dashboard", "/setup/engine"],
+      ["/projects", "/setup/systems"],
+      ["/sessions", "/session"],
+      ["/tools", "/setup/tools"],
+      ["/plugins", "/setup/plugins"],
+    ];
+
+    for (const [from, to] of cases) {
+      ipc.engine.status.mockResolvedValue(STATUS);
+      ipc.projects.snapshot.mockResolvedValue(SNAPSHOT);
+      const router = createAppRouter(
+        createMemoryHistory({ initialEntries: [from] }),
+      );
+      const { unmount } = render(<App router={router} />);
+
+      await vi.waitFor(() => expect(router.state.location.pathname).toBe(to));
+
+      unmount();
+    }
   });
 
   it("puts the engine headline, the daemon version and the live count in the status bar", async () => {

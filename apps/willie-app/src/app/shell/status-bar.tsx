@@ -31,7 +31,7 @@ export function StatusBar() {
       className="flex h-7 shrink-0 items-center gap-3 border-t bg-sidebar px-3 text-muted-foreground text-xs"
     >
       <Link
-        to="/dashboard"
+        to="/setup/engine"
         className="flex min-w-0 items-center gap-2 hover:text-foreground"
       >
         <StatusDot tone={tone} label={`engine ${summary.health}`} />
