@@ -506,15 +506,20 @@ fn enrich_usage_targets(state: &Mutex<State>, mut params: Value) -> Value {
     params
 }
 
-/// Recomputes each project's `source_present` from the filesystem, then
-/// answers with the fresh snapshot, its `plugins` field filled from the
-/// host's live `list()`.
+/// Recomputes each project's `source_present` from the filesystem, gives
+/// every untitled `Agent` session a best-effort title (the harness log a
+/// title reads from often does not exist yet right after `Started`, so
+/// this is the other lazy hook alongside `session.list`), then answers
+/// with the fresh snapshot, its `plugins` field filled from the host's
+/// live `list()`.
 pub fn state_snapshot(
     ops: &Ops,
+    sessions: &SessionOps,
     state: &Mutex<State>,
     host: &Mutex<PluginHost>,
 ) -> Result<Value, RpcError> {
     ops.refresh_source_present();
+    sessions.title_untitled_agent_sessions();
     let mut snapshot: Snapshot = lock(state).snapshot();
     snapshot.plugins = lock_host(host).list();
     serde_json::to_value(snapshot).map_err(internal)

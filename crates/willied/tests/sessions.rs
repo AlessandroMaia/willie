@@ -467,3 +467,70 @@ fn a_shell_session_shows_the_willie_prompt() {
     d.wait_response(stop_id, Duration::from_secs(5), |_| {});
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// A real agent session, with a fake `claude` that plants its own
+/// first-prompt record where Claude Code really keeps one -- under
+/// `$HOME/.claude/projects/<pwd with '/' turned into '-'>`, the same
+/// escaping `ClaudeCode::escape_workspace` does -- ends up titled from
+/// `session.list`, proving the lazy hook against the real sandboxed
+/// launch (cwd `--chdir`'d to the workspace, `agent_state` binding the
+/// log directory rw), not just the unit-level plumbing.
+#[test]
+fn a_running_agent_session_gets_its_first_prompt_as_title() {
+    if !common::git_available() {
+        return;
+    }
+    let root = common::scratch("sess-title");
+    let src = root.join("src");
+    common::init_repo(&src);
+    // A short delay before writing the log: the daemon records `started_at`
+    // as soon as the supervisor reports the harness's pid, essentially the
+    // moment this script starts, so the log's modified time must land
+    // safely after that instant for `pick_log_for`'s `mtime >= started_at`
+    // to accept it.
+    let home = fake_home(
+        &root,
+        r#"sleep 1
+dir="$HOME/.claude/projects/$(pwd | tr '/' '-')"
+mkdir -p "$dir"
+printf '%s\n' '{"type":"user","message":{"role":"user","content":"fix the flaky login test"}}' > "$dir/session.jsonl"
+exec cat"#,
+    );
+    let mut d = common::Daemon::start_with(
+        &root.join("state"),
+        &root.join("workspaces"),
+        &root.join("run"),
+        &home,
+    );
+    let pid = common::add_ready_project(&mut d, &src);
+    let create_id = d.send(
+        "session.create",
+        json!({ "project_id": pid,
+            "git_identity": { "name": "T", "email": "t@x" } }),
+    );
+    let resp = d.wait_response(create_id, Duration::from_secs(30), |_| {});
+    assert_eq!(
+        resp["result"]["session"]["state"]["state"], "running",
+        "{resp}"
+    );
+    let sid = resp["result"]["session"]["id"].as_str().unwrap().to_owned();
+
+    assert!(
+        common::wait_until(Duration::from_secs(15), || {
+            let list_id = d.send("session.list", json!({}));
+            let list = d.wait_response(list_id, Duration::from_secs(5), |_| {});
+            list["result"]["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|s| {
+                    s["id"] == sid && s["title"] == "fix the flaky login test"
+                })
+        }),
+        "the session never picked up its first-prompt title"
+    );
+
+    let stop_id = d.send("session.stop", json!({ "id": sid }));
+    d.wait_response(stop_id, Duration::from_secs(5), |_| {});
+    let _ = std::fs::remove_dir_all(&root);
+}

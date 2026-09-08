@@ -32,6 +32,8 @@ mod server;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod session_store;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod session_title;
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod sessions;
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 mod shell;

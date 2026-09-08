@@ -164,9 +164,12 @@ impl Server {
             plugin::LIST => handlers::plugin_list(&self.host),
             plugin::ENABLE => handlers::plugin_enable(&self.host, req.params),
             plugin::DISABLE => handlers::plugin_disable(&self.host, req.params),
-            state_method::SNAPSHOT => {
-                handlers::state_snapshot(&self.ops, &self.state, &self.host)
-            }
+            state_method::SNAPSHOT => handlers::state_snapshot(
+                &self.ops,
+                &self.sessions,
+                &self.state,
+                &self.host,
+            ),
             // A `usage.*` call (e.g. `usage.snapshot`) carries no top-level
             // dispatch arm either: `usage_handle` injects the daemon's live
             // sessions and home directory (the same daemon-fills-targets

@@ -26,7 +26,7 @@ use willie_plugin_api::CoreEvent;
 
 use crate::{
     harness, identity, jobs::Runner, plugins::PluginHost, projects::OpError,
-    session_store, shell, state, state::State,
+    session_store, session_title, shell, state, state::State,
 };
 
 /// Shared inputs a session operation needs.
@@ -449,11 +449,64 @@ impl SessionOps {
 
     #[must_use]
     pub fn list(&self) -> Vec<Session> {
+        self.title_untitled_agent_sessions();
         crate::lock(&self.state)
             .sessions
             .values()
             .cloned()
             .collect()
+    }
+
+    /// Best-effort: gives every started, untitled `Agent` session its
+    /// title (its first prompt) before the caller reads `state`. The
+    /// harness usually has not written its log yet at `Started` -- the
+    /// first record lands only once the user's first prompt does, maybe
+    /// minutes later -- so this runs lazily here and from the state
+    /// snapshot path instead, rather than once at start. Bounded per
+    /// call: one directory listing and the first 64 KiB of one file per
+    /// untitled session; a session already titled, or one still
+    /// `Creating`, is skipped. Once a title is found it is written into
+    /// `state` and a `session_changed` is emitted; a later call sees
+    /// `title.is_some()` and does nothing more for that session.
+    pub fn title_untitled_agent_sessions(&self) {
+        let candidates: Vec<(SessionId, String, u64)> =
+            crate::lock(&self.state)
+                .sessions
+                .values()
+                .filter(|s| {
+                    s.kind == SessionKind::Agent
+                        && s.title.is_none()
+                        && (s.state.is_live() || s.state.is_terminal())
+                })
+                .map(|s| {
+                    let started_at_secs = s
+                        .started_at
+                        .as_deref()
+                        .or(Some(s.created_at.as_str()))
+                        .and_then(|t| t.parse::<u64>().ok())
+                        .unwrap_or(0);
+                    (s.id, s.workspace.clone(), started_at_secs)
+                })
+                .collect();
+
+        for (id, workspace, started_at_secs) in candidates {
+            let Some(title) = session_title::first_prompt_for(
+                &self.home,
+                &workspace,
+                started_at_secs,
+            ) else {
+                continue;
+            };
+            state::emit(&self.state, &self.out, |s| {
+                let mut session = s
+                    .sessions
+                    .get(&id)
+                    .cloned()
+                    .unwrap_or_else(|| placeholder(id));
+                session.title = Some(title.clone());
+                s.upsert_session(session)
+            });
+        }
     }
 
     /// Applies a user-chosen label: trims it, clears it on a blank or
@@ -1109,6 +1162,96 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&state_dir);
+    }
+
+    /// Writes `content` under every registry harness's session-logs
+    /// directory for `workspace`, with its modified time set to
+    /// `mtime_secs` -- what `pick_log_for` reads once `list` looks for an
+    /// untitled agent session's first prompt.
+    fn plant_first_prompt_log(
+        home: &Path,
+        workspace: &str,
+        mtime_secs: u64,
+        content: &str,
+    ) {
+        for h in willie_harness::registry() {
+            let Some(dir) = h.session_logs_dir(home) else {
+                continue;
+            };
+            let logdir = dir.join(h.escape_workspace(workspace));
+            std::fs::create_dir_all(&logdir).unwrap();
+            let path = logdir.join("session.jsonl");
+            std::fs::write(&path, content).unwrap();
+            let file =
+                std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+            file.set_modified(
+                std::time::UNIX_EPOCH + Duration::from_secs(mtime_secs),
+            )
+            .unwrap();
+        }
+    }
+
+    /// An untitled, running `Agent` session with a planted harness log
+    /// gets its title from `list()`; a second `list()` call sees
+    /// `title.is_some()` and emits nothing more for it. `state.seq` only
+    /// ever bumps inside `upsert_session`, in lock-step with the
+    /// `session_changed` notification `state::emit` sends alongside it,
+    /// so counting its bumps is counting that emission without racing
+    /// the async `Outbound` writer thread.
+    #[test]
+    fn list_titles_an_untitled_agent_session_once_from_its_first_prompt() {
+        let home = std::env::temp_dir().join("willie-sess-list-title-home");
+        let _ = std::fs::remove_dir_all(&home);
+        std::fs::create_dir_all(&home).unwrap();
+
+        let workspace = "/home/willie/projects/p";
+        let started_at_secs = 1_700_000_000u64;
+        plant_first_prompt_log(
+            &home,
+            workspace,
+            started_at_secs + 5,
+            r#"{"type":"user","message":{"role":"user","content":"fix the login bug"}}"#,
+        );
+
+        fn clock() -> String {
+            "1".to_owned()
+        }
+
+        let state = Arc::new(Mutex::new(State::default()));
+        let (out, _h) = Outbound::spawn(std::io::sink());
+        let runner =
+            Arc::new(Runner::new(Arc::clone(&state), out.clone(), clock));
+
+        let id = SessionId::new();
+        let mut session = placeholder(id);
+        session.workspace = workspace.to_owned();
+        session.created_at = started_at_secs.to_string();
+        session.started_at = Some(started_at_secs.to_string());
+        session.state = SessionState::Running;
+        crate::lock(&state).sessions.insert(id, session);
+        assert_eq!(crate::lock(&state).seq, 0);
+
+        let ops = SessionOps::new(
+            Arc::clone(&state),
+            out,
+            std::env::temp_dir().join("willie-sess-list-title-state"),
+            std::env::temp_dir().join("willie-sess-list-title-run"),
+            home.clone(),
+            clock,
+            runner,
+        );
+
+        let first = ops.list();
+        let titled = first.iter().find(|s| s.id == id).unwrap();
+        assert_eq!(titled.title.as_deref(), Some("fix the login bug"));
+        assert_eq!(crate::lock(&state).seq, 1);
+
+        let second = ops.list();
+        let still_titled = second.iter().find(|s| s.id == id).unwrap();
+        assert_eq!(still_titled.title.as_deref(), Some("fix the login bug"));
+        assert_eq!(crate::lock(&state).seq, 1);
+
+        let _ = std::fs::remove_dir_all(&home);
     }
 }
 
