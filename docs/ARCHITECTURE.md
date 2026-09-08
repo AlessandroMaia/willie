@@ -11,8 +11,8 @@ The engine starts the daemon with
 `wsl.exe -d willie --user willie --exec /opt/willie/bin/willied --stdio`
 and speaks JSON-RPC over the process pipes. Each agent session lives in a
 **detached supervisor** (`willie-sess`) that owns the PTY and the sandbox
-and outlives the app; Windows Terminal today, and an embedded terminal
-later, are only **clients** of that PTY. All state lives in ext4; nothing
+and outlives the app; a Windows Terminal tab and the app's embedded
+terminal are only **clients** of that PTY. All state lives in ext4; nothing
 third-party ships in the package.
 
 Decision records in `docs/decisions/` explain the *why*; this document is

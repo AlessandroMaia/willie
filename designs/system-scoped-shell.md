@@ -160,8 +160,10 @@ longer produced.
 Why this is safe for the harness: each session runs in its own private
 sandbox home; the shared `agent.state` bind holds the login and the
 harness's own per-session logs, which the harness writes one file per
-conversation, so two conversations in one workspace do not collide. The
-usage plugin already matches a session to its log by time window.
+conversation, so two conversations in one workspace do not collide on
+disk. Attributing a log to one session (its title, its usage) is by
+workspace and time window until per-session log identity lands; two
+concurrent sessions in one workspace may share those figures.
 
 ### Names — `crates/willie-core/src/session.rs`, `crates/willied/src/sessions.rs`, `session_title.rs`
 
