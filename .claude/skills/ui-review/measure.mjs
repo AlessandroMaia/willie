@@ -52,26 +52,30 @@ await page.viewport(1100, 720, 1);
 let scrolling = 0;
 
 for (const [, route] of ROUTES) {
-  await page.goto("about:blank", 50);
-  await page.goto(`${APP_URL}/#${route}`, 1100);
+  for (const withPanel of [false, true]) {
+    await page.goto("about:blank", 50);
+    await page.goto(`${APP_URL}/#${route}`, 1100);
+    if (withPanel) await page.click('[aria-label="Workspace panel"]');
 
-  const m = await page.eval(PROBE);
-  if (m.scrolls) scrolling += 1;
+    const m = await page.eval(PROBE);
+    if (m.scrolls) scrolling += 1;
 
-  console.log(
-    `${m.scrolls ? "SCROLLS" : "ok     "} ${route.padEnd(22)} ` +
-      `doc(w,h,cw,ch)=${m.doc.join(",")} viewport=${m.viewport.join("x")}`,
-  );
+    console.log(
+      `${m.scrolls ? "SCROLLS" : "ok     "} ${route.padEnd(22)} ` +
+        `${withPanel ? "panel open " : "panel shut "}` +
+        `doc(w,h,cw,ch)=${m.doc.join(",")}`,
+    );
 
   /* Only what the window itself cannot contain: content taller than the
    * centre pane is clipped by the scroll area and is not a defect. */
-  if (m.scrolls) {
-    for (const el of m.overflowing) {
-      console.log(
-        `        <${el.tag}${el.slot ? ` slot=${el.slot}` : ""}> ` +
-          `rect=${el.rect.join(",")} bottom=${el.bottom} right=${el.right}`,
-      );
-      console.log(`          class="${el.cls}"`);
+    if (m.scrolls) {
+      for (const el of m.overflowing) {
+        console.log(
+          `        <${el.tag}${el.slot ? ` slot=${el.slot}` : ""}> ` +
+            `rect=${el.rect.join(",")} bottom=${el.bottom} right=${el.right}`,
+        );
+        console.log(`          class="${el.cls}"`);
+      }
     }
   }
 }

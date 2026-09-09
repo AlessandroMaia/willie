@@ -20,11 +20,11 @@ export const ROUTES = [
 export const STATES = [
   ["drawer-setup", (page) => page.click('[aria-label="Open setup"]')],
   [
-    "tree-drawer",
+    "workspace-panel",
     async (page) => {
       await page.key("Escape", "Escape", 27);
 
-      return page.click('[aria-label="Workspace tree"]');
+      return page.click('[aria-label="Workspace panel"]');
     },
   ],
   [

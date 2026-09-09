@@ -248,52 +248,14 @@ the private home, `cd "$WILLIE_WORKSPACE"`, and a two-line prompt —
 --abbrev-ref HEAD` with plain 256-colour escapes. The login shell of the
 `willie` user stays `bash`; the session spawns zsh explicitly.
 
-### The workspace tree and the file preview — `crates/willied/src/workspace.rs`, `handlers.rs`, `apps/willie-app/src/app/shell/tree-drawer.tsx`, `features/session/file-preview.tsx`
+### The workspace tree and the file preview — superseded
 
-Two read-only daemon methods, both resolved against the project's
-workspace and refused when the path escapes it:
-
-```rust
-project.tree      { id, path? }  →  { entries: [ { name, kind: "dir"|"file", git?: "M"|"A"|"D"|"?"|"R" } ] }
-project.read_file { id, path }   →  { content: String, truncated: bool }
-```
-
-`workspace::resolve_within(workspace, rel) -> Result<PathBuf, WsError>`
-is the one containment check: `rel` must be relative, must not contain a
-`..` component, and the canonicalised result must start with the
-canonicalised workspace (a symlink that points outside is refused);
-otherwise `path_outside_workspace`. `project.tree` lists one directory
-level (sorted: directories first, then names), skipping `.git`; its git
-column comes from one `git status --porcelain=v1 --untracked-files=all`
-run in the workspace per call, parsed by a pure function into a map of
-path → flag, so a directory shows a flag when anything under it changed.
-`project.read_file` reads at most 512 KiB (`truncated: true` past that),
-refuses a file whose first 8 KiB contain a NUL byte with `file_not_text`,
-and returns UTF-8 with invalid sequences replaced. The check
-canonicalises and then opens by path rather than by file descriptor, so
-a writer inside the workspace racing a symlink swap between those two
-steps is an accepted residual (the fix, if ever wanted, is opening path
-component by component, or comparing the opened file's device/inode
-afterwards); a target that is not a regular file — a directory, a
-FIFO — is refused the same way, as `file_not_text`.
-
-The tree drawer slides from under the sidebar over the left edge of the
-centre (toggled by the button at the left of the tab strip, Esc closes),
-loads folders lazily on expand, shows the git flag per row, and carries
-"Open in VS Code" for the workspace in its header. Clicking a file opens
-the preview: a read-only, line-numbered panel that starts at the right
-edge of the tree when the tree is open (`| tree | file |`) and at the
-centre's left edge when it is closed; its header shows the path, a
-"read-only" badge, an expand toggle (the file fills everything right of
-the tree), "Open in VS Code" for that file, and close. Esc closes the
-preview first, then the tree.
-
-`open_in_editor` gains an optional file: the pure `editor_argv(workspace,
-file: Option<&str>)` appends the file after the workspace, which opens the
-folder window with the file active. The file arrives workspace-relative
-and is joined onto the workspace before it goes on the command line —
-VS Code resolves a relative argument against the launching process's own
-directory, which is on the Windows side and names nothing in the distro.
+Both moved out of this screen into the workspace panel, together with
+the shell: see `designs/workspace-panel.md`. The daemon side is
+unchanged — `project.tree` and `project.read_file` are the same calls,
+with the same `READ_CAP` and the same git status per row. What changed
+is who mounts them: the shell, on every screen, instead of the Session
+screen's tab strip.
 
 ### The Session screen — `apps/willie-app/src/features/session/session-screen.tsx`, `sessions-panel.tsx`
 

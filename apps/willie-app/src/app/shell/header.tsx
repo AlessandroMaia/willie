@@ -3,6 +3,7 @@ import {
   Minimize2Icon,
   MinusIcon,
   PanelLeftIcon,
+  PanelRightIcon,
   SettingsIcon,
   SquareIcon,
   XIcon,
@@ -10,7 +11,9 @@ import {
 import { type ReactNode, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { useSidebar } from "@/components/ui/sidebar";
+import { useCurrentSystem } from "@/store/use-current-system";
 import { useSetupDrawer } from "@/store/use-setup-drawer";
+import { useWorkspacePanel } from "@/store/use-workspace-panel";
 
 interface HeaderProps {
   /** The current system's name; absent (no system registered yet) the
@@ -29,6 +32,28 @@ function SidebarToggle() {
       onClick={toggleSidebar}
     >
       <PanelLeftIcon />
+    </Button>
+  );
+}
+
+/* The mirror of the sidebar toggle at the other end of the bar: the
+ * frame's two panels, one chord and one button each. Disabled with no
+ * system, which is when the panel has nothing to list and nothing to
+ * run. */
+function WorkspacePanelToggle() {
+  const { open, toggle } = useWorkspacePanel();
+  const { system } = useCurrentSystem();
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      aria-label="Workspace panel"
+      aria-pressed={open}
+      disabled={system === null}
+      onClick={toggle}
+    >
+      <PanelRightIcon />
     </Button>
   );
 }
@@ -163,6 +188,7 @@ export function Header({ systemName }: HeaderProps) {
       <SidebarToggle />
       <SettingsButton />
       <DragRegionTitle systemName={systemName} />
+      <WorkspacePanelToggle />
       <WindowControls />
     </header>
   );

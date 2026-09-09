@@ -64,7 +64,7 @@
   --radius: 0.625rem;
   /* The tree drawer's fixed width — a size token, not a colour, so it
    * needs no dark-mode override. */
-  --tree-width: 280px;
+  --panel-width: 280px;
   /* The frameless header's height. The shell's grid row and the header
    * itself must agree exactly, or the body row is off by the
    * difference, so both read it from here. */

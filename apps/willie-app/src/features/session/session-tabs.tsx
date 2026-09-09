@@ -1,4 +1,4 @@
-import { FolderTreeIcon, PlusIcon } from "lucide-react";
+import { PlusIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -10,7 +10,6 @@ import { RenameTab } from "@/features/session/rename-tab";
 import { SessionsPanel } from "@/features/session/sessions-panel";
 import type { Session } from "@/lib/proto";
 import { cn } from "@/lib/utils";
-import { useTreeDrawer } from "@/store/use-tree-drawer";
 
 interface SessionTabsProps {
   /** Every live session of the current system, agent sessions first —
@@ -31,9 +30,8 @@ interface SessionTabsProps {
 /**
  * One tab per live session: an agent tab carries a live dot and the
  * session's own name, and renames in place on a double-click; a shell
- * tab always reads "$ zsh" and never renames. The tree toggle at the
- * left end is the workspace tree drawer's only control, and the
- * Sessions panel sits at the right end.
+ * tab always reads "$ zsh" and never renames. The Sessions panel sits
+ * at the right end.
  */
 export function SessionTabs({
   sessions,
@@ -45,23 +43,11 @@ export function SessionTabs({
   onRename,
   onResume,
 }: SessionTabsProps) {
-  const { open: treeOpen, toggle: toggleTree } = useTreeDrawer();
-
   return (
     <div
       role="tablist"
       className="flex items-center gap-1 overflow-x-auto border-b pb-1.5"
     >
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Workspace tree"
-        aria-pressed={treeOpen}
-        onClick={toggleTree}
-      >
-        <FolderTreeIcon />
-      </Button>
-
       {sessions.map((session) => {
         const active = session.id === activeId;
 

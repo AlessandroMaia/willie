@@ -21,7 +21,7 @@ import { useCurrentSystem } from "@/store/use-current-system";
 import { useEngineStatus } from "@/store/use-engine-status";
 import { useSetupDrawer } from "@/store/use-setup-drawer";
 import { useSnapshot } from "@/store/use-snapshot";
-import { useTreeDrawer } from "@/store/use-tree-drawer";
+import { useWorkspacePanel } from "@/store/use-workspace-panel";
 
 function isProjectLive(sessions: Session[], projectId: string): boolean {
   return sessions.some((s) => s.project_id === projectId && isLive(s));
@@ -30,7 +30,7 @@ function isProjectLive(sessions: Session[], projectId: string): boolean {
 /**
  * The current system, up top in the sidebar: glyph, name, and its
  * workspace path with the branch. The branch is the daemon's own
- * `Project.branch`, read as of the last snapshot; the tree drawer's
+ * `Project.branch`, read as of the last snapshot; the panel tree's
  * live root load overrides it while it is open, since that one is read
  * at the moment the tree was listed. Its menu is a searchable list of
  * every system, each with the same live dot the trigger shows for the
@@ -41,7 +41,7 @@ function isProjectLive(sessions: Session[], projectId: string): boolean {
  */
 export function SystemSelector() {
   const { system, setSystem, loading } = useCurrentSystem();
-  const { branch: treeBranch } = useTreeDrawer();
+  const { branch: panelBranch } = useWorkspacePanel();
   const { status } = useEngineStatus();
   const daemonRunning = status?.daemon.state === "running";
   const { snapshot } = useSnapshot(daemonRunning);
@@ -71,7 +71,7 @@ export function SystemSelector() {
 
   const collapsed = sidebarState === "collapsed";
   const currentLive = system !== null && isProjectLive(sessions, system.id);
-  const branch = treeBranch ?? system?.branch ?? null;
+  const branch = panelBranch ?? system?.branch ?? null;
 
   return (
     <Popover
