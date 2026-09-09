@@ -32,7 +32,7 @@ export function AppSidebar() {
    * lives in instead. */
   return (
     <Sidebar collapsible="icon" variant="inset" className="h-full">
-      <SidebarHeader className="flex-row items-center gap-1 px-1 py-2 group-data-[collapsible=icon]:justify-center">
+      <SidebarHeader className="flex-row items-center gap-1 px-1 py-1 group-data-[collapsible=icon]:justify-center">
         <SystemSelector />
       </SidebarHeader>
 
