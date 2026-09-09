@@ -284,6 +284,19 @@ describe("the shell", () => {
     expect(ipc.projects.snapshot).not.toHaveBeenCalled();
   });
 
+  /* One ground behind the whole window, with the screen floating on it
+   * as a rounded card: no rule runs the window's full height, which is
+   * what the `inset` variant is for. The margins and the rounding come
+   * with it; what this pins is the variant itself. */
+  it("the_screen_floats_as_a_card_on_the_sidebar_ground", async () => {
+    renderApp();
+    await screen.findByRole("link", { name: /Session/ });
+
+    const sidebar = document.querySelector("[data-slot='sidebar'][data-state]");
+
+    expect(sidebar?.getAttribute("data-variant")).toBe("inset");
+  });
+
   /* The generated sidebar is `position: fixed` with `inset-y-0` and a
    * `h-svh` of its own. Inside the body row's containing block that
    * height wins over `bottom: 0`, so the sidebar ends one header plus

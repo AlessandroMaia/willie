@@ -126,6 +126,13 @@ add, discover, roots), `/setup/settings` (theme). The old paths
 (`/dashboard`, `/projects`, `/sessions`, `/tools`, `/plugins`) redirect
 to their new homes so a saved location keeps working.
 
+The sidebar is the `inset` variant: no rule runs the window's full
+height, the sidebar and the chrome around it are one ground, and the
+screen floats on that ground as a rounded card. Anything that draws
+over the card in the ground's own colour — a drawer painted
+`bg-sidebar`, say — stops reading as a surface and eats the card's
+corner, so surfaces above the screen take the card tone.
+
 The sidebar fills the shell's body row, never the window. It is
 `position: fixed` inside that row's containing block, so the height it
 ships with (`h-svh`) would leave it a header plus a status bar too

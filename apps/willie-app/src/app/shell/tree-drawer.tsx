@@ -266,7 +266,7 @@ export function TreeDrawer() {
        * violation. */
       inert={!open}
       className={cn(
-        "absolute inset-y-0 left-0 z-10 flex w-(--tree-width) flex-col border-r bg-sidebar shadow-lg transition-transform duration-200 ease-linear",
+        "absolute inset-y-0 left-0 z-10 flex w-(--tree-width) flex-col border-r bg-card shadow-lg transition-transform duration-200 ease-linear",
         open ? "translate-x-0" : "-translate-x-full",
       )}
     >
