@@ -86,7 +86,7 @@ export function SystemSelector() {
           <Button
             variant="ghost"
             aria-label="Switch system"
-            className="h-10 min-w-0 flex-1 justify-start gap-2 px-2"
+            className="h-10 min-w-0 flex-1 justify-start gap-2 px-2 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
           />
         }
       >

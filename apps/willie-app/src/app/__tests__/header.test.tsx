@@ -80,7 +80,7 @@ describe("the header", () => {
 
     for (const name of ["Minimize", "Close", "Toggle sidebar", "Open setup"]) {
       expect(screen.getByRole("button", { name }).className).toContain(
-        "size-6",
+        "size-7",
       );
     }
   });

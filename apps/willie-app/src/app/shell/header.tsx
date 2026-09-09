@@ -24,7 +24,7 @@ function SidebarToggle() {
   return (
     <Button
       variant="ghost"
-      size="icon-xs"
+      size="icon-sm"
       aria-label="Toggle sidebar"
       onClick={toggleSidebar}
     >
@@ -39,7 +39,7 @@ function SettingsButton() {
   return (
     <Button
       variant="ghost"
-      size="icon-xs"
+      size="icon-sm"
       aria-label="Open setup"
       onClick={() => openAt()}
     >
@@ -86,7 +86,7 @@ function WindowControl({
   return (
     <Button
       variant={destructive ? "destructive" : "ghost"}
-      size="icon-xs"
+      size="icon-sm"
       aria-label={label}
       onClick={onClick}
     >
