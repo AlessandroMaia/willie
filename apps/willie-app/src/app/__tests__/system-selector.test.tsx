@@ -162,6 +162,20 @@ describe("the system selector", () => {
     expect(dot.parentElement?.className).toContain("bg-sidebar-accent");
   });
 
+  /* The workspace path is longer than the sidebar is wide, so it has
+   * to truncate. `items-start` on the column would size each line to
+   * its own text instead of the column, leaving `truncate` nothing to
+   * clip against and spilling the path past the sidebar's edge. */
+  it("the_selector_column_lets_the_path_truncate", async () => {
+    renderSelector();
+    await screen.findByRole("button", { name: "Switch system" });
+
+    const path = screen.getByText("/home/willie/projects/willie · main");
+
+    expect(path.className).toContain("truncate");
+    expect(path.parentElement?.className).not.toContain("items-start");
+  });
+
   it("choosing_a_system_persists_the_preference", async () => {
     const user = userEvent.setup();
     renderSelector();

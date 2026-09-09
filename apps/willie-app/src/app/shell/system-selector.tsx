@@ -104,7 +104,7 @@ export function SystemSelector() {
           )}
         </span>
         {!collapsed && (
-          <span className="flex min-w-0 flex-1 flex-col items-start text-left">
+          <span className="flex min-w-0 flex-1 flex-col text-left">
             {/* "No system" is a fact about the registry, so it may not
              * be shown while the saved preference is still being read
              * — that reads as "you have none" for one paint. */}
