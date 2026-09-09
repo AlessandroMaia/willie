@@ -94,6 +94,17 @@ precommit: fmt-check check-refs lint
 dev:
     pnpm -C {{web}} tauri dev
 
+# Serve the frontend alone (no Tauri window) — what the UI harness drives.
+[group('dev')]
+ui-dev:
+    pnpm -C {{web}} dev
+
+# Capture every screen in both themes to target/ui-shots. Needs `ui-dev`
+# (or `dev`) running; see .claude/skills/ui-review/SKILL.md.
+[group('dev')]
+ui-shots:
+    node .claude/skills/ui-review/shots.mjs
+
 # Cross-compile the Linux binaries (daemon, session supervisor, CLI) to musl.
 [group('dev')]
 build-linux:
