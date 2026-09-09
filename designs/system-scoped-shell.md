@@ -319,11 +319,15 @@ state: "New session" and, when a finished one exists, "Resume
 
 ### The footer — `apps/willie-app/src/app/shell/status-bar.tsx`, `store/use-focused-session.ts`
 
-The status bar keeps engine health, the first problem, the daemon version
-and the live-session count, and gains a governance segment shown while a
-session tab is focused: `sandbox: <applied…> · <n> denied`, a context
-meter and the token count, read from the focused session's `sandbox` and
-from `usage.snapshot`'s row for it. The segment is a link to
+The status bar keeps engine health, the first problem and the
+live-session count, and gains a governance segment shown while a session
+tab is focused: `sandbox: <n> applied · <n> denied`, a context meter and
+a compact token count (`184k`, the exact figure on the element's title),
+read from the focused session's `sandbox` and from `usage.snapshot`'s row
+for it. What the bar carries is what changes while you work: the
+daemon's version belongs to the Engine screen, one click away through
+the headline, and the mechanisms' names to the Sandbox screen this
+segment links to. The segment is a link to
 `/sandbox?session=<id>`. On a shell tab the segment hides; on the Sandbox
 screen it shows the system's aggregate.
 

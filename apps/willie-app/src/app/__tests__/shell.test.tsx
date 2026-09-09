@@ -268,12 +268,15 @@ describe("the shell", () => {
     }
   });
 
-  it("puts the engine headline, the daemon version and the live count in the status bar", async () => {
+  /* The footer carries what changes while you work. The daemon's
+   * version is not that: it belongs to the Engine screen, one click
+   * away through the headline beside it. */
+  it("puts the engine headline and the live count in the status bar, and leaves the version to the Engine screen", async () => {
     renderApp();
 
     expect(await screen.findByText("Engine running")).toBeDefined();
-    expect(await screen.findByText("willied 0.1.0")).toBeDefined();
-    expect(await screen.findByText("1 live session")).toBeDefined();
+    expect(await screen.findByText("1 live")).toBeDefined();
+    expect(screen.queryByText(/willied 0\.1\.0/)).toBeNull();
   });
 
   it("names the first failing part and hides the count when the daemon is stopped", async () => {

@@ -230,9 +230,9 @@ describe("the footer's governance segment", () => {
     focus("sess_1");
 
     expect(
-      await screen.findByText("sandbox: seccomp · namespaces · 3 denied"),
+      await screen.findByText("sandbox: 2 applied · 3 denied"),
     ).toBeDefined();
-    expect(await screen.findByText("4200 tokens")).toBeDefined();
+    expect(await screen.findByText("4.2k")).toBeDefined();
     expect(screen.getByRole("img", { name: "42% context" })).toBeDefined();
   });
 
@@ -253,7 +253,7 @@ describe("the footer's governance segment", () => {
     focus("sess_1");
 
     const link = await screen.findByRole("link", {
-      name: /sandbox: seccomp/,
+      name: /sandbox: 2 applied/,
     });
     expect(link.getAttribute("href")).toBe("/sandbox?session=sess_1");
   });
@@ -308,7 +308,7 @@ describe("the footer's system aggregate", () => {
     await renderApp("/sandbox");
 
     const link = await screen.findByRole("link", { name: /^sandbox:/ });
-    expect(link.textContent).toContain("seccomp · namespaces · 6 denied");
+    expect(link.textContent).toContain("2 applied · 6 denied");
     expect(link.getAttribute("href")).toBe("/sandbox");
     expect(screen.queryByText(/tokens/)).toBeNull();
     expect(ipc.usage.snapshot).not.toHaveBeenCalled();
