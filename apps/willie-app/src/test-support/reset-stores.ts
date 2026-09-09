@@ -6,6 +6,7 @@ import { resetForTests as resetSetupDrawer } from "@/store/use-setup-drawer";
 import { resetForTests as resetSnapshot } from "@/store/use-snapshot";
 import { resetForTests as resetSystemActions } from "@/store/use-system-actions";
 import { resetForTests as resetTreeDrawer } from "@/store/use-tree-drawer";
+import { resetForTests as resetWorkspacePanel } from "@/store/use-workspace-panel";
 
 /**
  * Every module-level store back to the state a freshly launched app
@@ -25,4 +26,5 @@ export function resetStores(): void {
   resetSnapshot();
   resetSystemActions();
   resetTreeDrawer();
+  resetWorkspacePanel();
 }
