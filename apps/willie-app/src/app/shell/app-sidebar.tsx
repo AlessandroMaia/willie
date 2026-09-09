@@ -22,8 +22,13 @@ import {
 export function AppSidebar() {
   const pathname = useLocation({ select: (location) => location.pathname });
 
+  /* The generated sidebar is `fixed inset-y-0 h-svh`, and that height
+   * wins over `bottom: 0` inside the shell's body row: a full window
+   * tall, it ends a header plus a status bar below the row, covering
+   * the status bar and scrolling the window. It fills the row it
+   * lives in instead. */
   return (
-    <Sidebar collapsible="icon">
+    <Sidebar collapsible="icon" className="h-full">
       <SidebarHeader className="flex-row items-center gap-1 px-2 py-2">
         <SystemSelector />
         <SystemActionsMenu />

@@ -123,6 +123,13 @@ add, discover, roots), `/setup/settings` (theme). The old paths
 (`/dashboard`, `/projects`, `/sessions`, `/tools`, `/plugins`) redirect
 to their new homes so a saved location keeps working.
 
+The sidebar fills the shell's body row, never the window. It is
+`position: fixed` inside that row's containing block, so the height it
+ships with (`h-svh`) would leave it a header plus a status bar too
+tall — covering the status bar's left edge and giving the window a
+scrollbar. The window itself never scrolls: the header and the status
+bar are fixed rows and each screen scrolls inside the centre pane.
+
 ### The settings drawer — `apps/willie-app/src/app/shell/setup-drawer.tsx`
 
 A Sheet from the right listing the six setup entries with a one-line

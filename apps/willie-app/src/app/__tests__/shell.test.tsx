@@ -284,6 +284,21 @@ describe("the shell", () => {
     expect(ipc.projects.snapshot).not.toHaveBeenCalled();
   });
 
+  /* The generated sidebar is `position: fixed` with `inset-y-0` and a
+   * `h-svh` of its own. Inside the body row's containing block that
+   * height wins over `bottom: 0`, so the sidebar ends one header plus
+   * one status bar below the row: it paints over the status bar's left
+   * edge and gives the window a scrollbar it must never have. */
+  it("the_sidebar_is_as_tall_as_the_body_row_not_the_window", async () => {
+    renderApp();
+    await screen.findByRole("link", { name: /Session/ });
+
+    const container = document.querySelector('[data-slot="sidebar-container"]');
+
+    expect(container?.className).toContain("h-full");
+    expect(container?.className).not.toContain("h-svh");
+  });
+
   it("the_drawer_hugs_the_centre_pane_regardless_of_the_sidebar_width", async () => {
     renderApp();
     await screen.findByRole("link", { name: /Session/ });
