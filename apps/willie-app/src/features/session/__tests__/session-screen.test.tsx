@@ -117,7 +117,9 @@ beforeEach(() => {
 });
 
 describe("SessionScreen", () => {
-  it("n_live_sessions_render_n_tabs_each_with_its_own_terminal", async () => {
+  /* A live shell is the workspace panel's, not the strip's: it gets no
+   * tab here and no terminal from this screen. */
+  it("n_live_agent_sessions_render_n_tabs_and_a_shell_gets_none", async () => {
     ipc.projects.snapshot.mockResolvedValue(
       snapshot([
         session({ id: "sess_agent_1", label: "first" }),
@@ -128,11 +130,11 @@ describe("SessionScreen", () => {
 
     render(<SessionScreen />);
 
-    expect(await screen.findAllByRole("tab")).toHaveLength(3);
-    expect(ipc.sessionTerminal.open).toHaveBeenCalledTimes(3);
+    expect(await screen.findAllByRole("tab")).toHaveLength(2);
+    expect(ipc.sessionTerminal.open).toHaveBeenCalledTimes(2);
     expect(ipc.sessionTerminal.open).toHaveBeenCalledWith("sess_agent_1");
     expect(ipc.sessionTerminal.open).toHaveBeenCalledWith("sess_agent_2");
-    expect(ipc.sessionTerminal.open).toHaveBeenCalledWith("sess_shell_1");
+    expect(ipc.sessionTerminal.open).not.toHaveBeenCalledWith("sess_shell_1");
   });
 
   it("inactive_tabs_stay_mounted_and_only_toggle_hidden", async () => {
@@ -185,7 +187,9 @@ describe("SessionScreen", () => {
     expect(ipc.sessionTerminal.open.mock.calls.length).toBe(callsBeforeSwitch);
   });
 
-  it("plus_offers_a_new_session_and_a_new_zsh", async () => {
+  /* One action, so no menu: the shell moved to the workspace panel and
+   * this strip has only agent sessions left to open. */
+  it("plus_opens_a_new_session_with_no_menu_and_no_zsh", async () => {
     const user = userEvent.setup();
     ipc.projects.snapshot.mockResolvedValue(
       snapshot([session({ id: "sess_agent_1", label: "first" })]),
@@ -194,17 +198,10 @@ describe("SessionScreen", () => {
     render(<SessionScreen />);
     await screen.findByRole("tab", { name: /first/ });
 
-    await user.click(screen.getByRole("button", { name: "New tab" }));
-    await user.click(
-      await screen.findByRole("menuitem", { name: "New session" }),
-    );
+    await user.click(screen.getByRole("button", { name: "New session" }));
 
     expect(ipc.sessions.open).toHaveBeenCalledWith("proj_1");
-
-    await user.click(screen.getByRole("button", { name: "New tab" }));
-    await user.click(await screen.findByRole("menuitem", { name: "New zsh" }));
-
-    expect(ipc.sessions.open).toHaveBeenCalledWith("proj_1", "shell");
+    expect(screen.queryByRole("menuitem", { name: "New zsh" })).toBeNull();
   });
 
   it("switching_tabs_sets_the_focused_session", async () => {
@@ -255,23 +252,24 @@ describe("SessionScreen", () => {
       screen.getByRole("button", { name: "Resume old work" }),
     ).toBeDefined();
 
-    await user.click(screen.getByRole("button", { name: "New session" }));
+    /* Two controls open a session while the strip is empty: the "+" in
+     * the strip and the empty state's own call to action. This is the
+     * latter, the one with visible text. */
+    await user.click(screen.getByText("New session"));
     expect(ipc.sessions.open).toHaveBeenCalledWith("proj_1");
 
     await user.click(screen.getByRole("button", { name: "Resume old work" }));
     expect(ipc.sessions.resume).toHaveBeenCalledWith("proj_1", "sess_done_1");
   });
 
-  /* The workspace tree's only toggle lives in the tab strip, and a
-   * system with nothing live is exactly when someone browses the files
-   * to decide what to open — so the strip outlives its tabs. */
-  it("the_empty_state_still_offers_the_workspace_tree", async () => {
+  /* Browsing the workspace with nothing live is exactly what the
+   * panel is for, and it opens from the header — this screen has no
+   * business carrying a control for it any more. */
+  it("the_empty_state_carries_no_workspace_tree_control", async () => {
     render(<SessionScreen />);
 
     expect(await screen.findByText("No live sessions")).toBeDefined();
-    expect(
-      screen.getByRole("button", { name: "Workspace tree" }),
-    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: "Workspace tree" })).toBeNull();
   });
 
   it("a_failed_new_session_shows_the_problem_instead_of_failing_silently", async () => {
@@ -284,9 +282,7 @@ describe("SessionScreen", () => {
 
     render(<SessionScreen />);
 
-    await user.click(
-      await screen.findByRole("button", { name: "New session" }),
-    );
+    await user.click(await screen.findByText("New session"));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("shell_unavailable");

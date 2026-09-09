@@ -1,12 +1,13 @@
 import type { Denied, SandboxState, Session } from "@/lib/proto";
 
 /**
- * The applied sandbox mechanisms, joined into one line. Empty when
- * none were reported yet — a session still `creating`, or one recorded
- * before sandbox reporting existed.
+ * The footer's one-line posture: how much applied and how much was
+ * refused. The mechanisms' names live on the Sandbox screen this line
+ * links to — spelled out here they push the counts, which are what
+ * changes while you work, off the edge of the bar.
  */
-export function postureLine(sandbox: SandboxState): string {
-  return sandbox.applied.join(" · ");
+export function postureSummary(applied: number, denied: number): string {
+  return `${applied} applied · ${denied} denied`;
 }
 
 /** How many denials the sandbox recorded in total, across every kind. */

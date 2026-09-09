@@ -63,9 +63,19 @@ const SNAPSHOT: Snapshot = {
 
 const ipc = vi.hoisted(() => ({
   engine: { status: vi.fn(), onStatus: vi.fn(async () => () => {}) },
-  projects: { snapshot: vi.fn() },
+  projects: {
+    snapshot: vi.fn(),
+    openInEditor: vi.fn(async () => {}),
+    openInExplorer: vi.fn(async () => {}),
+    updateFromWindows: vi.fn(async () => {}),
+    rename: vi.fn(async () => {}),
+    relocate: vi.fn(async () => {}),
+    remove: vi.fn(async () => {}),
+  },
   onDaemonEvent: vi.fn(async () => () => {}),
   ui: { prefs: vi.fn(), setPrefs: vi.fn() },
+  editorAvailable: vi.fn(async () => true),
+  dialogs: { pickFolder: vi.fn(async () => null) },
 }));
 
 vi.mock("@/lib/ipc", () => ipc);
@@ -112,6 +122,58 @@ describe("the system selector", () => {
 
     expect(screen.queryByRole("button", { name: /willie/i })).toBeNull();
     expect(screen.getByRole("button", { name: /other-system/i })).toBeDefined();
+  });
+
+  /* One target in the sidebar header. The actions used to sit behind a
+   * second "…" trigger beside this one, and collapsed the two shared
+   * 48px of rail — the selector was squeezed to 18px and its glyph
+   * spilled onto the screen behind. They move into this menu. */
+  it("the_selector_menu_carries_the_system_actions", async () => {
+    const user = userEvent.setup();
+    renderSelector();
+    await screen.findByRole("button", { name: "Switch system" });
+
+    expect(screen.queryByRole("button", { name: "System actions" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Switch system" }));
+
+    expect(
+      await screen.findByRole("button", { name: "Open in Explorer" }),
+    ).toBeDefined();
+    expect(screen.getByRole("button", { name: "Rename" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "Remove" })).toBeDefined();
+  });
+
+  /* Collapsed, the header is 48px of rail. A dot laid out beside the
+   * glyph is pushed past that edge and paints on the screen behind, so
+   * it has to leave the row's flow and ride the glyph itself. */
+  it("the_collapsed_rail_keeps_the_live_dot_on_the_glyph", async () => {
+    ipc.ui.prefs.mockResolvedValue({ current_project: "proj_2" });
+    render(
+      <SidebarProvider defaultOpen={false}>
+        <SystemSelector />
+      </SidebarProvider>,
+    );
+    await screen.findByRole("button", { name: "Switch system" });
+
+    const dot = await screen.findByRole("img", { name: "live" });
+
+    expect(dot.className).toContain("absolute");
+    expect(dot.parentElement?.className).toContain("bg-sidebar-accent");
+  });
+
+  /* The workspace path is longer than the sidebar is wide, so it has
+   * to truncate. `items-start` on the column would size each line to
+   * its own text instead of the column, leaving `truncate` nothing to
+   * clip against and spilling the path past the sidebar's edge. */
+  it("the_selector_column_lets_the_path_truncate", async () => {
+    renderSelector();
+    await screen.findByRole("button", { name: "Switch system" });
+
+    const path = screen.getByText("/home/willie/projects/willie · main");
+
+    expect(path.className).toContain("truncate");
+    expect(path.parentElement?.className).not.toContain("items-start");
   });
 
   it("choosing_a_system_persists_the_preference", async () => {

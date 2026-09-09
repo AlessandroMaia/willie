@@ -1,6 +1,5 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { ROUTES, shortcutLabel } from "@/app/routes";
-import { SystemActionsMenu } from "@/app/shell/system-actions-menu";
 import { SystemSelector } from "@/app/shell/system-selector";
 import { Kbd } from "@/components/ui/kbd";
 import {
@@ -22,17 +21,25 @@ import {
 export function AppSidebar() {
   const pathname = useLocation({ select: (location) => location.pathname });
 
+  /* `inset` is what keeps a rule from running the window's full
+   * height: the sidebar becomes part of one ground and the screen
+   * floats on it as a rounded card.
+   *
+   * The generated sidebar is `fixed inset-y-0 h-svh`, and that height
+   * wins over `bottom: 0` inside the shell's body row: a full window
+   * tall, it ends a header plus a status bar below the row, covering
+   * the status bar and scrolling the window. It fills the row it
+   * lives in instead. */
   return (
-    <Sidebar collapsible="icon">
-      <SidebarHeader className="flex-row items-center gap-1 px-2 py-2">
+    <Sidebar collapsible="icon" variant="inset" className="h-full">
+      <SidebarHeader className="flex-row items-center gap-1 px-1 py-1 group-data-[collapsible=icon]:justify-center">
         <SystemSelector />
-        <SystemActionsMenu />
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarGroup>
+        <SidebarGroup className="px-1">
           <SidebarGroupLabel>Screens</SidebarGroupLabel>
-          <SidebarMenu>
+          <SidebarMenu className="group-data-[collapsible=icon]:items-center">
             {ROUTES.map((entry) => (
               <SidebarMenuItem key={entry.id}>
                 <SidebarMenuButton

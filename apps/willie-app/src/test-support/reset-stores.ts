@@ -1,10 +1,10 @@
 import { resetForTests as resetCurrentSystem } from "@/store/use-current-system";
 import { resetForTests as resetEngineStatus } from "@/store/use-engine-status";
-import { resetForTests as resetFilePreview } from "@/store/use-file-preview";
 import { resetForTests as resetFocusedSession } from "@/store/use-focused-session";
 import { resetForTests as resetSetupDrawer } from "@/store/use-setup-drawer";
 import { resetForTests as resetSnapshot } from "@/store/use-snapshot";
-import { resetForTests as resetTreeDrawer } from "@/store/use-tree-drawer";
+import { resetForTests as resetSystemActions } from "@/store/use-system-actions";
+import { resetForTests as resetWorkspacePanel } from "@/store/use-workspace-panel";
 
 /**
  * Every module-level store back to the state a freshly launched app
@@ -18,9 +18,9 @@ import { resetForTests as resetTreeDrawer } from "@/store/use-tree-drawer";
 export function resetStores(): void {
   resetCurrentSystem();
   resetEngineStatus();
-  resetFilePreview();
   resetFocusedSession();
   resetSetupDrawer();
   resetSnapshot();
-  resetTreeDrawer();
+  resetSystemActions();
+  resetWorkspacePanel();
 }

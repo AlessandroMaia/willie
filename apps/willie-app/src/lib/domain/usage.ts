@@ -20,3 +20,20 @@ export function contextTone(pct: number | null): ContextTone {
   if (pct >= CONTEXT_WARNING_PCT) return "warning";
   return "ok";
 }
+
+/**
+ * A token count short enough to sit in the footer beside everything
+ * else: `4.2k`, `184k`, `1.1M`. The decimal is kept only while it
+ * still carries — past ten thousand tokens the tenth of a thousand is
+ * noise, and the digits it costs are the ones that push the rest of
+ * the line off the edge. The exact figure is on the Usage screen.
+ */
+export function compactTokens(tokens: number): string {
+  const scale = (value: number, suffix: string): string =>
+    `${value < 10 ? value.toFixed(1) : Math.round(value)}${suffix}`;
+
+  if (tokens >= 1_000_000) return scale(tokens / 1_000_000, "M");
+  if (tokens >= 1_000) return scale(tokens / 1_000, "k");
+
+  return String(tokens);
+}

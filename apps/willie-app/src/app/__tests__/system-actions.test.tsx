@@ -1,7 +1,10 @@
 import { act, render, renderHook, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SystemActionsMenu } from "@/app/shell/system-actions-menu";
+import {
+  SystemActionDialogs,
+  SystemActionRows,
+} from "@/app/shell/system-actions";
 import type { EngineStatus } from "@/lib/ipc";
 import type { Project, Snapshot } from "@/lib/proto";
 import { useCurrentSystem } from "@/store/use-current-system";
@@ -75,17 +78,22 @@ beforeEach(() => {
   );
 });
 
-describe("the system actions menu", () => {
+describe("the system actions", () => {
   /* Remove deletes the workspace clone by default, so the dialog may
    * never outlive the system it named: the current system re-resolves
    * on its own whenever the registry changes underneath. */
   it("a_system_change_closes_the_remove_dialog_instead_of_retargeting_it", async () => {
     const user = userEvent.setup();
-    render(<SystemActionsMenu />);
-    await screen.findByRole("button", { name: "System actions" });
+    /* The rows live in the selector's popover and the dialogs outside
+     * it; rendered together here, the pair is what the shell mounts. */
+    render(
+      <>
+        <SystemActionRows />
+        <SystemActionDialogs />
+      </>,
+    );
 
-    await user.click(screen.getByRole("button", { name: "System actions" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Remove" }));
+    await user.click(await screen.findByRole("button", { name: "Remove" }));
 
     expect(await screen.findByText("Remove “willie”?")).toBeDefined();
 

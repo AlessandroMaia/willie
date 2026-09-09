@@ -3,9 +3,9 @@ import { useEffect, useState } from "react";
 import { StatusDot } from "@/components/status-dot";
 import { TONE_DOT, type Tone, toneForHealth } from "@/components/tone";
 import { summarize } from "@/lib/domain/engine-status";
-import { deniedCount, posture, postureLine } from "@/lib/domain/sandbox";
+import { deniedCount, posture, postureSummary } from "@/lib/domain/sandbox";
 import { liveSessions, sandboxOf, sandboxPosture } from "@/lib/domain/sessions";
-import { contextTone } from "@/lib/domain/usage";
+import { compactTokens, contextTone } from "@/lib/domain/usage";
 import { usage } from "@/lib/ipc";
 import type { Session, SessionUsage, UsageSnapshot } from "@/lib/proto";
 import { cn } from "@/lib/utils";
@@ -52,7 +52,7 @@ function GovernanceSegment({
     posture ??
     (noReport || !sandbox
       ? "no sandbox report"
-      : `${postureLine(sandbox)} · ${deniedCount(sandbox)} denied`);
+      : postureSummary(sandbox.applied.length, deniedCount(sandbox)));
   const showUsage = !noReport && session !== null;
   const pct = usageRow?.context_pct ?? null;
   const tone: Tone = contextTone(pct);
@@ -80,7 +80,12 @@ function GovernanceSegment({
       )}
 
       {showUsage && usageRow && (
-        <span className="shrink-0 font-mono">{usageRow.tokens} tokens</span>
+        <span
+          className="shrink-0 font-mono"
+          title={`${usageRow.tokens} tokens`}
+        >
+          {compactTokens(usageRow.tokens)}
+        </span>
       )}
     </Link>
   );
@@ -105,10 +110,11 @@ export function StatusBar() {
   const { system: currentSystem } = useCurrentSystem();
   const pathname = useLocation({ select: (location) => location.pathname });
 
-  const showGovernance =
-    pathname === "/session" &&
-    session !== null &&
-    (session.kind ?? "agent") === "agent";
+  /* No kind check any more: the strip holds agent sessions only, so a
+   * focused session is always one. The panel's shell does not drive
+   * this bar — the bar follows the screen, and the panel is beside
+   * it. */
+  const showGovernance = pathname === "/session" && session !== null;
 
   const showSystemAggregate = pathname === "/sandbox" && currentSystem !== null;
 
@@ -130,7 +136,7 @@ export function StatusBar() {
   const systemPosture =
     systemApplied.length === 0
       ? "no sandbox report"
-      : `${systemApplied.join(" · ")} · ${systemDenied} denied`;
+      : postureSummary(systemApplied.length, systemDenied);
 
   const [usageSnapshot, setUsageSnapshot] = useState<UsageSnapshot | null>(
     null,
@@ -187,10 +193,6 @@ export function StatusBar() {
         </span>
       </Link>
 
-      {summary.version && (
-        <span className="font-mono">willied {summary.version}</span>
-      )}
-
       {showGovernance && session && (
         <GovernanceSegment
           session={session}
@@ -206,11 +208,7 @@ export function StatusBar() {
         />
       )}
 
-      {live !== null && (
-        <span className="ml-auto">
-          {live} live session{live === 1 ? "" : "s"}
-        </span>
-      )}
+      {live !== null && <span className="ml-auto">{live} live</span>}
     </footer>
   );
 }

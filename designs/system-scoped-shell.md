@@ -30,22 +30,26 @@ user's summary: functional, but too complex, so it falls into disuse.
   draggable. Right: minimize, maximize, close, drawn by Willie.
 - **The sidebar is the work context.** On top, a system selector (name,
   workspace path, branch, a live dot; a searchable list; "Add system…")
-  and a "…" menu with the system's actions. Below, the system's screens:
-  Session, Sandbox, Profiles, Usage (Ctrl+1–4). Nothing global lives here.
+  whose menu also carries the system's actions. Below, the system's
+  screens: Session, Sandbox, Profiles, Usage (Ctrl+1–4). Nothing global
+  lives here.
 - **The global area is the header's settings button.** Engine, Tools,
   Plugins, Profile store, Systems and Settings open from a drawer and keep
   their existing content under `/setup/*` routes.
 - **Several live sessions per system, one tab each.** A tab is named by
   the session's first prompt (best-effort) and can be renamed by double
-  click; the name persists. `+` starts a new agent session or a new shell.
-- **A styled shell in a tab.** `zsh` runs in the workspace under the same
-  sandbox as an agent session, with a Willie prompt.
+  click; the name persists. `+` starts a new agent session. (Superseded
+  in part: the shell moved to the workspace panel, so `+` has one
+  action and the strip holds agent sessions only.)
+- **A styled shell.** `zsh` runs in the workspace under the same sandbox
+  as an agent session, with a Willie prompt — in the workspace panel,
+  one per system; see `designs/workspace-panel.md`.
 - **A Sessions panel** lists live and finished sessions; a finished one is
   resumed from there into a live tab.
-- **The workspace tree as a drawer**, with git status per row, and a
-  read-only **file preview beside it** (never over it) that expands into a
-  full-width viewer. "Open in VS Code" stays one click away for the
-  workspace (tree header, system menu) and for a file (preview header).
+- **The workspace tree**, with git status per row, and a read-only
+  **file preview**, with "Open in VS Code" one click away for the
+  workspace and for a file. (Superseded: both are tabs of the workspace
+  panel now, reachable from every screen rather than only this one.)
 - **A Sandbox screen that monitors first**: the posture aggregated over
   the system's sessions, three counts, and the chronological denial
   history across sessions with a per-session filter. Capabilities are
@@ -76,8 +80,11 @@ user's summary: functional, but too complex, so it falls into disuse.
 
 The main window sets `"decorations": false` and `"shadow": true` (Windows
 11 keeps the rounded corners and the drop shadow of a decorated window).
-The header is a 36 px row: two icon buttons on the left (collapse the
-sidebar — also Ctrl+B — and the settings drawer), a centre `div` marked
+The header is a 32 px row carrying no rule: it shares the sidebar's
+ground, and a rule under it would draw a line across that one surface.
+Its controls are 24 px. Two icon buttons on
+the left (collapse the sidebar — also Ctrl+B — and the settings
+drawer), a centre `div` marked
 `data-tauri-drag-region` showing `Willie · <system>`, and three window
 controls on the right that call `getCurrentWindow().minimize()`,
 `.toggleMaximize()` and `.close()` from `@tauri-apps/api/window`. The
@@ -104,15 +111,22 @@ yet: the screens show an empty state pointing at "Add system…"). Every
 system screen reads the current system from this store and never from a
 route parameter, so switching systems keeps the screen.
 
-### The sidebar — `apps/willie-app/src/app/shell/app-sidebar.tsx`, `system-selector.tsx`, `system-actions-menu.tsx`, `app/routes.ts`
+### The sidebar — `apps/willie-app/src/app/shell/app-sidebar.tsx`, `system-selector.tsx`, `system-actions.tsx`, `app/routes.ts`
 
 The selector button shows the glyph (two letters), the name, `<workspace
 path> · <branch>` and a live dot when the system has a live session; it
 opens a menu with a search field, one row per system (live dot, name,
-branch) and "Add system…" (opens the settings drawer on Systems). The "…"
-button beside it opens the system's actions: Open in VS Code (WSL), Open
-in Explorer, Sync from Windows, Rename, Relocate, Remove — the existing
+branch), "Add system…" (opens the settings drawer on Systems) and, under
+a separator, the system's own actions: Open in VS Code (WSL), Open in
+Explorer, Update from Windows, Rename, Relocate, Remove — the existing
 commands and dialogs, moved off the project row.
+
+The header is one button because collapsed it is one 48px target: a
+second trigger beside the selector left neither room to sit in, and
+both spilled onto the screen behind. Collapsed, the live dot rides the
+glyph's corner for the same reason. The three confirmations mount
+outside the popover, which unmounts its content on close, and
+`useSystemActions` carries which one is open across that boundary.
 
 `ROUTES` becomes the four system screens with Ctrl+1–4:
 `/session`, `/sandbox`, `/profiles`, `/usage`. The global entries move to
@@ -122,6 +136,20 @@ store's create/edit/sync surface), `/setup/systems` (the project registry:
 add, discover, roots), `/setup/settings` (theme). The old paths
 (`/dashboard`, `/projects`, `/sessions`, `/tools`, `/plugins`) redirect
 to their new homes so a saved location keeps working.
+
+The sidebar is the `inset` variant: no rule runs the window's full
+height, the sidebar and the chrome around it are one ground, and the
+screen floats on that ground as a rounded card. Anything that draws
+over the card in the ground's own colour — a drawer painted
+`bg-sidebar`, say — stops reading as a surface and eats the card's
+corner, so surfaces above the screen take the card tone.
+
+The sidebar fills the shell's body row, never the window. It is
+`position: fixed` inside that row's containing block, so the height it
+ships with (`h-svh`) would leave it a header plus a status bar too
+tall — covering the status bar's left edge and giving the window a
+scrollbar. The window itself never scrolls: the header and the status
+bar are fixed rows and each screen scrolls inside the centre pane.
 
 ### The settings drawer — `apps/willie-app/src/app/shell/setup-drawer.tsx`
 
@@ -223,52 +251,14 @@ the private home, `cd "$WILLIE_WORKSPACE"`, and a two-line prompt —
 --abbrev-ref HEAD` with plain 256-colour escapes. The login shell of the
 `willie` user stays `bash`; the session spawns zsh explicitly.
 
-### The workspace tree and the file preview — `crates/willied/src/workspace.rs`, `handlers.rs`, `apps/willie-app/src/app/shell/tree-drawer.tsx`, `features/session/file-preview.tsx`
+### The workspace tree and the file preview — superseded
 
-Two read-only daemon methods, both resolved against the project's
-workspace and refused when the path escapes it:
-
-```rust
-project.tree      { id, path? }  →  { entries: [ { name, kind: "dir"|"file", git?: "M"|"A"|"D"|"?"|"R" } ] }
-project.read_file { id, path }   →  { content: String, truncated: bool }
-```
-
-`workspace::resolve_within(workspace, rel) -> Result<PathBuf, WsError>`
-is the one containment check: `rel` must be relative, must not contain a
-`..` component, and the canonicalised result must start with the
-canonicalised workspace (a symlink that points outside is refused);
-otherwise `path_outside_workspace`. `project.tree` lists one directory
-level (sorted: directories first, then names), skipping `.git`; its git
-column comes from one `git status --porcelain=v1 --untracked-files=all`
-run in the workspace per call, parsed by a pure function into a map of
-path → flag, so a directory shows a flag when anything under it changed.
-`project.read_file` reads at most 512 KiB (`truncated: true` past that),
-refuses a file whose first 8 KiB contain a NUL byte with `file_not_text`,
-and returns UTF-8 with invalid sequences replaced. The check
-canonicalises and then opens by path rather than by file descriptor, so
-a writer inside the workspace racing a symlink swap between those two
-steps is an accepted residual (the fix, if ever wanted, is opening path
-component by component, or comparing the opened file's device/inode
-afterwards); a target that is not a regular file — a directory, a
-FIFO — is refused the same way, as `file_not_text`.
-
-The tree drawer slides from under the sidebar over the left edge of the
-centre (toggled by the button at the left of the tab strip, Esc closes),
-loads folders lazily on expand, shows the git flag per row, and carries
-"Open in VS Code" for the workspace in its header. Clicking a file opens
-the preview: a read-only, line-numbered panel that starts at the right
-edge of the tree when the tree is open (`| tree | file |`) and at the
-centre's left edge when it is closed; its header shows the path, a
-"read-only" badge, an expand toggle (the file fills everything right of
-the tree), "Open in VS Code" for that file, and close. Esc closes the
-preview first, then the tree.
-
-`open_in_editor` gains an optional file: the pure `editor_argv(workspace,
-file: Option<&str>)` appends the file after the workspace, which opens the
-folder window with the file active. The file arrives workspace-relative
-and is joined onto the workspace before it goes on the command line —
-VS Code resolves a relative argument against the launching process's own
-directory, which is on the Windows side and names nothing in the distro.
+Both moved out of this screen into the workspace panel, together with
+the shell: see `designs/workspace-panel.md`. The daemon side is
+unchanged — `project.tree` and `project.read_file` are the same calls,
+with the same `READ_CAP` and the same git status per row. What changed
+is who mounts them: the shell, on every screen, instead of the Session
+screen's tab strip.
 
 ### The Session screen — `apps/willie-app/src/features/session/session-screen.tsx`, `sessions-panel.tsx`
 
@@ -294,11 +284,15 @@ state: "New session" and, when a finished one exists, "Resume
 
 ### The footer — `apps/willie-app/src/app/shell/status-bar.tsx`, `store/use-focused-session.ts`
 
-The status bar keeps engine health, the first problem, the daemon version
-and the live-session count, and gains a governance segment shown while a
-session tab is focused: `sandbox: <applied…> · <n> denied`, a context
-meter and the token count, read from the focused session's `sandbox` and
-from `usage.snapshot`'s row for it. The segment is a link to
+The status bar keeps engine health, the first problem and the
+live-session count, and gains a governance segment shown while a session
+tab is focused: `sandbox: <n> applied · <n> denied`, a context meter and
+a compact token count (`184k`, the exact figure on the element's title),
+read from the focused session's `sandbox` and from `usage.snapshot`'s row
+for it. What the bar carries is what changes while you work: the
+daemon's version belongs to the Engine screen, one click away through
+the headline, and the mechanisms' names to the Sandbox screen this
+segment links to. The segment is a link to
 `/sandbox?session=<id>`. On a shell tab the segment hides; on the Sandbox
 screen it shows the system's aggregate.
 

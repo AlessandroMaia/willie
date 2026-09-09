@@ -6,7 +6,7 @@ import {
   deniedCount,
   explain,
   posture,
-  postureLine,
+  postureSummary,
 } from "@/lib/domain/sandbox";
 import type { Denied, SandboxState, Session } from "@/lib/proto";
 
@@ -44,15 +44,13 @@ const session = (id: string, sb?: SandboxState): Session => ({
   sandbox: sb,
 });
 
-describe("postureLine", () => {
-  it("joins the applied mechanisms with a middle dot", () => {
-    expect(postureLine(sandbox({ applied: ["seccomp", "namespaces"] }))).toBe(
-      "seccomp · namespaces",
-    );
+describe("postureSummary", () => {
+  it("counts what applied and what was refused", () => {
+    expect(postureSummary(3, 15)).toBe("3 applied · 15 denied");
   });
 
-  it("is empty when nothing has applied yet — callers must check sandboxPosture first, never render this alone", () => {
-    expect(postureLine(sandbox({}))).toBe("");
+  it("counts a clean session too — the names live on the Sandbox screen", () => {
+    expect(postureSummary(2, 0)).toBe("2 applied · 0 denied");
   });
 });
 

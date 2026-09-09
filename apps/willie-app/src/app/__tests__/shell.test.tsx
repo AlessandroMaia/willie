@@ -1,18 +1,11 @@
 import { createMemoryHistory } from "@tanstack/react-router";
-import {
-  act,
-  render,
-  renderHook,
-  screen,
-  within,
-} from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "@/app/app";
 import { createAppRouter } from "@/app/router";
 import type { EngineStatus } from "@/lib/ipc";
 import type { Snapshot } from "@/lib/proto";
-import { useTreeDrawer } from "@/store/use-tree-drawer";
 import { resetStores } from "@/test-support/reset-stores";
 
 /* The Session screen hosts a real `SessionTerminal` for every live
@@ -268,12 +261,15 @@ describe("the shell", () => {
     }
   });
 
-  it("puts the engine headline, the daemon version and the live count in the status bar", async () => {
+  /* The footer carries what changes while you work. The daemon's
+   * version is not that: it belongs to the Engine screen, one click
+   * away through the headline beside it. */
+  it("puts the engine headline and the live count in the status bar, and leaves the version to the Engine screen", async () => {
     renderApp();
 
     expect(await screen.findByText("Engine running")).toBeDefined();
-    expect(await screen.findByText("willied 0.1.0")).toBeDefined();
-    expect(await screen.findByText("1 live session")).toBeDefined();
+    expect(await screen.findByText("1 live")).toBeDefined();
+    expect(screen.queryByText(/willied 0\.1\.0/)).toBeNull();
   });
 
   it("names the first failing part and hides the count when the daemon is stopped", async () => {
@@ -284,57 +280,31 @@ describe("the shell", () => {
     expect(ipc.projects.snapshot).not.toHaveBeenCalled();
   });
 
-  it("the_drawer_hugs_the_centre_pane_regardless_of_the_sidebar_width", async () => {
+  /* One ground behind the whole window, with the screen floating on it
+   * as a rounded card: no rule runs the window's full height, which is
+   * what the `inset` variant is for. The margins and the rounding come
+   * with it; what this pins is the variant itself. */
+  it("the_screen_floats_as_a_card_on_the_sidebar_ground", async () => {
     renderApp();
     await screen.findByRole("link", { name: /Session/ });
 
-    const inset = document.querySelector('[data-slot="sidebar-inset"]');
-    const drawer = document.querySelector('[data-slot="tree-drawer"]');
+    const sidebar = document.querySelector("[data-slot='sidebar'][data-state]");
 
-    expect(inset).not.toBeNull();
-    expect(drawer).not.toBeNull();
-    expect(inset && drawer && inset.contains(drawer)).toBe(true);
-    expect(drawer?.className).toContain("left-0");
+    expect(sidebar?.getAttribute("data-variant")).toBe("inset");
   });
 
-  /* The tree and its preview are one surface, mounted beside each
-   * other in the shell so their edges meet with no padding between
-   * them — and both belong to the Session screen alone. */
-  it("the_tree_drawer_is_a_direct_child_of_the_inset", async () => {
-    renderApp("/session");
+  /* The generated sidebar is `position: fixed` with `inset-y-0` and a
+   * `h-svh` of its own. Inside the body row's containing block that
+   * height wins over `bottom: 0`, so the sidebar ends one header plus
+   * one status bar below the row: it paints over the status bar's left
+   * edge and gives the window a scrollbar it must never have. */
+  it("the_sidebar_is_as_tall_as_the_body_row_not_the_window", async () => {
+    renderApp();
     await screen.findByRole("link", { name: /Session/ });
 
-    const inset = document.querySelector('[data-slot="sidebar-inset"]');
-    const drawer = document.querySelector('[data-slot="tree-drawer"]');
+    const container = document.querySelector('[data-slot="sidebar-container"]');
 
-    expect(drawer?.parentElement).toBe(inset);
-    /* The preview is mounted beside the drawer, under the same
-     * containing block, so `| tree | file |` meet with no padding
-     * between them. Nothing is open, so it renders null — what this
-     * pins is that the Session screen below no longer hosts it. */
-    expect(document.querySelector('[data-slot="file-preview"]')).toBeNull();
-  });
-
-  it("leaving_the_session_screen_closes_the_workspace_tree", async () => {
-    const user = userEvent.setup();
-    renderApp("/session");
-    await screen.findByRole("link", { name: /Session/ });
-
-    /* The toggle itself lives in the Session screen's tab strip, which
-     * this suite's empty registry never renders; the drawer's own
-     * store is the same one that toggle drives. */
-    const tree = renderHook(() => useTreeDrawer());
-    act(() => {
-      tree.result.current.toggle();
-    });
-
-    const drawer = document.querySelector('[data-slot="tree-drawer"]');
-    expect(drawer?.getAttribute("aria-hidden")).toBe("false");
-
-    await user.click(screen.getByRole("link", { name: /Sandbox/ }));
-
-    await vi.waitFor(() =>
-      expect(drawer?.getAttribute("aria-hidden")).toBe("true"),
-    );
+    expect(container?.className).toContain("h-full");
+    expect(container?.className).not.toContain("h-svh");
   });
 });

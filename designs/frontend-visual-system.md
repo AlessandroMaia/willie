@@ -189,7 +189,7 @@ its subscription effect are deleted.
 
 ### Primitives — `apps/willie-app/src/components/ui/`, `components/`
 
-The initial set, generated with the registry's `add` and limited to what
+The initial set, pulled in with the registry's `add` and limited to what
 the screens use: `button`, `button-group`, `input`, `field`, `label`,
 `checkbox`, `badge`, `tooltip`, `dialog`, `alert-dialog`, `alert`,
 `separator`, `scroll-area`, `sidebar` (which brings `sheet` and

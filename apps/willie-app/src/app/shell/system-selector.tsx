@@ -1,5 +1,9 @@
 import { CheckIcon, ChevronsUpDownIcon, PlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
+import {
+  SystemActionDialogs,
+  SystemActionRows,
+} from "@/app/shell/system-actions";
 import { StatusDot } from "@/components/status-dot";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +12,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 import { useSidebar } from "@/components/ui/sidebar";
 import { isLive } from "@/lib/domain/sessions";
 import { glyphFor } from "@/lib/domain/systems";
@@ -16,7 +21,7 @@ import { useCurrentSystem } from "@/store/use-current-system";
 import { useEngineStatus } from "@/store/use-engine-status";
 import { useSetupDrawer } from "@/store/use-setup-drawer";
 import { useSnapshot } from "@/store/use-snapshot";
-import { useTreeDrawer } from "@/store/use-tree-drawer";
+import { useWorkspacePanel } from "@/store/use-workspace-panel";
 
 function isProjectLive(sessions: Session[], projectId: string): boolean {
   return sessions.some((s) => s.project_id === projectId && isLive(s));
@@ -25,16 +30,18 @@ function isProjectLive(sessions: Session[], projectId: string): boolean {
 /**
  * The current system, up top in the sidebar: glyph, name, and its
  * workspace path with the branch. The branch is the daemon's own
- * `Project.branch`, read as of the last snapshot; the tree drawer's
+ * `Project.branch`, read as of the last snapshot; the panel tree's
  * live root load overrides it while it is open, since that one is read
  * at the moment the tree was listed. Its menu is a searchable list of
  * every system, each with the same live dot the trigger shows for the
- * current one, plus "Add system…" which hands off to the setup
- * drawer's Systems section rather than adding one itself.
+ * current one, "Add system…" which hands off to the setup drawer's
+ * Systems section rather than adding one itself, and the system's own
+ * actions under a separator — the sidebar header is one button,
+ * because collapsed it is one 48px target.
  */
 export function SystemSelector() {
   const { system, setSystem, loading } = useCurrentSystem();
-  const { branch: treeBranch } = useTreeDrawer();
+  const { branch: panelBranch } = useWorkspacePanel();
   const { status } = useEngineStatus();
   const daemonRunning = status?.daemon.state === "running";
   const { snapshot } = useSnapshot(daemonRunning);
@@ -64,7 +71,7 @@ export function SystemSelector() {
 
   const collapsed = sidebarState === "collapsed";
   const currentLive = system !== null && isProjectLive(sessions, system.id);
-  const branch = treeBranch ?? system?.branch ?? null;
+  const branch = panelBranch ?? system?.branch ?? null;
 
   return (
     <Popover
@@ -79,15 +86,25 @@ export function SystemSelector() {
           <Button
             variant="ghost"
             aria-label="Switch system"
-            className="h-10 min-w-0 flex-1 justify-start gap-2 px-2"
+            className="h-10 min-w-0 flex-1 justify-start gap-2 px-2 group-data-[collapsible=icon]:size-8 group-data-[collapsible=icon]:flex-none group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0"
           />
         }
       >
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-sidebar-accent font-medium text-xs">
+        <span className="relative flex size-6 shrink-0 items-center justify-center rounded-md bg-sidebar-accent font-medium text-xs">
           {system ? glyphFor(system.name) : "–"}
+          {/* Collapsed there is no room beside the glyph: a dot laid out
+           * in the row would be pushed past the rail's edge, onto the
+           * screen behind it. It rides the glyph's corner instead. */}
+          {collapsed && currentLive && (
+            <StatusDot
+              tone="ok"
+              label="live"
+              className="absolute -top-0.5 -right-0.5 ring-2 ring-sidebar"
+            />
+          )}
         </span>
         {!collapsed && (
-          <span className="flex min-w-0 flex-1 flex-col items-start text-left">
+          <span className="flex min-w-0 flex-1 flex-col text-left">
             {/* "No system" is a fact about the registry, so it may not
              * be shown while the saved preference is still being read
              * — that reads as "you have none" for one paint. */}
@@ -102,7 +119,7 @@ export function SystemSelector() {
             )}
           </span>
         )}
-        {currentLive && <StatusDot tone="ok" label="live" />}
+        {!collapsed && currentLive && <StatusDot tone="ok" label="live" />}
         {!collapsed && (
           <ChevronsUpDownIcon className="size-4 shrink-0 text-muted-foreground" />
         )}
@@ -157,7 +174,16 @@ export function SystemSelector() {
           <PlusIcon className="size-4" />
           Add system…
         </Button>
+
+        <Separator className="my-0.5" />
+
+        <SystemActionRows />
       </PopoverContent>
+
+      {/* Outside the popover on purpose: it unmounts its content when
+       * it closes, and a confirmation raised from a row above has to
+       * outlive the row that raised it. */}
+      <SystemActionDialogs />
     </Popover>
   );
 }

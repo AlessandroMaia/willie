@@ -230,21 +230,10 @@ describe("the footer's governance segment", () => {
     focus("sess_1");
 
     expect(
-      await screen.findByText("sandbox: seccomp · namespaces · 3 denied"),
+      await screen.findByText("sandbox: 2 applied · 3 denied"),
     ).toBeDefined();
-    expect(await screen.findByText("4200 tokens")).toBeDefined();
+    expect(await screen.findByText("4.2k")).toBeDefined();
     expect(screen.getByRole("img", { name: "42% context" })).toBeDefined();
-  });
-
-  it("the_footer_hides_governance_on_a_shell_session", async () => {
-    await renderApp("/session");
-
-    focus("sess_2");
-
-    await vi.waitFor(() => {
-      expect(ipc.usage.snapshot).not.toHaveBeenCalled();
-    });
-    expect(screen.queryByText(/^sandbox:/)).toBeNull();
   });
 
   it("the_governance_segment_links_to_the_filtered_sandbox_screen", async () => {
@@ -253,7 +242,7 @@ describe("the footer's governance segment", () => {
     focus("sess_1");
 
     const link = await screen.findByRole("link", {
-      name: /sandbox: seccomp/,
+      name: /sandbox: 2 applied/,
     });
     expect(link.getAttribute("href")).toBe("/sandbox?session=sess_1");
   });
@@ -308,7 +297,7 @@ describe("the footer's system aggregate", () => {
     await renderApp("/sandbox");
 
     const link = await screen.findByRole("link", { name: /^sandbox:/ });
-    expect(link.textContent).toContain("seccomp · namespaces · 6 denied");
+    expect(link.textContent).toContain("2 applied · 6 denied");
     expect(link.getAttribute("href")).toBe("/sandbox");
     expect(screen.queryByText(/tokens/)).toBeNull();
     expect(ipc.usage.snapshot).not.toHaveBeenCalled();
@@ -363,27 +352,6 @@ describe("the footer's usage poll", () => {
 
     await vi.advanceTimersByTimeAsync(4000);
     expect(ipc.usage.snapshot).toHaveBeenCalledTimes(3);
-  });
-
-  it("polling_stops_when_focus_moves_to_a_shell_session", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-
-    await renderApp("/session");
-    focus("sess_1");
-    await screen.findByText(/^sandbox:/);
-    await vi.advanceTimersByTimeAsync(4000);
-
-    /* Proves the poll was actually running before the switch — without
-     * this, a poll that never started would trivially "stay unchanged"
-     * below and the test would pass for the wrong reason. */
-    const callsBeforeSwitch = ipc.usage.snapshot.mock.calls.length;
-    expect(callsBeforeSwitch).toBeGreaterThanOrEqual(2);
-
-    focus("sess_2");
-    expect(screen.queryByText(/^sandbox:/)).toBeNull();
-
-    await vi.advanceTimersByTimeAsync(8000);
-    expect(ipc.usage.snapshot.mock.calls.length).toBe(callsBeforeSwitch);
   });
 
   it("polling_stops_when_the_route_leaves_the_session_screen", async () => {
