@@ -28,17 +28,16 @@ import { useFocusedSession } from "@/store/use-focused-session";
 import { useSetupDrawer } from "@/store/use-setup-drawer";
 import { useSnapshot } from "@/store/use-snapshot";
 
-/** Agent sessions first, then shells — both newest first within their
- * own group, matching the tab strip's left-to-right order. */
+/** The strip holds agent sessions, newest first. A shell is not one of
+ * them any more: it belongs to the workspace panel, which runs one per
+ * system beside whatever screen is open. */
 function orderedTabs(live: Session[]): Session[] {
-  const agents = live.filter((s) => (s.kind ?? "agent") === "agent");
-  const shells = live.filter((s) => s.kind === "shell");
-  return [...agents, ...shells];
+  return live.filter((s) => (s.kind ?? "agent") === "agent");
 }
 
 /**
- * The current system's Session screen: one tab per live session (agent
- * and shell side by side), every terminal kept mounted so switching
+ * The current system's Session screen: one tab per live agent session,
+ * every terminal kept mounted so switching
  * tabs never loses scrollback, and an empty state that offers to open
  * one or resume the latest finished session. `useFocusedSession` only
  * ever hears about the active tab from here — it never decides which
@@ -126,11 +125,6 @@ export function SessionScreen() {
     void runAction(() => sessionsApi.open(system.id));
   }
 
-  function openZsh(): void {
-    if (!system) return;
-    void runAction(() => sessionsApi.open(system.id, "shell"));
-  }
-
   function resumeSession(id: string): void {
     if (!system) return;
     void runAction(() => sessionsApi.resume(system.id, id));
@@ -182,7 +176,6 @@ export function SessionScreen() {
         activeId={activeId}
         onSelect={setActiveId}
         onNewSession={openSession}
-        onNewZsh={openZsh}
         onRename={renameSession}
         onResume={resumeSession}
       />

@@ -38,15 +38,18 @@ user's summary: functional, but too complex, so it falls into disuse.
   their existing content under `/setup/*` routes.
 - **Several live sessions per system, one tab each.** A tab is named by
   the session's first prompt (best-effort) and can be renamed by double
-  click; the name persists. `+` starts a new agent session or a new shell.
-- **A styled shell in a tab.** `zsh` runs in the workspace under the same
-  sandbox as an agent session, with a Willie prompt.
+  click; the name persists. `+` starts a new agent session. (Superseded
+  in part: the shell moved to the workspace panel, so `+` has one
+  action and the strip holds agent sessions only.)
+- **A styled shell.** `zsh` runs in the workspace under the same sandbox
+  as an agent session, with a Willie prompt — in the workspace panel,
+  one per system; see `designs/workspace-panel.md`.
 - **A Sessions panel** lists live and finished sessions; a finished one is
   resumed from there into a live tab.
-- **The workspace tree as a drawer**, with git status per row, and a
-  read-only **file preview beside it** (never over it) that expands into a
-  full-width viewer. "Open in VS Code" stays one click away for the
-  workspace (tree header, system menu) and for a file (preview header).
+- **The workspace tree**, with git status per row, and a read-only
+  **file preview**, with "Open in VS Code" one click away for the
+  workspace and for a file. (Superseded: both are tabs of the workspace
+  panel now, reachable from every screen rather than only this one.)
 - **A Sandbox screen that monitors first**: the posture aggregated over
   the system's sessions, three counts, and the chronological denial
   history across sessions with a per-session filter. Capabilities are

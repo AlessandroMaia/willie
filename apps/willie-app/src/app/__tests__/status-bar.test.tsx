@@ -236,17 +236,6 @@ describe("the footer's governance segment", () => {
     expect(screen.getByRole("img", { name: "42% context" })).toBeDefined();
   });
 
-  it("the_footer_hides_governance_on_a_shell_session", async () => {
-    await renderApp("/session");
-
-    focus("sess_2");
-
-    await vi.waitFor(() => {
-      expect(ipc.usage.snapshot).not.toHaveBeenCalled();
-    });
-    expect(screen.queryByText(/^sandbox:/)).toBeNull();
-  });
-
   it("the_governance_segment_links_to_the_filtered_sandbox_screen", async () => {
     await renderApp("/session");
 
@@ -363,27 +352,6 @@ describe("the footer's usage poll", () => {
 
     await vi.advanceTimersByTimeAsync(4000);
     expect(ipc.usage.snapshot).toHaveBeenCalledTimes(3);
-  });
-
-  it("polling_stops_when_focus_moves_to_a_shell_session", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-
-    await renderApp("/session");
-    focus("sess_1");
-    await screen.findByText(/^sandbox:/);
-    await vi.advanceTimersByTimeAsync(4000);
-
-    /* Proves the poll was actually running before the switch — without
-     * this, a poll that never started would trivially "stay unchanged"
-     * below and the test would pass for the wrong reason. */
-    const callsBeforeSwitch = ipc.usage.snapshot.mock.calls.length;
-    expect(callsBeforeSwitch).toBeGreaterThanOrEqual(2);
-
-    focus("sess_2");
-    expect(screen.queryByText(/^sandbox:/)).toBeNull();
-
-    await vi.advanceTimersByTimeAsync(8000);
-    expect(ipc.usage.snapshot.mock.calls.length).toBe(callsBeforeSwitch);
   });
 
   it("polling_stops_when_the_route_leaves_the_session_screen", async () => {

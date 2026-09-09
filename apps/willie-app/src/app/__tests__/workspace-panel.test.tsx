@@ -71,6 +71,17 @@ const SNAPSHOT: Snapshot = {
   sessions: [],
 };
 
+const SHELL = {
+  id: "sess_shell_1",
+  project_id: "proj_1",
+  harness: "shell",
+  workspace: "/home/willie/projects/willie",
+  kind: "shell" as const,
+  state: { state: "running" as const },
+  created_at: "1",
+  clients: 0,
+};
+
 const ipc = vi.hoisted(() => ({
   engine: { status: vi.fn(), onStatus: vi.fn(async () => () => {}) },
   projects: {
@@ -87,12 +98,17 @@ const ipc = vi.hoisted(() => ({
     discover: vi.fn(async () => []),
     setRoots: vi.fn(),
   },
-  sessions: { open: vi.fn(), resume: vi.fn(), attach: vi.fn(), stop: vi.fn() },
+  sessions: {
+    open: vi.fn(async () => ({ session: SHELL })),
+    resume: vi.fn(async () => ({ session: SHELL })),
+    attach: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+  },
   sessionTerminal: {
-    open: vi.fn(),
-    input: vi.fn(),
-    resize: vi.fn(),
-    close: vi.fn(),
+    open: vi.fn(async () => {}),
+    input: vi.fn(async () => {}),
+    resize: vi.fn(async () => {}),
+    close: vi.fn(async () => {}),
   },
   tools: { list: vi.fn(async () => ({ tools: [] })) },
   plugins: { list: vi.fn(async () => []), enable: vi.fn(), disable: vi.fn() },
@@ -222,5 +238,63 @@ describe("the workspace panel", () => {
     await screen.findByRole("link", { name: /Session/ });
 
     expect(screen.queryByRole("button", { name: "Workspace tree" })).toBeNull();
+  });
+
+  /* One shell per system, resolved by kind and system rather than by
+   * who started it: a shell already running is adopted, never doubled. */
+  it("the_shell_tab_reuses_the_systems_live_shell", async () => {
+    ipc.projects.snapshot.mockResolvedValue({
+      ...SNAPSHOT,
+      sessions: [SHELL],
+    });
+    const user = userEvent.setup();
+    renderApp("/session");
+    await openPanel(user);
+
+    await user.click(screen.getByRole("tab", { name: "Shell" }));
+
+    await vi.waitFor(() =>
+      expect(ipc.sessionTerminal.open).toHaveBeenCalledWith("sess_shell_1"),
+    );
+    expect(ipc.sessions.open).not.toHaveBeenCalled();
+  });
+
+  it("the_shell_tab_starts_one_when_the_system_has_none", async () => {
+    const user = userEvent.setup();
+    renderApp("/session");
+    await openPanel(user);
+
+    await user.click(screen.getByRole("tab", { name: "Shell" }));
+
+    await vi.waitFor(() =>
+      expect(ipc.sessions.open).toHaveBeenCalledWith("proj_1", "shell"),
+    );
+  });
+
+  /* Opening the panel is not asking for a shell. Until the tab is
+   * picked, nothing is started. */
+  it("the_panel_starts_no_shell_until_the_tab_is_opened", async () => {
+    const user = userEvent.setup();
+    renderApp("/session");
+
+    await openPanel(user);
+
+    expect(ipc.sessions.open).not.toHaveBeenCalled();
+  });
+
+  it("a_refused_shell_shows_its_remediation_not_a_terminal", async () => {
+    ipc.sessions.open.mockRejectedValue({
+      code: "sandbox_backend_missing",
+      message: "bwrap is not available in the distribution.",
+      remediation: "Run `willie doctor` and reinstall the distribution.",
+    });
+    const user = userEvent.setup();
+    renderApp("/session");
+    await openPanel(user);
+
+    await user.click(screen.getByRole("tab", { name: "Shell" }));
+
+    expect(await screen.findByText(/reinstall the distribution/)).toBeDefined();
+    expect(ipc.sessionTerminal.open).not.toHaveBeenCalled();
   });
 });

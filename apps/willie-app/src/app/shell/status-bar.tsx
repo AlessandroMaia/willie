@@ -110,10 +110,11 @@ export function StatusBar() {
   const { system: currentSystem } = useCurrentSystem();
   const pathname = useLocation({ select: (location) => location.pathname });
 
-  const showGovernance =
-    pathname === "/session" &&
-    session !== null &&
-    (session.kind ?? "agent") === "agent";
+  /* No kind check any more: the strip holds agent sessions only, so a
+   * focused session is always one. The panel's shell does not drive
+   * this bar — the bar follows the screen, and the panel is beside
+   * it. */
+  const showGovernance = pathname === "/session" && session !== null;
 
   const showSystemAggregate = pathname === "/sandbox" && currentSystem !== null;
 

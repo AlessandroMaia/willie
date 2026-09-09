@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { PanelFile } from "@/app/shell/panel-file";
+import { PanelShell } from "@/app/shell/panel-shell";
 import { PanelTree } from "@/app/shell/panel-tree";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -35,6 +36,10 @@ export function WorkspacePanel() {
   const { system } = useCurrentSystem();
   const { open, tab, branch, openAt, forSystem } = useWorkspacePanel();
   const [editorAvailable, setEditorAvailable] = useState(false);
+  /* Opening the panel is not asking for a shell: the Shell body only
+   * mounts once its tab has been picked, and then stays mounted so
+   * the terminal survives a switch back to the tree. */
+  const [shellVisited, setShellVisited] = useState(false);
 
   const systemId = system?.id ?? null;
   const lastSystemIdRef = useRef(systemId);
@@ -53,6 +58,10 @@ export function WorkspacePanel() {
     lastSystemIdRef.current = systemId;
     forSystem();
   });
+
+  useEffect(() => {
+    if (tab === "shell") setShellVisited(true);
+  }, [tab]);
 
   function openWorkspaceInEditor(): void {
     if (!system) return;
@@ -121,9 +130,7 @@ export function WorkspacePanel() {
         </TabsContent>
 
         <TabsContent value="shell" keepMounted className="min-h-0 flex-1">
-          <p className="px-3 py-6 text-center text-muted-foreground text-sm">
-            Not started yet.
-          </p>
+          {shellVisited && <PanelShell />}
         </TabsContent>
       </Tabs>
     </aside>
