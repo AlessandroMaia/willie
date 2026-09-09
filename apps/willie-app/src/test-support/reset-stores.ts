@@ -4,6 +4,7 @@ import { resetForTests as resetFilePreview } from "@/store/use-file-preview";
 import { resetForTests as resetFocusedSession } from "@/store/use-focused-session";
 import { resetForTests as resetSetupDrawer } from "@/store/use-setup-drawer";
 import { resetForTests as resetSnapshot } from "@/store/use-snapshot";
+import { resetForTests as resetSystemActions } from "@/store/use-system-actions";
 import { resetForTests as resetTreeDrawer } from "@/store/use-tree-drawer";
 
 /**
@@ -22,5 +23,6 @@ export function resetStores(): void {
   resetFocusedSession();
   resetSetupDrawer();
   resetSnapshot();
+  resetSystemActions();
   resetTreeDrawer();
 }

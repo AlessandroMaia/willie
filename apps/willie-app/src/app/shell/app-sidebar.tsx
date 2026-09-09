@@ -1,6 +1,5 @@
 import { Link, useLocation } from "@tanstack/react-router";
 import { ROUTES, shortcutLabel } from "@/app/routes";
-import { SystemActionsMenu } from "@/app/shell/system-actions-menu";
 import { SystemSelector } from "@/app/shell/system-selector";
 import { Kbd } from "@/components/ui/kbd";
 import {
@@ -35,7 +34,6 @@ export function AppSidebar() {
     <Sidebar collapsible="icon" variant="inset" className="h-full">
       <SidebarHeader className="flex-row items-center gap-1 px-2 py-2">
         <SystemSelector />
-        <SystemActionsMenu />
       </SidebarHeader>
 
       <SidebarContent>

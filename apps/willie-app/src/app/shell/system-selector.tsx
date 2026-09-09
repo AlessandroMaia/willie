@@ -1,5 +1,9 @@
 import { CheckIcon, ChevronsUpDownIcon, PlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
+import {
+  SystemActionDialogs,
+  SystemActionRows,
+} from "@/app/shell/system-actions";
 import { StatusDot } from "@/components/status-dot";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -8,6 +12,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { Separator } from "@/components/ui/separator";
 import { useSidebar } from "@/components/ui/sidebar";
 import { isLive } from "@/lib/domain/sessions";
 import { glyphFor } from "@/lib/domain/systems";
@@ -29,8 +34,10 @@ function isProjectLive(sessions: Session[], projectId: string): boolean {
  * live root load overrides it while it is open, since that one is read
  * at the moment the tree was listed. Its menu is a searchable list of
  * every system, each with the same live dot the trigger shows for the
- * current one, plus "Add system…" which hands off to the setup
- * drawer's Systems section rather than adding one itself.
+ * current one, "Add system…" which hands off to the setup drawer's
+ * Systems section rather than adding one itself, and the system's own
+ * actions under a separator — the sidebar header is one button,
+ * because collapsed it is one 48px target.
  */
 export function SystemSelector() {
   const { system, setSystem, loading } = useCurrentSystem();
@@ -83,8 +90,18 @@ export function SystemSelector() {
           />
         }
       >
-        <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-sidebar-accent font-medium text-xs">
+        <span className="relative flex size-6 shrink-0 items-center justify-center rounded-md bg-sidebar-accent font-medium text-xs">
           {system ? glyphFor(system.name) : "–"}
+          {/* Collapsed there is no room beside the glyph: a dot laid out
+           * in the row would be pushed past the rail's edge, onto the
+           * screen behind it. It rides the glyph's corner instead. */}
+          {collapsed && currentLive && (
+            <StatusDot
+              tone="ok"
+              label="live"
+              className="absolute -top-0.5 -right-0.5 ring-2 ring-sidebar"
+            />
+          )}
         </span>
         {!collapsed && (
           <span className="flex min-w-0 flex-1 flex-col items-start text-left">
@@ -102,7 +119,7 @@ export function SystemSelector() {
             )}
           </span>
         )}
-        {currentLive && <StatusDot tone="ok" label="live" />}
+        {!collapsed && currentLive && <StatusDot tone="ok" label="live" />}
         {!collapsed && (
           <ChevronsUpDownIcon className="size-4 shrink-0 text-muted-foreground" />
         )}
@@ -157,7 +174,16 @@ export function SystemSelector() {
           <PlusIcon className="size-4" />
           Add system…
         </Button>
+
+        <Separator className="my-0.5" />
+
+        <SystemActionRows />
       </PopoverContent>
+
+      {/* Outside the popover on purpose: it unmounts its content when
+       * it closes, and a confirmation raised from a row above has to
+       * outlive the row that raised it. */}
+      <SystemActionDialogs />
     </Popover>
   );
 }

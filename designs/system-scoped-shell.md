@@ -30,8 +30,9 @@ user's summary: functional, but too complex, so it falls into disuse.
   draggable. Right: minimize, maximize, close, drawn by Willie.
 - **The sidebar is the work context.** On top, a system selector (name,
   workspace path, branch, a live dot; a searchable list; "Add system…")
-  and a "…" menu with the system's actions. Below, the system's screens:
-  Session, Sandbox, Profiles, Usage (Ctrl+1–4). Nothing global lives here.
+  whose menu also carries the system's actions. Below, the system's
+  screens: Session, Sandbox, Profiles, Usage (Ctrl+1–4). Nothing global
+  lives here.
 - **The global area is the header's settings button.** Engine, Tools,
   Plugins, Profile store, Systems and Settings open from a drawer and keep
   their existing content under `/setup/*` routes.
@@ -107,15 +108,22 @@ yet: the screens show an empty state pointing at "Add system…"). Every
 system screen reads the current system from this store and never from a
 route parameter, so switching systems keeps the screen.
 
-### The sidebar — `apps/willie-app/src/app/shell/app-sidebar.tsx`, `system-selector.tsx`, `system-actions-menu.tsx`, `app/routes.ts`
+### The sidebar — `apps/willie-app/src/app/shell/app-sidebar.tsx`, `system-selector.tsx`, `system-actions.tsx`, `app/routes.ts`
 
 The selector button shows the glyph (two letters), the name, `<workspace
 path> · <branch>` and a live dot when the system has a live session; it
 opens a menu with a search field, one row per system (live dot, name,
-branch) and "Add system…" (opens the settings drawer on Systems). The "…"
-button beside it opens the system's actions: Open in VS Code (WSL), Open
-in Explorer, Sync from Windows, Rename, Relocate, Remove — the existing
+branch), "Add system…" (opens the settings drawer on Systems) and, under
+a separator, the system's own actions: Open in VS Code (WSL), Open in
+Explorer, Update from Windows, Rename, Relocate, Remove — the existing
 commands and dialogs, moved off the project row.
+
+The header is one button because collapsed it is one 48px target: a
+second trigger beside the selector left neither room to sit in, and
+both spilled onto the screen behind. Collapsed, the live dot rides the
+glyph's corner for the same reason. The three confirmations mount
+outside the popover, which unmounts its content on close, and
+`useSystemActions` carries which one is open across that boundary.
 
 `ROUTES` becomes the four system screens with Ctrl+1–4:
 `/session`, `/sandbox`, `/profiles`, `/usage`. The global entries move to
