@@ -24,7 +24,7 @@ function SidebarToggle() {
   return (
     <Button
       variant="ghost"
-      size="icon-sm"
+      size="icon-xs"
       aria-label="Toggle sidebar"
       onClick={toggleSidebar}
     >
@@ -39,7 +39,7 @@ function SettingsButton() {
   return (
     <Button
       variant="ghost"
-      size="icon-sm"
+      size="icon-xs"
       aria-label="Open setup"
       onClick={() => openAt()}
     >
@@ -86,7 +86,7 @@ function WindowControl({
   return (
     <Button
       variant={destructive ? "destructive" : "ghost"}
-      size="icon-sm"
+      size="icon-xs"
       aria-label={label}
       onClick={onClick}
     >
@@ -159,7 +159,7 @@ function WindowControls() {
  * `--header-height` token, the same one the shell's grid row reads. */
 export function Header({ systemName }: HeaderProps) {
   return (
-    <header className="flex h-(--header-height) shrink-0 items-center gap-1 border-b bg-sidebar px-1">
+    <header className="flex h-(--header-height) shrink-0 items-center gap-1 bg-sidebar px-1">
       <SidebarToggle />
       <SettingsButton />
       <DragRegionTitle systemName={systemName} />

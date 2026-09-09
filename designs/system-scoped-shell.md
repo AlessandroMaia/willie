@@ -76,8 +76,11 @@ user's summary: functional, but too complex, so it falls into disuse.
 
 The main window sets `"decorations": false` and `"shadow": true` (Windows
 11 keeps the rounded corners and the drop shadow of a decorated window).
-The header is a 36 px row: two icon buttons on the left (collapse the
-sidebar — also Ctrl+B — and the settings drawer), a centre `div` marked
+The header is a 28 px row carrying no rule: it shares the sidebar's
+ground, and a rule under it would draw a line across that one surface.
+Its controls are 24 px, which is what fits the row. Two icon buttons on
+the left (collapse the sidebar — also Ctrl+B — and the settings
+drawer), a centre `div` marked
 `data-tauri-drag-region` showing `Willie · <system>`, and three window
 controls on the right that call `getCurrentWindow().minimize()`,
 `.toggleMaximize()` and `.close()` from `@tauri-apps/api/window`. The

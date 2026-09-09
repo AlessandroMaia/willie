@@ -66,6 +66,25 @@ describe("the header", () => {
     ).not.toBeNull();
   });
 
+  /* The header, the sidebar and the status bar share one ground, so a
+   * rule under the title bar would draw a line across it. The window
+   * is 28px of chrome; every control in it has to fit inside that. */
+  it("the_title_bar_carries_no_rule_and_its_controls_fit_its_height", async () => {
+    renderHeader();
+
+    const close = await screen.findByRole("button", { name: "Close" });
+    const bar = close.closest("header");
+
+    expect(bar?.className).toContain("h-(--header-height)");
+    expect(bar?.className).not.toContain("border-b");
+
+    for (const name of ["Minimize", "Close", "Toggle sidebar", "Open setup"]) {
+      expect(screen.getByRole("button", { name }).className).toContain(
+        "size-6",
+      );
+    }
+  });
+
   it("the_sidebar_toggle_collapses_the_sidebar", async () => {
     const user = userEvent.setup();
     renderHeader();
