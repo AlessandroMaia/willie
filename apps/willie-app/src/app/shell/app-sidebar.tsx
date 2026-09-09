@@ -32,12 +32,12 @@ export function AppSidebar() {
    * lives in instead. */
   return (
     <Sidebar collapsible="icon" variant="inset" className="h-full">
-      <SidebarHeader className="flex-row items-center gap-1 px-2 py-2">
+      <SidebarHeader className="flex-row items-center gap-1 px-1 py-2">
         <SystemSelector />
       </SidebarHeader>
 
       <SidebarContent>
-        <SidebarGroup>
+        <SidebarGroup className="px-1">
           <SidebarGroupLabel>Screens</SidebarGroupLabel>
           <SidebarMenu>
             {ROUTES.map((entry) => (
